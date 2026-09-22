@@ -95,12 +95,28 @@ Content loadContent(const std::filesystem::path& dir) {
       WeaponDef def;
       def.id = requireString(*t, "id", where);
       def.name = requireString(*t, "name", where);
+      def.desc = (*t)["desc"].value<std::string>().value_or("Auto-fires at the nearest enemy.");
       def.damage = requireFloat(*t, "damage", where);
       def.cooldown = requireFloat(*t, "cooldown", where);
       def.projectiles = static_cast<int>((*t)["projectiles"].value_or(1));
       def.projSpeed = (*t)["proj_speed"].value_or(12.0F);
       def.projLife = (*t)["proj_life"].value_or(1.4F);
       def.pierce = static_cast<int>((*t)["pierce"].value_or(0));
+      def.spread = (*t)["spread"].value_or(0.16F);
+      def.starter = (*t)["starter"].value_or(false);
+      const auto* colorNode = t->get("proj_color");
+      if (colorNode != nullptr) {
+        def.projColor = parseColor(*colorNode, where);
+      }
+      if (const auto reqArr = (*t)["requires"].as_array(); reqArr != nullptr) {
+        for (const auto& node : *reqArr) {
+          const auto s = node.value<std::string>();
+          if (!s) {
+            throw std::runtime_error(where + ": requires entries must be strings");
+          }
+          def.prereqs.push_back(*s);
+        }
+      }
       content.weapons.push_back(std::move(def));
     }
   }
@@ -161,6 +177,9 @@ Content loadContent(const std::filesystem::path& dir) {
       def.effect = requireString(*t, "effect", where);
       def.value = requireFloat(*t, "value", where);
       def.maxStacks = static_cast<int>((*t)["max_stacks"].value_or(5));
+      def.kind = (*t)["kind"].value<std::string>().value_or("normal");
+      def.weapon = (*t)["weapon"].value<std::string>().value_or("");
+      def.level = static_cast<int>((*t)["level"].value_or(0));
       content.upgrades.push_back(std::move(def));
     }
   }

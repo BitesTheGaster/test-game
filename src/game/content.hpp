@@ -15,12 +15,17 @@ namespace game {
 struct WeaponDef {
   std::string id;
   std::string name;
+  std::string desc;
   float damage = 5.0F;
   float cooldown = 0.5F;
   int projectiles = 1;
   float projSpeed = 12.0F;
   float projLife = 1.4F;
   int pierce = 0;
+  float spread = 0.16F; // radians between projectiles of a volley
+  core::render::Color projColor{1.0F, 0.95F, 0.55F, 1.0F};
+  bool starter = false;   // may be rolled as the run-start weapon
+  std::vector<std::string> prereqs; // evolution prerequisites (weapon ids)
 };
 
 struct EnemyDef {
@@ -44,6 +49,9 @@ struct UpgradeDef {
   std::string effect; // effect id understood by applyUpgrade()
   float value = 0.0F;
   int maxStacks = 5;
+  std::string kind = "normal";  // "normal" | "unique" | "milestone"
+  std::string weapon;           // non-empty => targets that owned weapon
+  int level = 0;                // required level for milestone picks
 };
 
 struct Content {

@@ -25,6 +25,8 @@ game::FrameInput pollInput(bool& quit) {
         case SDLK_1: in.choose1 = true; break;
         case SDLK_2: in.choose2 = true; break;
         case SDLK_3: in.choose3 = true; break;
+        case SDLK_4: in.choose4 = true; break;
+        case SDLK_5: in.choose5 = true; break;
         case SDLK_R: in.restart = true; break;
         default: break;
       }

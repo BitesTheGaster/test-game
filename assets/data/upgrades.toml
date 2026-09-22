@@ -1,5 +1,15 @@
-# Level-up upgrades. effect = id understood by applyUpgrade(), value = per-stack magnitude.
+# Level-up upgrades. effect = id understood by applyUpgrade() (global) or
+# applyWeaponEffect() (when `weapon` is set), value = per-stack magnitude.
 # Multiple entries may share an effect; max_stacks keeps each variant bounded.
+#
+# kind:
+#   normal    - everyday pool
+#   unique    - rare treasure card offered at ~45% per level-up, one-time
+#   milestone - offered only on level-up levels divisible by 5 (def.level gate)
+# weapon: non-empty => the card only appears while that weapon is owned, and
+#   applies to that weapon slot instead of the player.
+
+# --- Basic stat ups ----------------------------------------------------------
 
 [[upgrade]]
 id = "damage"
@@ -216,3 +226,428 @@ desc = "-25% attack cooldown"
 effect = "cooldown_mul"
 value = -0.25
 max_stacks = 1
+
+# --- Defense / shield / lifesteal tree ---------------------------------------
+
+[[upgrade]]
+id = "pledge"
+name = "Stony Pledge"
+desc = "+10 defense (blocks 2 flat + ~3% scaling)"
+effect = "defense_add"
+value = 10
+max_stacks = 4
+
+[[upgrade]]
+id = "conviction"
+name = "Iron Conviction"
+desc = "+25 defense"
+effect = "defense_add"
+value = 25
+max_stacks = 2
+
+[[upgrade]]
+id = "ward_small"
+name = "Minor Ward"
+desc = "+20 regenerating shield"
+effect = "shield_add"
+value = 20
+max_stacks = 3
+
+[[upgrade]]
+id = "ward_great"
+name = "Runic Ward"
+desc = "+45 regenerating shield"
+effect = "shield_add"
+value = 45
+max_stacks = 2
+
+[[upgrade]]
+id = "leech_gold"
+name = "Gilded Fangs"
+desc = "+2% lifesteal"
+effect = "lifesteal_add"
+value = 0.02
+max_stacks = 3
+
+[[upgrade]]
+id = "leech_soul"
+name = "Soulfeed"
+desc = "+4% lifesteal"
+effect = "lifesteal_add"
+value = 0.04
+max_stacks = 2
+
+# --- Weapon-focused cards (only appear for owned weapons) ---------------------
+
+[[upgrade]]
+id = "w_wand_power"
+name = "Wand Focus"
+desc = "Arcane Wand: +8 damage"
+effect = "w_damage_add"
+value = 8
+max_stacks = 3
+weapon = "wand"
+
+[[upgrade]]
+id = "w_wand_speed"
+name = "Wand Channeling"
+desc = "Arcane Wand: -18% cooldown"
+effect = "w_cd_mul"
+value = -0.18
+max_stacks = 2
+weapon = "wand"
+
+[[upgrade]]
+id = "w_dagger_power"
+name = "Dagger Honing"
+desc = "Throwing Dagger: +5 damage each"
+effect = "w_damage_add"
+value = 5
+max_stacks = 3
+weapon = "dagger"
+
+[[upgrade]]
+id = "w_dagger_volley"
+name = "Dagger Volley"
+desc = "Throwing Dagger: +1 projectile"
+effect = "w_proj_add"
+value = 1
+max_stacks = 2
+weapon = "dagger"
+
+[[upgrade]]
+id = "w_crossbow_power"
+name = "Crossbow Wit"
+desc = "Heavy Crossbow: +12 damage"
+effect = "w_damage_add"
+value = 12
+max_stacks = 2
+weapon = "crossbow"
+
+[[upgrade]]
+id = "w_crossbow_pierce"
+name = "Crossbow Drill"
+desc = "Heavy Crossbow: +2 pierce"
+effect = "w_pierce_add"
+value = 2
+max_stacks = 2
+weapon = "crossbow"
+
+[[upgrade]]
+id = "w_flame_power"
+name = "Ember Intensity"
+desc = "Ember Sprayer: +3 damage"
+effect = "w_damage_add"
+value = 3
+max_stacks = 3
+weapon = "flame"
+
+[[upgrade]]
+id = "w_flame_volley"
+name = "Ember Horde"
+desc = "Ember Sprayer: +2 projectiles"
+effect = "w_proj_add"
+value = 2
+max_stacks = 2
+weapon = "flame"
+
+[[upgrade]]
+id = "w_hammer_power"
+name = "Hammer Rune"
+desc = "Runic Hammer: +20 damage"
+effect = "w_damage_add"
+value = 20
+max_stacks = 2
+weapon = "hammer"
+
+[[upgrade]]
+id = "w_hammer_pierce"
+name = "Hammer Wrath"
+desc = "Runic Hammer: +3 pierce"
+effect = "w_pierce_add"
+value = 3
+max_stacks = 2
+weapon = "hammer"
+
+[[upgrade]]
+id = "w_shuriken_power"
+name = "Shuriken Storm"
+desc = "Storm Shuriken: +5 damage"
+effect = "w_damage_add"
+value = 5
+max_stacks = 3
+weapon = "shuriken"
+
+[[upgrade]]
+id = "w_shuriken_speed"
+name = "Shuriken Cyclone"
+desc = "Storm Shuriken: -20% cooldown"
+effect = "w_cd_mul"
+value = -0.20
+max_stacks = 2
+weapon = "shuriken"
+
+# --- Unique items (one-time, rule-changing) ----------------------------------
+
+[[upgrade]]
+id = "u_spreadshot"
+name = "Spreadshot"
+desc = "Double the volley spread and fire rate (all weapons)"
+effect = "fan"
+value = 1
+max_stacks = 1
+kind = "unique"
+
+[[upgrade]]
+id = "u_thorns"
+name = "Ignited Carapace"
+desc = "Getting hit detonates a burst dealing 3x incoming damage"
+effect = "thorns"
+value = 3
+max_stacks = 1
+kind = "unique"
+
+[[upgrade]]
+id = "u_extra_choice"
+name = "Gambler's Eye"
+desc = "+1 card in every future level-up choice"
+effect = "extra_choice"
+value = 1
+max_stacks = 1
+kind = "unique"
+
+[[upgrade]]
+id = "u_reroll"
+name = "Second Chance"
+desc = "+1 free reroll per level-up (total two)"
+effect = "reroll_add"
+value = 1
+max_stacks = 1
+kind = "unique"
+
+[[upgrade]]
+id = "u_adrenaline"
+name = "Adrenaline"
+desc = "Below 30% HP: +60% speed and a 1s invulnerability every 20s"
+effect = "adrenaline"
+value = 1
+max_stacks = 1
+kind = "unique"
+
+[[upgrade]]
+id = "u_black_hole"
+name = "Singularity"
+desc = "Every 12s, violently yanks nearby enemies toward you"
+effect = "black_hole"
+value = 1
+max_stacks = 1
+kind = "unique"
+
+[[upgrade]]
+id = "u_chain"
+name = "Storm Bolt"
+desc = "Every 3rd projectile hit chains lightning to 3 nearby enemies"
+effect = "chain"
+value = 1
+max_stacks = 1
+kind = "unique"
+
+[[upgrade]]
+id = "u_blood_price"
+name = "Blood Price"
+desc = "Every 20 kills detonates a burst around you"
+effect = "blood_price"
+value = 1
+max_stacks = 1
+kind = "unique"
+
+[[upgrade]]
+id = "u_ice_blood"
+name = "Cold Blood"
+desc = "Enemies that hit you are slowed for 2s"
+effect = "ice_blood"
+value = 1
+max_stacks = 1
+kind = "unique"
+
+# --- Milestones (levels 5, 10, 15, ...) --------------------------------------
+
+[[upgrade]]
+id = "m5_aegis"
+name = "Aegis"
+desc = "MILESTONE: +60 regenerating shield"
+effect = "shield_add"
+value = 60
+max_stacks = 1
+kind = "milestone"
+level = 5
+
+[[upgrade]]
+id = "m5_pact"
+name = "Blood Pact"
+desc = "MILESTONE: +6% lifesteal"
+effect = "lifesteal_add"
+value = 0.06
+max_stacks = 1
+kind = "milestone"
+level = 5
+
+[[upgrade]]
+id = "m5_tempest"
+name = "Tempest"
+desc = "MILESTONE: +2 projectiles to every weapon"
+effect = "proj_add"
+value = 2
+max_stacks = 1
+kind = "milestone"
+level = 5
+
+[[upgrade]]
+id = "m10_mantle"
+name = "Stone Mantle"
+desc = "MILESTONE: +60 defense"
+effect = "defense_add"
+value = 60
+max_stacks = 1
+kind = "milestone"
+level = 10
+
+[[upgrade]]
+id = "m10_frenzy"
+name = "Frenzy"
+desc = "MILESTONE: -30% attack cooldown"
+effect = "cooldown_mul"
+value = -0.30
+max_stacks = 1
+kind = "milestone"
+level = 10
+
+[[upgrade]]
+id = "m10_grasp"
+name = "Reaper's Grasp"
+desc = "MILESTONE: +3 pierce to every weapon"
+effect = "pierce_add"
+value = 3
+max_stacks = 1
+kind = "milestone"
+level = 10
+
+[[upgrade]]
+id = "m15_crown"
+name = "Crimson Crown"
+desc = "MILESTONE: +8% lifesteal"
+effect = "lifesteal_add"
+value = 0.08
+max_stacks = 1
+kind = "milestone"
+level = 15
+
+[[upgrade]]
+id = "m15_titan"
+name = "Titan Heart"
+desc = "MILESTONE: +120 max HP and heal 120"
+effect = "max_hp_add"
+value = 120
+max_stacks = 1
+kind = "milestone"
+level = 15
+
+[[upgrade]]
+id = "m15_overload"
+name = "Overload"
+desc = "MILESTONE: +60% damage"
+effect = "damage_mul"
+value = 0.60
+max_stacks = 1
+kind = "milestone"
+level = 15
+
+[[upgrade]]
+id = "m20_void"
+name = "Void Symbiosis"
+desc = "MILESTONE: +90% damage"
+effect = "damage_mul"
+value = 0.90
+max_stacks = 1
+kind = "milestone"
+level = 20
+
+[[upgrade]]
+id = "m20_bulwark"
+name = "Bulwark of Ages"
+desc = "MILESTONE: +120 defense"
+effect = "defense_add"
+value = 120
+max_stacks = 1
+kind = "milestone"
+level = 20
+
+[[upgrade]]
+id = "m20_hail"
+name = "Hailstorm"
+desc = "MILESTONE: +4 projectiles to every weapon"
+effect = "proj_add"
+value = 4
+max_stacks = 1
+kind = "milestone"
+level = 20
+
+[[upgrade]]
+id = "m25_immortal"
+name = "Immortal"
+desc = "MILESTONE: +300 max HP and heal 300"
+effect = "max_hp_add"
+value = 300
+max_stacks = 1
+kind = "milestone"
+level = 25
+
+[[upgrade]]
+id = "m25_perfect"
+name = "Perfection"
+desc = "MILESTONE: -35% attack cooldown"
+effect = "cooldown_mul"
+value = -0.35
+max_stacks = 1
+kind = "milestone"
+level = 25
+
+[[upgrade]]
+id = "m25_vanquish"
+name = "Vanquisher"
+desc = "MILESTONE: +150% damage"
+effect = "damage_mul"
+value = 1.5
+max_stacks = 1
+kind = "milestone"
+level = 25
+
+[[upgrade]]
+id = "m30_ascend"
+name = "Ascendant Skin"
+desc = "MILESTONE: +200 defense"
+effect = "defense_add"
+value = 200
+max_stacks = 1
+kind = "milestone"
+level = 30
+
+[[upgrade]]
+id = "m30_starlight"
+name = "Starlight Ward"
+desc = "MILESTONE: +500 regenerating shield"
+effect = "shield_add"
+value = 500
+max_stacks = 1
+kind = "milestone"
+level = 30
+
+[[upgrade]]
+id = "m30_overdrive"
+name = "Overdrive"
+desc = "MILESTONE: +200% damage"
+effect = "damage_mul"
+value = 2.0
+max_stacks = 1
+kind = "milestone"
+level = 30

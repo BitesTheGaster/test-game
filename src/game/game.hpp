@@ -21,6 +21,8 @@ struct FrameInput {
   bool choose1 = false;
   bool choose2 = false;
   bool choose3 = false;
+  bool choose4 = false;
+  bool choose5 = false; // picks a 5th card (from +1 choice items)
   bool restart = false;
   bool togglePause = false;
 };
@@ -36,15 +38,38 @@ struct PlayerStats {
   float regen = 0.0F;
   int projAdd = 0;
   int pierceAdd = 0;
+
+  // Defense: one curve yields both a flat and a percent reduction.
+  float defense = 0.0F;
+  // Lifesteal: fraction of weapon damage dealt that heals the player.
+  float lifesteal = 0.0F;
+  // Shield: regenerating damage buffer (see rules in game.hpp docs).
+  float shieldMax = 0.0F;
+
+  // Unique-item effects (each is a distinct mechanic):
+  float spreadMul = 1.0F; // widens weapon volleys (fan item)
+  int extraChoice = 0;    // +N level-up cards
+  int rerollCharges = 0;  // +N free rerolls per level-up
+  float thornsDmg = 0.0F; // AoE burst around player on hit
+  int adrenaline = 0;     // speed burst when HP is low
+  int blackHole = 0;      // periodic enemy pull
+  int chain = 0;          // every 3rd projectile hit chains lightning
+  int bloodPrice = 0;     // every 20 kills, burst around player
+  int iceBlood = 0;       // enemies that hit you get slowed
 };
 
 struct UpgradeEffectResult {
   bool valid = false; // false => unknown effect id
   float heal = 0.0F;
+  float shield = 0.0F; // instant shield granted on pick
 };
 
 // Applies one upgrade effect to stats. Shared between Game and unit tests.
 UpgradeEffectResult applyUpgrade(PlayerStats& stats, std::string_view effect, float value);
+
+// Defense formula: flat part (1 point per 5 defense) plus a percent part that
+// approaches 50% as defense grows. Never makes damage negative.
+float mitigateDamage(float raw, float defense);
 
 // XP needed to advance from `level` to `level + 1`.
 float xpForLevel(int level);
@@ -54,6 +79,12 @@ enum class RunState {
   LevelUp,
   Paused,
   GameOver,
+};
+
+// One level-up card: either an upgrade from content_ or a new weapon.
+struct Choice {
+  enum class Kind : std::uint8_t { Upgrade, Weapon } kind = Kind::Upgrade;
+  int index = -1; // upgrade index or weapon index
 };
 
 class Game {
@@ -73,28 +104,95 @@ public:
   [[nodiscard]] int kills() const { return kills_; }
   [[nodiscard]] float playerHp() const;
   [[nodiscard]] float playerMaxHp() const;
+  [[nodiscard]] float shield() const { return shield_; }
+  [[nodiscard]] float shieldMax() const { return stats_.shieldMax; }
   [[nodiscard]] float xp() const { return xp_; }
   [[nodiscard]] float xpNext() const { return xpNext_; }
   [[nodiscard]] std::size_t enemyCount() const;
   [[nodiscard]] const PlayerStats& stats() const { return stats_; }
-  [[nodiscard]] const std::vector<int>& upgradeChoices() const { return choices_; }
+  [[nodiscard]] const std::vector<Choice>& upgradeChoices() const { return choices_; }
   [[nodiscard]] int upgradeStacks(std::size_t upgradeIndex) const;
+  [[nodiscard]] int rerollsUsed() const { return rerollsUsed_; }
+  [[nodiscard]] bool milestoneOffer() const { return milestoneOffer_; }
 
   // Test/debug hooks.
   void grantXp(float amount);
 
 private:
+  // Owned weapons (fixed slots, no allocation on the hot path).
+  struct WeaponSlot {
+    int def = -1;
+    float cooldown = 0.5F;
+    float timer = 0.0F;
+    float damage = 5.0F;
+    int projectiles = 1;
+    float speed = 12.0F;
+    float life = 1.4F;
+    int pierce = 0;
+    float spread = 0.16F;
+    core::render::Color color{1.0F, 0.95F, 0.55F, 1.0F};
+  };
+  static constexpr int kMaxWeapons = 4;
+
+  // Pending spawn telegraphs (enemies walk in after a short warning).
+  struct PendingSpawn {
+    float x = 0.0F;
+    float y = 0.0F;
+    float t = 0.0F;
+    int def = 0;
+    float hpMul = 1.0F;
+    float touchMul = 1.0F;
+    float speedMul = 1.0F;
+    float xpMul = 1.0F;
+    std::uint32_t traits = TraitNone;
+    std::uint8_t tier = 0;
+  };
+
+  // Elite name labels collected during the world pass (drawn in screen pass).
+  struct NameLabel {
+    float x = 0.0F;
+    float y = 0.0F;
+    core::render::Color c{1.0F, 1.0F, 1.0F, 1.0F};
+    std::string name;
+  };
+
+  // Particles: fixed ring buffer of PODs.
+  struct Particle {
+    float x, y, vx, vy, life, maxLife, size;
+    core::render::Color color;
+  };
+
   void fixedUpdate();
   void spawnWave();
+  void processPendingSpawns();
   void fireWeapons();
   void movePlayer();
   void updateEnemies();
   void updateProjectiles();
   void updatePickups();
+  void updateShield();
+  void updateUniqueEffects();
   void buildSpatialHash();
   void enterLevelUp();
+  void buildChoices();
   void chooseUpgrade(int slot);
+  void reroll();
+  void addWeapon(int defIndex);
+  void applyWeaponEffect(int slotIndex, std::string_view effect, float value);
+  int findWeaponSlot(std::string_view weaponId) const;
+  bool ownsWeapon(int defIndex) const;
+  int pickWeaponGrant(); // -1 when nothing new to offer
+  void spawnEnemy(const PendingSpawn& p);
+  void applyEnemyDamage(entt::entity e, float dmg);
+  void killEnemy(entt::entity e);
+  void chainBolt(float x, float y, float dmg);
+  void hurtPlayer(float amount);
   void spawnParticles(float x, float y, core::render::Color c, int count, float speed);
+
+  WeaponSlot weapons_[kMaxWeapons];
+  int weaponCount_ = 0;
+  std::vector<PendingSpawn> pending_;
+  std::vector<NameLabel> labels_;
 
   const Content& content_;
   entt::registry registry_;
@@ -113,9 +211,23 @@ private:
   float moveX_ = 0.0F; // latched input for fixed steps
   float moveY_ = 0.0F;
 
+  // Shield state (regen delay resets whenever damage is absorbed).
+  float shield_ = 0.0F;
+  float shieldDelay_ = 0.0F;
+
+  // Unique-item state.
+  int rerollsUsed_ = 0; // free rerolls consumed this level-up
+  bool milestoneOffer_ = false;
+  float poison_ = 0.0F; // venomous DoT timer on the player
+  int chainCounter_ = 0;
+  int bloodKills_ = 0;
+  float blackHoleTimer_ = 8.0F;
+  float adrenalineCd_ = 0.0F;
+  bool adrenalineActive_ = false;
+
   PlayerStats stats_;
-  std::vector<int> stacks_;   // per-upgrade stack counts
-  std::vector<int> choices_;  // 3 upgrade indices offered on level-up
+  std::vector<int> stacks_;    // per-upgrade stack counts
+  std::vector<Choice> choices_; // level-up cards
 
   entt::entity player_ = entt::null;
 
@@ -129,11 +241,6 @@ private:
   std::vector<std::uint32_t> scratchId_;
   std::vector<entt::entity> destroyQueue_;
 
-  // Particles: fixed ring buffer of PODs.
-  struct Particle {
-    float x, y, vx, vy, life, maxLife, size;
-    core::render::Color color;
-  };
   std::vector<Particle> particles_;
   static constexpr std::size_t kMaxParticles = 4096;
   std::size_t particleCursor_ = 0;

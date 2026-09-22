@@ -55,6 +55,55 @@ TEST_CASE("applyUpgrade mutates stats and reports validity") {
   REQUIRE_FALSE(unknown.valid);
 }
 
+TEST_CASE("mitigateDamage combines flat and percent reduction") {
+  // no defense = no reduction
+  REQUIRE(game::mitigateDamage(30.0F, 0.0F) == Catch::Approx(30.0F));
+  // defense always reduces (flat part kicks in at 5+)
+  REQUIRE(game::mitigateDamage(30.0F, 10.0F) < 30.0F);
+  // huge defense floors damage at zero, never negative
+  REQUIRE(game::mitigateDamage(30.0F, 500.0F) == Catch::Approx(0.0F));
+  REQUIRE(game::mitigateDamage(0.0F, 500.0F) == Catch::Approx(0.0F));
+  // monotonic in defense
+  for (float d = 0.0F; d <= 300.0F; d += 10.0F) {
+    REQUIRE(game::mitigateDamage(30.0F, d + 10.0F) <= game::mitigateDamage(30.0F, d));
+  }
+}
+
+TEST_CASE("applyUpgrade supports the defense / shield / lifesteal tree") {
+  game::PlayerStats s;
+  const auto de = game::applyUpgrade(s, "defense_add", 25.0F);
+  REQUIRE(de.valid);
+  REQUIRE(s.defense == Catch::Approx(25.0F));
+
+  const auto ls = game::applyUpgrade(s, "lifesteal_add", 0.04F);
+  REQUIRE(ls.valid);
+  REQUIRE(s.lifesteal == Catch::Approx(0.04F));
+
+  const auto sh = game::applyUpgrade(s, "shield_add", 60.0F);
+  REQUIRE(sh.valid);
+  REQUIRE(s.shieldMax == Catch::Approx(60.0F));
+  REQUIRE(sh.shield == Catch::Approx(60.0F)); // picker refills the shield
+}
+
+TEST_CASE("applyUpgrade supports unique-item effects") {
+  game::PlayerStats s;
+  const auto fan = game::applyUpgrade(s, "fan", 1.0F);
+  REQUIRE(fan.valid);
+  REQUIRE(s.spreadMul == Catch::Approx(3.0F));
+  REQUIRE(s.cooldownMul == Catch::Approx(0.5F));
+
+  REQUIRE(game::applyUpgrade(s, "extra_choice", 1.0F).valid);
+  REQUIRE(s.extraChoice == 1);
+  REQUIRE(game::applyUpgrade(s, "reroll_add", 1.0F).valid);
+  REQUIRE(s.rerollCharges == 1);
+  REQUIRE(game::applyUpgrade(s, "thorns", 3.0F).valid);
+  REQUIRE(s.thornsDmg == Catch::Approx(3.0F));
+  REQUIRE(game::applyUpgrade(s, "adrenaline", 1.0F).valid);
+  REQUIRE(s.adrenaline == 1);
+  REQUIRE(game::applyUpgrade(s, "chain", 1.0F).valid);
+  REQUIRE(s.chain == 1);
+}
+
 TEST_CASE("xpForLevel grows monotonically") {
   REQUIRE(game::xpForLevel(1) == Catch::Approx(6.0F));
   float prev = 0.0F;
@@ -158,4 +207,43 @@ TEST_CASE("grantXp triggers level-up state") {
   g.advance(1.0F / 60.0F, in);
   REQUIRE(g.state() == game::RunState::Playing);
   REQUIRE(g.level() == 2);
+}
+
+TEST_CASE("Level 5 offers milestone cards") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 11};
+
+  // Reach level 5 with exactly one level-up per pick (queue four level-ups).
+  g.grantXp(game::xpForLevel(1) + game::xpForLevel(2) + game::xpForLevel(3) + game::xpForLevel(4));
+  REQUIRE(g.state() == game::RunState::LevelUp);
+  for (int i = 0; i < 4; ++i) {
+    game::FrameInput in{};
+    in.choose1 = true;
+    g.advance(1.0F / 60.0F, in);
+  }
+  REQUIRE(g.level() == 5);
+  REQUIRE(g.state() == game::RunState::Playing);
+
+  g.grantXp(game::xpForLevel(5));
+  REQUIRE(g.state() == game::RunState::LevelUp);
+  REQUIRE(g.milestoneOffer());
+  REQUIRE(g.upgradeChoices().size() == 2);
+}
+
+TEST_CASE("Reroll refreshes the offered choices once per level-up") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 13};
+  g.grantXp(game::xpForLevel(1));
+  REQUIRE(g.state() == game::RunState::LevelUp);
+  REQUIRE(g.upgradeChoices().size() == 3);
+
+  game::FrameInput in{};
+  in.choose4 = true; // key 4 is the free reroll with three cards
+  g.advance(1.0F / 60.0F, in);
+  REQUIRE(g.state() == game::RunState::LevelUp); // still choosing
+  REQUIRE(g.rerollsUsed() == 1);
+
+  // A second reroll in the same level-up is a no-op.
+  g.advance(1.0F / 60.0F, in);
+  REQUIRE(g.rerollsUsed() == 1);
 }
