@@ -41,6 +41,7 @@ struct WeaponDef {
   core::render::Color projColor{1.0F, 0.95F, 0.55F, 1.0F};
   bool starter = false;
   std::vector<std::string> prereqs;
+  bool homing = false;    // projectile homes toward nearest enemy
 
   // Cone
   float coneAngle = 0.8F;     // radians

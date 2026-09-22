@@ -123,6 +123,7 @@ Content loadContent(const std::filesystem::path& dir) {
       def.pierce = static_cast<int>((*t)["pierce"].value_or(0));
       def.spread = (*t)["spread"].value_or(0.16F);
       def.starter = (*t)["starter"].value_or(false);
+      def.homing = (*t)["homing"].value_or(false);
       const auto* colorNode = t->get("proj_color");
       if (colorNode != nullptr) {
         def.projColor = parseColor(*colorNode, where);

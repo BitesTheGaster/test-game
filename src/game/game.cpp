@@ -2044,7 +2044,7 @@ void Game::addWeapon(int defIndex) {
   // General projectile fields
   w.area = 0.0F;
   w.strength = 0.0F;
-  w.homing = false;
+  w.homing = def.homing;
   w.bounces = 0;
 
   // Create orbit blades if this is an orbit weapon
