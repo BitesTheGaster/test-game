@@ -3,6 +3,7 @@
 #include "core/render/color.hpp"
 
 #include <cstdint>
+#include <string>
 
 namespace game {
 
@@ -70,6 +71,7 @@ struct Projectile {
   bool homing = false;    // homes toward nearest enemy each tick
   int bounces = 0;        // wall bounces remaining after impact
   int bounceCount = 0;    // how many bounces have happened
+  std::string shape = "circle"; // projectile shape: circle, rect, line, triangle, star, large_circle
 };
 
 struct Xp {

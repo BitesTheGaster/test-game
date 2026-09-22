@@ -135,6 +135,7 @@ private:
     float strength = 0.0F;  // knockback force on hit
     bool homing = false;    // homes toward nearest enemy
     int bounces = 0;        // wall bounces after impact
+    std::string shape = "circle"; // projectile shape
   };
   static constexpr int kMaxWeapons = 4;
 
@@ -218,6 +219,13 @@ private:
   // Shield state (regen delay resets whenever damage is absorbed).
   float shield_ = 0.0F;
   float shieldDelay_ = 0.0F;
+  float prevShield_ = 0.0F; // for shield break detection
+
+  // Visual feedback state.
+  float screenShake_ = 0.0F;    // screen shake intensity (world units)
+  float hitPause_ = 0.0F;       // hit pause timer (seconds)
+  struct DmgNumber { float x, y, life, value; core::render::Color color; };
+  std::vector<DmgNumber> dmgNumbers_;
 
   // Unique-item state.
   int rerollsUsed_ = 0; // free rerolls consumed this level-up

@@ -1,224 +1,178 @@
 # Base weapons. Modifiers come from upgrades.
 #
-# Weapon roles:
-#   dagger  — fast twin hits, close-range flurry
-#   wand    — balanced single bolt, reliable baseline
-#   needle  — rapid tight stream, fast projectiles
-#   flame   — wide spray, area denial at close range
-#   ember   — very rapid spray, many small projectiles
-#   shuriken— fast homing twins, track the target
-#   fan     — very wide cone, close-range burst
-#   crossbow— slow homing piercing bolt, hits through groups
-#   hammer  — slow heavy AoE with knockback
-#   scythe  — slow massive sweep, maximum pierce
-#   orb     — rolling bomb that bounces and explodes
-#   beam    — slow but instant, devastating single beam
-#   storm   — evolution (wand + ember), lightning grid
-#   nova    — evolution (orb + scythe), black star explosion
+# Weapon roles (each must FEEL completely different):
+#   wand      — single reliable bolt, the baseline "pistol"
+#   dagger    — rapid twin blades, melee-range flurry, high DPS up close
+#   crossbow  — slow heavy piercing bolt that homing-tracks, punches lines
+#   hammer    — very slow artillery, massive AoE splash + knockback
+#   orb       — slow rolling bomb that bounces off walls/enemies, explodes
+#   beam      — instant-hit channeled laser, continuous damage while firing
+#   scythe    — wide sweeping arc in front, cleaves everything in cone
+#   needle    — rapid stream of hair-thin projectiles, sustained DPS
+#   storm     — evolution (wand + needle): grid of homing chain lightning
+#   nova      — evolution (orb + hammer): giant meteor, bounces, massive boom
 #
 # - starter = true: one of these is rolled as the run-start weapon.
-# - requires = [a, b]: evolution weapon, offered as a level-up grant once you
-#   own both prerequisites (NOT in the normal random grant pool before that).
-# - area: explosion radius on impact (splash damage).
+# - requires = [a, b]: evolution weapon, offered as priority grant once both owned.
+# - area: explosion radius on impact (splash damage at 50%).
 # - strength: knockback force applied to the hit enemy.
-# - homing: projectile steers toward the nearest enemy each tick.
-# - bounces: number of wall bounces after the first impact.
+# - homing: projectile steers toward nearest enemy each tick.
+# - bounces: number of wall/enemy bounces after first impact.
+# - shape: visual projectile shape (circle, rect, line, triangle, star, large_circle)
 
 [[weapon]]
 id = "wand"
 name = "Arcane Wand"
-desc = "Reliable magic bolts. The balanced baseline."
-damage = 7.0
-cooldown = 0.55
+desc = "Single reliable bolt. The baseline — accurate, consistent."
+damage = 8.0
+cooldown = 0.50
 projectiles = 1
-proj_speed = 13.0
-proj_life = 1.4
+proj_speed = 14.0
+proj_life = 1.5
 pierce = 0
-spread = 0.16
+spread = 0.10
 proj_color = [1.0, 0.95, 0.55, 1.0]
 starter = true
+shape = "circle"
 
 [[weapon]]
 id = "dagger"
 name = "Throwing Dagger"
-desc = "Fast twin blades — rapid close-range flurry."
-damage = 4.0
-cooldown = 0.25
+desc = "Twin blades at melee range. Insane DPS if you stay close."
+damage = 5.0
+cooldown = 0.20
 projectiles = 2
-proj_speed = 18.0
-proj_life = 0.9
+proj_speed = 20.0
+proj_life = 0.7
 pierce = 1
-spread = 0.30
+spread = 0.35
 proj_color = [0.85, 0.9, 1.0, 1.0]
 starter = true
+shape = "triangle"
 
 [[weapon]]
 id = "crossbow"
 name = "Heavy Crossbow"
-desc = "Slow, homing piercing bolt that hits through crowds."
-damage = 18.0
-cooldown = 1.10
+desc = "Slow homing bolt that pierces through entire crowds."
+damage = 22.0
+cooldown = 1.20
 projectiles = 1
-proj_speed = 20.0
-proj_life = 1.8
-pierce = 3
-spread = 0.16
+proj_speed = 18.0
+proj_life = 2.0
+pierce = 4
+spread = 0.08
 proj_color = [0.95, 0.8, 0.5, 1.0]
 starter = true
 homing = true
-
-[[weapon]]
-id = "flame"
-name = "Ember Sprayer"
-desc = "A wide spray of short-lived embers — close-range denial."
-damage = 3.0
-cooldown = 0.18
-projectiles = 3
-proj_speed = 9.0
-proj_life = 0.6
-pierce = 1
-spread = 0.40
-proj_color = [1.0, 0.55, 0.25, 1.0]
+shape = "rect"
 
 [[weapon]]
 id = "hammer"
 name = "Runic Hammer"
-desc = "Slow sledgehammer with AoE splash and knockback."
-damage = 32.0
-cooldown = 1.60
+desc = "Artillery strike. Massive AoE explosion with heavy knockback."
+damage = 40.0
+cooldown = 1.80
 projectiles = 1
-proj_speed = 7.0
-proj_life = 1.2
-pierce = 4
-spread = 0.16
-proj_color = [0.75, 0.7, 0.95, 1.0]
-area = 1.5
-strength = 3.0
-
-[[weapon]]
-id = "shuriken"
-name = "Storm Shuriken"
-desc = "Swift homing twins that track the target."
-damage = 6.0
-cooldown = 0.40
-projectiles = 2
-proj_speed = 18.0
-proj_life = 1.3
+proj_speed = 6.0
+proj_life = 1.5
 pierce = 0
-spread = 0.25
-proj_color = [0.6, 0.9, 1.0, 1.0]
-homing = true
-
-[[weapon]]
-id = "ember"
-name = "Spark Spitter"
-desc = "A violent drizzle of fire sparks — rapid spray."
-damage = 2.5
-cooldown = 0.22
-projectiles = 4
-proj_speed = 10.0
-proj_life = 0.5
-pierce = 1
-spread = 0.45
-proj_color = [1.0, 0.4, 0.15, 1.0]
+spread = 0.05
+proj_color = [0.75, 0.7, 0.95, 1.0]
+area = 2.0
+strength = 5.0
+shape = "large_circle"
 
 [[weapon]]
 id = "orb"
 name = "Void Orb"
-desc = "A rolling bomb that bounces and detonates."
-damage = 38.0
-cooldown = 1.40
-projectiles = 1
-proj_speed = 6.0
-proj_life = 2.0
-pierce = 5
-spread = 0.16
-proj_color = [0.75, 0.45, 1.0, 1.0]
-bounces = 2
-area = 1.0
-
-[[weapon]]
-id = "fan"
-name = "Scattergun"
-desc = "Five shots in a very wide arc — close-range cone."
-damage = 5.0
-cooldown = 0.70
-projectiles = 5
-proj_speed = 12.0
-proj_life = 0.8
-pierce = 0
-spread = 0.70
-proj_color = [0.9, 0.55, 0.35, 1.0]
-
-[[weapon]]
-id = "scythe"
-name = "Soul Scythe"
-desc = "One huge sweeping arc with heavy knockback."
+desc = "Rolling bomb. Bounces off walls and enemies, then detonates."
 damage = 45.0
-cooldown = 1.10
+cooldown = 1.50
 projectiles = 1
-proj_speed = 12.0
-proj_life = 1.6
-pierce = 6
-spread = 0.16
-proj_color = [0.7, 1.0, 0.8, 1.0]
-strength = 2.0
-
-[[weapon]]
-id = "needle"
-name = "Crystal Needles"
-desc = "Hair-thin projectiles at absurd speed."
-damage = 3.5
-cooldown = 0.28
-projectiles = 3
-proj_speed = 24.0
-proj_life = 0.9
+proj_speed = 5.5
+proj_life = 2.5
 pierce = 0
-spread = 0.20
-proj_color = [0.5, 0.95, 0.9, 1.0]
+spread = 0.05
+proj_color = [0.75, 0.45, 1.0, 1.0]
+bounces = 3
+area = 1.5
+shape = "large_circle"
 
 [[weapon]]
 id = "beam"
 name = "Solar Lance"
-desc = "A devastating slow beam — instant, unblockable."
-damage = 70.0
-cooldown = 2.20
+desc = "Channeled instant laser. Hold to melt everything in a line."
+damage = 35.0
+cooldown = 0.08
 projectiles = 1
-proj_speed = 30.0
-proj_life = 2.0
-pierce = 0
-spread = 0.10
-proj_color = [1.0, 1.0, 0.75, 1.0]
+proj_speed = 100.0
+proj_life = 0.15
+pierce = 10
+spread = 0.0
+proj_color = [1.0, 1.0, 0.6, 1.0]
+shape = "line"
+
+[[weapon]]
+id = "scythe"
+name = "Soul Scythe"
+desc = "Wide death sweep. Cleaves everything in a cone ahead."
+damage = 18.0
+cooldown = 0.90
+projectiles = 1
+proj_speed = 16.0
+proj_life = 0.5
+pierce = 8
+spread = 0.0
+proj_color = [0.6, 1.0, 0.7, 1.0]
+strength = 3.0
+shape = "rect"
+
+[[weapon]]
+id = "needle"
+name = "Crystal Needles"
+desc = "Hair-thin stream at absurd speed. Sustained shredder."
+damage = 3.0
+cooldown = 0.06
+projectiles = 1
+proj_speed = 28.0
+proj_life = 0.8
+pierce = 1
+spread = 0.0
+proj_color = [0.5, 0.95, 0.9, 1.0]
+shape = "rect"
 
 # --- Evolutions (A+B = C) ----------------------------------------------------
 
 [[weapon]]
 id = "storm"
 name = "Storm Caller"
-desc = "Wand + Spark Spitter. A grid of homing lightning bolts."
-damage = 10.0
-cooldown = 0.50
-projectiles = 6
-proj_speed = 14.0
+desc = "Wand + Needle. Grid of homing lightning that chains between enemies."
+damage = 12.0
+cooldown = 0.45
+projectiles = 8
+proj_speed = 16.0
 proj_life = 1.0
-pierce = 2
-spread = 0.50
-proj_color = [0.55, 1.0, 1.0, 1.0]
-requires = ["wand", "ember"]
+pierce = 3
+spread = 0.60
+proj_color = [0.4, 1.0, 1.0, 1.0]
+requires = ["wand", "needle"]
 homing = true
+shape = "star"
 
 [[weapon]]
 id = "nova"
 name = "Void Nova"
-desc = "Void Orb + Soul Scythe. One unstoppable black star explosion."
-damage = 90.0
-cooldown = 1.60
+desc = "Orb + Hammer. Giant meteor that bounces and leaves craters."
+damage = 120.0
+cooldown = 2.00
 projectiles = 1
-proj_speed = 8.0
-proj_life = 2.4
-pierce = 10
-spread = 0.16
-proj_color = [0.5, 0.3, 1.0, 1.0]
-requires = ["orb", "scythe"]
-area = 3.0
-homing = true
+proj_speed = 5.0
+proj_life = 3.0
+pierce = 0
+spread = 0.05
+proj_color = [0.5, 0.2, 1.0, 1.0]
+requires = ["orb", "hammer"]
+bounces = 4
+area = 4.0
+strength = 8.0
+shape = "large_circle"

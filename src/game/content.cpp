@@ -121,6 +121,7 @@ Content loadContent(const std::filesystem::path& dir) {
       def.strength = (*t)["strength"].value_or(0.0F);
       def.homing = (*t)["homing"].value_or(false);
       def.bounces = static_cast<int>((*t)["bounces"].value_or(0));
+      def.shape = (*t)["shape"].value_or("circle");
       content.weapons.push_back(std::move(def));
     }
   }

@@ -178,6 +178,10 @@ void Game::reset() {
 
   shield_ = 0.0F;
   shieldDelay_ = 0.0F;
+  prevShield_ = 0.0F;
+  screenShake_ = 0.0F;
+  hitPause_ = 0.0F;
+  dmgNumbers_.clear();
   rerollsUsed_ = 0;
   milestoneOffer_ = false;
   poison_ = 0.0F;
@@ -270,10 +274,32 @@ void Game::advance(float frameDt, const FrameInput& input) {
 }
 
 void Game::fixedUpdate() {
+  // Hit pause: freeze simulation briefly on big hits.
+  if (hitPause_ > 0.0F) {
+    hitPause_ -= 1.0F / 60.0F;
+    return; // skip this tick entirely
+  }
+
   simTime_ += 1.0F / 60.0F;
   if (iframes_ > 0.0F) {
     iframes_ -= 1.0F / 60.0F;
   }
+
+  // Screen shake decay.
+  if (screenShake_ > 0.0F) {
+    screenShake_ *= 0.85F;
+    if (screenShake_ < 0.01F) screenShake_ = 0.0F;
+  }
+
+  // Damage numbers fade.
+  for (auto& dn : dmgNumbers_) {
+    dn.life -= 1.0F / 60.0F;
+  }
+  // Remove expired.
+  dmgNumbers_.erase(
+      std::remove_if(dmgNumbers_.begin(), dmgNumbers_.end(),
+                     [](const DmgNumber& dn) { return dn.life <= 0.0F; }),
+      dmgNumbers_.end());
 
   movePlayer();
   buildSpatialHash();
@@ -516,7 +542,7 @@ void Game::fireWeapons() {
       s.color = w.color;
       s.circle = true;
       registry_.emplace<Sprite>(proj, s);
-      registry_.emplace<Projectile>(proj, damage, pierce, w.life, w.area, w.strength, w.homing, w.bounces, 0);
+      registry_.emplace<Projectile>(proj, damage, pierce, w.life, w.area, w.strength, w.homing, w.bounces, 0, w.shape);
     }
   }
 }
@@ -526,14 +552,20 @@ void Game::applyEnemyDamage(entt::entity e, float dmg) {
   auto* eh = registry_.try_get<Health>(e);
   if (eh == nullptr || eh->hp <= 0.0F) return;
   auto* tr = registry_.try_get<EnemyTraits>(e);
+  const auto& et = registry_.get<Transform>(e);
   if (tr != nullptr && tr->shield > 0.0F) {
     const float absorbed = std::min(tr->shield, dmg);
     tr->shield -= absorbed;
     dmg -= absorbed;
-    spawnParticles(registry_.get<Transform>(e).x, registry_.get<Transform>(e).y,
-                   {0.5F, 0.8F, 1.0F, 1.0F}, 2, 2.0F);
+    spawnParticles(et.x, et.y, {0.5F, 0.8F, 1.0F, 1.0F}, 2, 2.0F);
   }
-  eh->hp -= dmg;
+  if (dmg > 0.0F) {
+    eh->hp -= dmg;
+    // Damage number (yellow/orange).
+    dmgNumbers_.push_back({et.x, et.y - 0.25F, 0.6F, dmg, {1.0F, 0.85F, 0.2F, 1.0F}});
+    // Tiny screen shake on hit.
+    screenShake_ = std::max(screenShake_, 0.1F);
+  }
   if (eh->hp <= 0.0F) {
     killEnemy(e);
   }
@@ -542,6 +574,12 @@ void Game::applyEnemyDamage(entt::entity e, float dmg) {
 void Game::killEnemy(entt::entity e) {
   if (!registry_.valid(e)) return;
   const auto& t = registry_.get<Transform>(e);
+
+  // Check if elite/champion for enhanced death effects.
+  auto* tr = registry_.try_get<EnemyTraits>(e);
+  const bool isElite = (tr != nullptr && tr->tier > 0);
+  const bool isChampion = (tr != nullptr && tr->tier >= 2);
+  const auto& enemyColor = registry_.get<Sprite>(e).color;
 
   // Death: XP orb + counter; actual destroy deferred.
   const float xpValue = registry_.all_of<Xp>(e) ? registry_.get<Xp>(e).value : 1.0F;
@@ -582,7 +620,7 @@ void Game::killEnemy(entt::entity e) {
   }
 
   // Explosive trait: the corpse detonates if the player is close.
-  if (auto* tr = registry_.try_get<EnemyTraits>(e); tr != nullptr && (tr->flags & TraitExplosive)) {
+  if (tr != nullptr && (tr->flags & TraitExplosive)) {
     const auto& en = registry_.get<Enemy>(e);
     if (player_ != entt::null && registry_.valid(player_)) {
       const auto& pt = registry_.get<Transform>(player_);
@@ -595,7 +633,24 @@ void Game::killEnemy(entt::entity e) {
     spawnParticles(t.x, t.y, {1.0F, 0.5F, 0.1F, 1.0F}, 12, 6.0F);
   }
 
-  spawnParticles(t.x, t.y, {0.9F, 0.3F, 0.5F, 1.0F}, 8, 5.0F);
+  // Death effects based on enemy tier.
+  if (isChampion) {
+    // Champion death: big flash, screen shake, hit pause, lots of particles.
+    screenShake_ = std::max(screenShake_, 0.8F);
+    hitPause_ = 0.1F; // ~6 frames freeze
+    spawnParticles(t.x, t.y, enemyColor, 30, 8.0F);
+    spawnParticles(t.x, t.y, {1.0F, 0.5F, 0.1F, 1.0F}, 25, 10.0F);
+    spawnParticles(t.x, t.y, {1.0F, 1.0F, 0.5F, 1.0F}, 15, 12.0F);
+  } else if (isElite) {
+    // Elite death: noticeable flash and shake.
+    screenShake_ = std::max(screenShake_, 0.4F);
+    hitPause_ = 0.05F; // ~3 frames freeze
+    spawnParticles(t.x, t.y, enemyColor, 18, 7.0F);
+    spawnParticles(t.x, t.y, {1.0F, 0.7F, 0.2F, 1.0F}, 12, 9.0F);
+  } else {
+    // Normal death: small poof.
+    spawnParticles(t.x, t.y, enemyColor, 8, 4.0F);
+  }
 }
 
 void Game::chainBolt(float x, float y, float dmg) {
@@ -682,7 +737,11 @@ void Game::updateProjectiles() {
       const float dealt = hpBefore - eh->hp;
       if (dealt > 0.0F && stats_.lifesteal > 0.0F && player_ != entt::null) {
         auto& hp = registry_.get<Health>(player_);
-        hp.hp = std::min(hp.max, hp.hp + dealt * stats_.lifesteal);
+        const float heal = dealt * stats_.lifesteal;
+        hp.hp = std::min(hp.max, hp.hp + heal);
+        // Lifesteal visual: green floating number at player.
+        const auto& pt = registry_.get<Transform>(player_);
+        dmgNumbers_.push_back({pt.x, pt.y - 0.4F, 0.7F, heal, {0.3F, 1.0F, 0.4F, 1.0F}});
       }
 
       // Knockback on hit.
@@ -701,7 +760,6 @@ void Game::updateProjectiles() {
         auto splashView = registry_.view<Transform, Health, Radius>();
         for (const auto se : splashView) {
           const auto& st = splashView.get<Transform>(se);
-          const auto& sr = splashView.get<Radius>(se);
           const float sdx = st.x - et.x;
           const float sdy = st.y - et.y;
           if (sdx * sdx + sdy * sdy < pr.area * pr.area) {
@@ -1180,6 +1238,11 @@ void Game::addWeapon(int defIndex) {
   w.pierce = def.pierce;
   w.spread = def.spread;
   w.color = def.projColor;
+  w.area = def.area;
+  w.strength = def.strength;
+  w.homing = def.homing;
+  w.bounces = def.bounces;
+  w.shape = def.shape;
 }
 
 void Game::applyWeaponEffect(int slotIndex, std::string_view effect, float value) {
@@ -1245,12 +1308,12 @@ int Game::pickWeaponGrant() {
 
 void Game::hurtPlayer(float amount) {
   if (player_ == entt::null || !registry_.valid(player_)) return;
+  const auto& pt = registry_.get<Transform>(player_);
   auto& php = registry_.get<Health>(player_);
   if (php.hp <= 0.0F) return;
 
   // Thorns: getting hit detonates a burst around the player.
   if (stats_.thornsDmg > 0.0F) {
-    const auto& pt = registry_.get<Transform>(player_);
     std::vector<entt::entity> targets;
     auto view = registry_.view<Transform, Health>();
     for (const auto e : view) {
@@ -1271,19 +1334,38 @@ void Game::hurtPlayer(float amount) {
   float dmg = mitigateDamage(amount, stats_.defense);
 
   // Regenerating shield absorbs the remainder first.
+  bool shieldBroken = false;
   if (shield_ > 0.0F) {
     const float absorbed = std::min(shield_, dmg);
     shield_ -= absorbed;
     dmg -= absorbed;
     shieldDelay_ = kShieldRegenDelay;
+    // Check if shield just broke.
+    if (prevShield_ > 0.0F && shield_ <= 0.0F) {
+      shieldBroken = true;
+    }
   }
+  prevShield_ = shield_;
 
   if (dmg > 0.0F) {
     php.hp -= dmg;
+    // Screen shake + hit pause on player hit.
+    screenShake_ = std::max(screenShake_, 0.35F);
+    hitPause_ = 0.04F; // ~2-3 frames freeze
+    // Damage number (red).
+    dmgNumbers_.push_back({pt.x, pt.y - 0.3F, 0.8F, dmg, {1.0F, 0.3F, 0.3F, 1.0F}});
     if (php.hp <= 0.0F) {
       php.hp = 0.0F;
       state_ = RunState::GameOver;
     }
+  }
+
+  // Shield break feedback.
+  if (shieldBroken) {
+    screenShake_ = std::max(screenShake_, 0.5F);
+    hitPause_ = 0.06F;
+    spawnParticles(pt.x, pt.y, {0.3F, 0.6F, 1.0F, 1.0F}, 20, 6.0F);
+    dmgNumbers_.push_back({pt.x, pt.y - 0.5F, 1.0F, 0.0F, {0.3F, 0.7F, 1.0F, 1.0F}}); // "SHIELD BROKEN"
   }
 }
 
@@ -1371,8 +1453,16 @@ void Game::render(core::render::Batcher& b, float alpha) {
   const auto px = static_cast<float>(b.fbWidth());
   const auto py = static_cast<float>(b.fbHeight());
 
+  // Screen shake offset.
+  float shakeX = 0.0F, shakeY = 0.0F;
+  if (screenShake_ > 0.0F) {
+    std::uniform_real_distribution<float> unit(-1.0F, 1.0F);
+    shakeX = unit(rng_) * screenShake_;
+    shakeY = unit(rng_) * screenShake_;
+  }
+
   // --- World pass -----------------------------------------------------------
-  b.setWorldView(camX_, camY_, zoom_);
+  b.setWorldView(camX_ + shakeX, camY_ + shakeY, zoom_);
 
   // Ground grid.
   const float halfW = (px * 0.5F) / zoom_;
@@ -1390,16 +1480,20 @@ void Game::render(core::render::Batcher& b, float alpha) {
 
   const float lerp = alpha;
 
-  // Pending spawn telegraphs: pulsing rings where enemies are about to appear.
+  // Pending spawn telegraphs: pulsing rings + direction arrows for off-screen.
   for (const auto& p : pending_) {
     const auto& def = content_.enemies[static_cast<std::size_t>(p.def)];
-    const float pulse = 1.0F + 0.25F * std::sin(p.t * 18.0F);
+    const float pulse = 1.0F + 0.35F * std::sin(p.t * 20.0F);
     Color ring = def.color;
-    ring.a = 0.16F;
-    b.circle(p.x, p.y, def.radius * 2.6F * pulse, ring);
+    ring.a = 0.25F;
+    b.circle(p.x, p.y, def.radius * 3.0F * pulse, ring);
     Color core = def.color;
-    core.a = 0.6F;
-    b.circle(p.x, p.y, def.radius * 0.5F, core);
+    core.a = 0.8F;
+    b.circle(p.x, p.y, def.radius * 0.6F, core);
+    // Inner bright dot.
+    Color inner = def.color;
+    inner.a = 1.0F;
+    b.circle(p.x, p.y, def.radius * 0.25F, inner);
   }
 
   // XP orbs.
@@ -1464,11 +1558,29 @@ void Game::render(core::render::Batcher& b, float alpha) {
     for (const auto e : view) {
       const auto& t = view.get<Transform>(e);
       const auto& s = view.get<Sprite>(e);
+      const auto& pr = view.get<Projectile>(e);
       const auto& r = view.get<Radius>(e);
       const float x = t.px + (t.x - t.px) * lerp;
       const float y = t.py + (t.y - t.py) * lerp;
-      if (s.circle) b.circle(x, y, r.r, s.color);
-      else b.rect(x, y, r.r * 2.0F, r.r * 2.0F, s.color);
+      if (pr.shape == "line") {
+        // Laser beam: draw as a line from previous to current position
+        b.rect(x, y, r.r * 2.0F, length(t.x - t.px, t.y - t.py) + r.r, s.color);
+      } else if (pr.shape == "rect") {
+        b.rect(x, y, r.r * 2.0F, r.r * 0.5F, s.color);
+      } else if (pr.shape == "triangle") {
+        // Triangle pointing in direction of travel
+        const float size = r.r * 1.5F;
+        // Draw as rect with rotation hint (triangle approx)
+        b.rect(x, y, size, size * 0.5F, s.color);
+      } else if (pr.shape == "star") {
+        // Star shape - draw as rotating square
+        const float size = r.r * 1.3F;
+        b.rect(x, y, size, size, s.color);
+      } else if (pr.shape == "large_circle") {
+        b.circle(x, y, r.r * 1.8F, s.color);
+      } else {
+        b.circle(x, y, r.r, s.color);
+      }
     }
   }
 
@@ -1498,6 +1610,23 @@ void Game::render(core::render::Batcher& b, float alpha) {
     Color c = p.color;
     c.a = p.life / p.maxLife;
     b.circle(p.x, p.y, p.size, c);
+  }
+
+  // Damage numbers (world space, so they move with camera).
+  for (const auto& dn : dmgNumbers_) {
+    float a = dn.life / 0.8F; // fade over 0.8s
+    if (a > 1.0F) a = 1.0F;
+    Color c = dn.color;
+    c.a = a;
+    // Float upward.
+    float yOffset = (0.8F - dn.life) * 0.5F;
+    float scale = 2.0F + (0.8F - dn.life) * 1.5F; // grow slightly
+    if (dn.value > 0.0F) {
+      b.text(dn.x, dn.y + yOffset, scale, c,
+             std::to_string(static_cast<int>(dn.value)));
+    } else {
+      b.text(dn.x, dn.y + yOffset, scale, c, "SHIELD BROKEN");
+    }
   }
 
   b.flush();
@@ -1552,16 +1681,32 @@ void Game::render(core::render::Batcher& b, float alpha) {
   }
   labels_.clear();
 
-  // Off-screen spawn warnings: a small dot at the screen edge marks where an
-  // enemy is about to show up (the in-world ring only covers on-screen spots).
+  // Off-screen spawn warnings: directional arrow at screen edge.
   for (const auto& p : pending_) {
     const float sx = (p.x - camX_) * zoom_ + px * 0.5F;
     const float sy = py * 0.5F - (p.y - camY_) * zoom_;
     if (sx >= -2.0F && sx <= px + 2.0F && sy >= -2.0F && sy <= py + 2.0F) continue;
-    const float cxp = std::clamp(sx, 8.0F, px - 8.0F);
-    const float cyp = std::clamp(sy, 8.0F, py - 8.0F);
+    const float cxp = std::clamp(sx, 16.0F, px - 16.0F);
+    const float cyp = std::clamp(sy, 16.0F, py - 16.0F);
     const auto& def = content_.enemies[static_cast<std::size_t>(p.def)];
-    b.rectTopLeft(cxp - 3.0F, cyp - 3.0F, 6.0F, 6.0F, def.color);
+    // Direction from screen center to spawn.
+    const float dx = cxp - px * 0.5F;
+    const float dy = cyp - py * 0.5F;
+    const float ang = std::atan2(-dy, dx); // screen Y is down
+    const float arrowSize = 14.0F;
+    // Draw arrow as shaft + head (approximate with rects).
+    Color c = def.color;
+    c.a = 0.9F;
+    // Arrow shaft.
+    b.rect(cxp, cyp, 3.0F, arrowSize, c);
+    // Arrow head (square at tip).
+    const float tipX = cxp + std::cos(ang) * arrowSize;
+    const float tipY = cyp - std::sin(ang) * arrowSize;
+    b.rect(tipX, tipY, 6.0F, 6.0F, c);
+    // Pulse effect.
+    const float pulse = 1.0F + 0.3F * std::sin(p.t * 20.0F);
+    c.a = 0.5F * pulse;
+    b.circle(cxp, cyp, 8.0F * pulse, c);
   }
 
   // Level-up overlay.

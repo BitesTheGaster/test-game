@@ -30,6 +30,7 @@ struct WeaponDef {
   float strength = 0.0F;  // knockback force on hit (0 = none)
   bool homing = false;    // projectile homes toward the nearest enemy
   int bounces = 0;        // number of wall bounces after impact
+  std::string shape = "circle"; // projectile shape: circle, rect, line, triangle, star, large_circle
 };
 
 struct EnemyDef {

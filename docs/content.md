@@ -10,32 +10,28 @@ Regenerate with:
 python3 tools/gendocs.py
 ```
 
-**Totals:** 14 weapons (12 base +
+**Totals:** 10 weapons (8 base +
 2 evolutions), 18 enemies.
 
 ### Base weapons
 
-| Name | ID | Damage | Cooldown (s) | Projectiles | Proj. speed | Pierce | Spread (rad) | Starter | Traits | Description |
-|---|---|---|---|---|---|---|---|---|---|---|
-| Arcane Wand | wand | 7 | 0.55 | 1 | 13 | 0 | 0.16 | yes |  | Reliable magic bolts. The balanced baseline. |
-| Throwing Dagger | dagger | 4 | 0.25 | 2 | 18 | 1 | 0.3 | yes |  | Fast twin blades — rapid close-range flurry. |
-| Heavy Crossbow | crossbow | 18 | 1.1 | 1 | 20 | 3 | 0.16 | yes | homing | Slow, homing piercing bolt that hits through crowds. |
-| Ember Sprayer | flame | 3 | 0.18 | 3 | 9 | 1 | 0.4 |  |  | A wide spray of short-lived embers — close-range denial. |
-| Runic Hammer | hammer | 32 | 1.6 | 1 | 7 | 4 | 0.16 |  | splash knock | Slow sledgehammer with AoE splash and knockback. |
-| Storm Shuriken | shuriken | 6 | 0.4 | 2 | 18 | 0 | 0.25 |  | homing | Swift homing twins that track the target. |
-| Spark Spitter | ember | 2.5 | 0.22 | 4 | 10 | 1 | 0.45 |  |  | A violent drizzle of fire sparks — rapid spray. |
-| Void Orb | orb | 38 | 1.4 | 1 | 6 | 5 | 0.16 |  | splash bounce2 | A rolling bomb that bounces and detonates. |
-| Scattergun | fan | 5 | 0.7 | 5 | 12 | 0 | 0.7 |  |  | Five shots in a very wide arc — close-range cone. |
-| Soul Scythe | scythe | 45 | 1.1 | 1 | 12 | 6 | 0.16 |  | knock | One huge sweeping arc with heavy knockback. |
-| Crystal Needles | needle | 3.5 | 0.28 | 3 | 24 | 0 | 0.2 |  |  | Hair-thin projectiles at absurd speed. |
-| Solar Lance | beam | 70 | 2.2 | 1 | 30 | 0 | 0.1 |  |  | A devastating slow beam — instant, unblockable. |
+| Name | ID | Damage | Cooldown (s) | Projectiles | Proj. speed | Pierce | Spread (rad) | Starter | Shape | Traits | Description |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| Arcane Wand | wand | 8 | 0.5 | 1 | 14 | 0 | 0.1 | yes | circle |  | Single reliable bolt. The baseline — accurate, consistent. |
+| Throwing Dagger | dagger | 5 | 0.2 | 2 | 20 | 1 | 0.35 | yes | triangle |  | Twin blades at melee range. Insane DPS if you stay close. |
+| Heavy Crossbow | crossbow | 22 | 1.2 | 1 | 18 | 4 | 0.08 | yes | rect | homing | Slow homing bolt that pierces through entire crowds. |
+| Runic Hammer | hammer | 40 | 1.8 | 1 | 6 | 0 | 0.05 |  | large_circle | splash knock | Artillery strike. Massive AoE explosion with heavy knockback. |
+| Void Orb | orb | 45 | 1.5 | 1 | 5.5 | 0 | 0.05 |  | large_circle | splash bounce3 | Rolling bomb. Bounces off walls and enemies, then detonates. |
+| Solar Lance | beam | 35 | 0.08 | 1 | 100 | 10 | 0 |  | line |  | Channeled instant laser. Hold to melt everything in a line. |
+| Soul Scythe | scythe | 18 | 0.9 | 1 | 16 | 8 | 0 |  | rect | knock | Wide death sweep. Cleaves everything in a cone ahead. |
+| Crystal Needles | needle | 3 | 0.06 | 1 | 28 | 1 | 0 |  | rect |  | Hair-thin stream at absurd speed. Sustained shredder. |
 
 ### Evolutions (A + B = C)
 
-| Name | ID | Requires | Damage | Cooldown (s) | Projectiles | Pierce | Area | Description |
-|---|---|---|---|---|---|---|---|---|
-| Storm Caller | storm | wand + ember | 10 | 0.5 | 6 | 2 | Wand + Spark Spitter. A grid of homing lightning bolts. |
-| Void Nova | nova | orb + scythe | 90 | 1.6 | 1 | 10 | Void Orb + Soul Scythe. One unstoppable black star explosion. |
+| Name | ID | Requires | Damage | Cooldown (s) | Projectiles | Pierce | Area | Shape | Description |
+|---|---|---|---|---|---|---|---|---|---|
+| Storm Caller | storm | wand + needle | 12 | 0.45 | 8 | 3 | 0 | star | Wand + Needle. Grid of homing lightning that chains between enemies. |
+| Void Nova | nova | orb + hammer | 120 | 2 | 1 | 0 | 4 | large_circle | Orb + Hammer. Giant meteor that bounces and leaves craters. |
 
 ---
 
