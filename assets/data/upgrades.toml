@@ -1,0 +1,73 @@
+# Level-up upgrades. effect = id understood by applyUpgrade(), value = per-stack magnitude.
+
+[[upgrade]]
+id = "damage"
+name = "Sharpened Bolts"
+desc = "+15% damage"
+effect = "damage_mul"
+value = 0.15
+max_stacks = 6
+
+[[upgrade]]
+id = "haste"
+name = "Battle Haste"
+desc = "-10% attack cooldown"
+effect = "cooldown_mul"
+value = -0.10
+max_stacks = 5
+
+[[upgrade]]
+id = "multi"
+name = "Split Shot"
+desc = "+1 projectile"
+effect = "proj_add"
+value = 1
+max_stacks = 4
+
+[[upgrade]]
+id = "boots"
+name = "Swift Boots"
+desc = "+12% move speed"
+effect = "speed_mul"
+value = 0.12
+max_stacks = 4
+
+[[upgrade]]
+id = "vigor"
+name = "Vigor"
+desc = "+20 max HP and heal 20"
+effect = "max_hp_add"
+value = 20
+max_stacks = 6
+
+[[upgrade]]
+id = "magnet"
+name = "Soul Magnet"
+desc = "+60% pickup range"
+effect = "pickup_mul"
+value = 0.60
+max_stacks = 4
+
+[[upgrade]]
+id = "pierce"
+name = "Piercing Shots"
+desc = "+1 pierce"
+effect = "pierce_add"
+value = 1
+max_stacks = 3
+
+[[upgrade]]
+id = "leech"
+name = "Life Leech"
+desc = "Heal 25 HP"
+effect = "heal"
+value = 25
+max_stacks = 3
+
+[[upgrade]]
+id = "regen"
+name = "Regeneration"
+desc = "+1 HP per second"
+effect = "regen_add"
+value = 1.0
+max_stacks = 4

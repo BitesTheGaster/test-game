@@ -21,7 +21,7 @@ find_package(Catch2 CONFIG REQUIRED)
 # --- Core: engine layer (no game knowledge) ----------------------------------
 add_library(game_core STATIC
   src/core/platform/window.cpp
-  src/core/render/renderer.cpp
+  src/core/render/batcher.cpp
 )
 target_include_directories(game_core PUBLIC src)
 target_link_libraries(game_core
@@ -38,6 +38,11 @@ target_link_libraries(game_core
 # --- Game: gameplay layer ----------------------------------------------------
 add_library(game_lib STATIC
   src/game/game.cpp
+  src/game/content.cpp
+)
+target_include_directories(game_lib PUBLIC src)
+target_compile_definitions(game_lib
+  PUBLIC GAME_ASSETS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets"
 )
 target_link_libraries(game_lib
   PUBLIC
@@ -51,7 +56,7 @@ target_link_libraries(game_lib
 
 # --- Executable --------------------------------------------------------------
 add_executable(test-game src/main.cpp)
-target_link_libraries(test-game PRIVATE game_lib game_warnings game_sanitizers game_lto)
+target_link_libraries(test-game PRIVATE game_lib SDL3::SDL3 game_warnings game_sanitizers game_lto)
 
 # --- Tests (headless) --------------------------------------------------------
 enable_testing()

@@ -4,9 +4,12 @@
   "description": "Vampire Survivors-like roguelike",
   "dependencies": [
     "sdl3",
-    "glad",
     "entt",
     "tomlplusplus",
-    "catch2"
+    "catch2",
+    {
+      "name": "glad",
+      "features": ["gl-api-33"]
+    }
   ]
 }

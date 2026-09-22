@@ -1,0 +1,21 @@
+# Base weapons. Modifiers come from upgrades.
+
+[[weapon]]
+id = "wand"
+name = "Arcane Wand"
+damage = 7.0
+cooldown = 0.55
+projectiles = 1
+proj_speed = 13.0
+proj_life = 1.4
+pierce = 0
+
+[[weapon]]
+id = "dagger"
+name = "Throwing Dagger"
+damage = 4.0
+cooldown = 0.30
+projectiles = 2
+proj_speed = 16.0
+proj_life = 1.0
+pierce = 1

@@ -1,7 +1,7 @@
 #include "core/platform/window.hpp"
 
 #include <SDL3/SDL.h>
-#include <glad/gl.h>
+#include <glad/glad.h>
 
 #include <stdexcept>
 
@@ -43,7 +43,7 @@ Window::Window(const WindowDesc& desc) : width_(desc.width), height_(desc.height
     SDL_GL_SetSwapInterval(1);
   }
 
-  const int version = gladLoadGL(reinterpret_cast<GLADloadfunc>(SDL_GL_GetProcAddress));
+  const int version = gladLoadGLLoader(reinterpret_cast<GLADloadproc>(SDL_GL_GetProcAddress));
   if (version == 0) {
     throw std::runtime_error("gladLoadGL failed");
   }

@@ -25,6 +25,7 @@ public:
   [[nodiscard]] bool pollExit() const;
   [[nodiscard]] int width() const { return width_; }
   [[nodiscard]] int height() const { return height_; }
+  [[nodiscard]] void* sdlWindow() const { return window_; }
 
 private:
   void* window_ = nullptr;   // SDL_Window*
