@@ -110,6 +110,7 @@ public:
   [[nodiscard]] float xpNext() const { return xpNext_; }
   [[nodiscard]] std::size_t enemyCount() const;
   [[nodiscard]] const PlayerStats& stats() const { return stats_; }
+  [[nodiscard]] PlayerStats& stats() { return stats_; }
   [[nodiscard]] const std::vector<Choice>& upgradeChoices() const { return choices_; }
   [[nodiscard]] int upgradeStacks(std::size_t upgradeIndex) const;
   [[nodiscard]] int rerollsUsed() const { return rerollsUsed_; }
@@ -117,6 +118,8 @@ public:
 
   // Test/debug hooks.
   void grantXp(float amount);
+  // Test helper: add weapon by index (bypasses normal level-up flow)
+  void testAddWeapon(int defIndex) { addWeapon(defIndex); }
 
 private:
   // Owned weapons (fixed slots, no allocation on the hot path).

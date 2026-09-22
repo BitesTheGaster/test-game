@@ -556,7 +556,7 @@ void Game::fireWeapons() {
             while (diff < -kPi) diff += 2.0F * kPi;
             if (std::abs(diff) <= halfAngle) {
               applyEnemyDamage(e, damage * stats_.damageMul);
-              const auto& er = view.get<Radius>(e);
+              const auto& er = view.get<Radius>(e); (void)er;
               spawnParticles(et.x, et.y, {1.0F, 0.5F, 0.1F, 1.0F}, 4, 3.0F);
             }
           }
@@ -1054,7 +1054,7 @@ void Game::updateOrbitBlades() {
       if (eh == nullptr || eh->hp <= 0.0F) continue;
 
       const float damage = ob.damage * scaledDamageMul;
-      const int pierce = ob.pierce + scaledPierceAdd;
+      const int pierce = ob.pierce + scaledPierceAdd; (void)pierce;
       const float hpBefore = eh->hp;
       applyEnemyDamage(en, damage);
       const float dealt = hpBefore - eh->hp;
@@ -1266,7 +1266,7 @@ void Game::updateBounceProjectiles() {
       if (dx * dx + dy * dy > hitR * hitR) return;
 
       const float scaledDamage = bp.damage * stats_.damageMul * std::powf(bp.damageMul, static_cast<float>(bp.bounceCount));
-      const int pierce = bp.pierce + stats_.pierceAdd;
+      const int pierce = bp.pierce + stats_.pierceAdd; (void)pierce;
       const float hpBefore = eh->hp;
       applyEnemyDamage(enemy, scaledDamage);
       const float dealt = hpBefore - eh->hp;
@@ -1675,12 +1675,12 @@ void Game::spawnWave() {
   if (simTime_ >= 150.0F && unit(rng_) < 0.02F) champion = true;
   if (champion) elite = true;
 
-  float hpMul = hpScale;
-  float touchMul = 1.0F;
-  float speedMul = 1.0F;
-  float xpMul = 1.0F;
-  std::uint32_t traits = TraitNone;
-  std::uint8_t tier = 0;
+  float hpMul = hpScale; (void)hpMul;
+  float touchMul = 1.0F; (void)touchMul;
+  float speedMul = 1.0F; (void)speedMul;
+  float xpMul = 1.0F; (void)xpMul;
+  std::uint32_t traits = TraitNone; (void)traits;
+  std::uint8_t tier = 0; (void)tier;
   if (elite) {
     tier = champion ? 2 : 1;
     hpMul *= champion ? kChampionHpMul : kEliteHpMul;
