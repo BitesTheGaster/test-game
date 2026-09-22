@@ -532,35 +532,8 @@ void Game::fireWeapons() {
         break;
       }
       case AttackType::Orbit: {
-        // Orbit blades are persistent - create them once per weapon slot
-        // Only create if we don't already have orbit blades for this weapon
-        bool hasOrbit = false;
-        auto orbitView = registry_.view<OrbitBlade>();
-        for (const auto _ : orbitView) {
-          // We'd need a weapon slot marker, for now just limit by count
-        }
-        // Create orbit blades
-        for (int b = 0; b < w.orbitCount; ++b) {
-          const float angle = w.orbitAngle + (static_cast<float>(b) * 2.0F * kPi / static_cast<float>(w.orbitCount));
-          const auto blade = registry_.create();
-          const float bx = pt.x + std::cos(angle) * w.orbitRadius;
-          const float by = pt.y + std::sin(angle) * w.orbitRadius;
-          registry_.emplace<Transform>(blade, bx, by, bx, by);
-          registry_.emplace<Velocity>(blade);
-          registry_.emplace<Radius>(blade, 0.18F);
-          Sprite s{};
-          s.color = w.color;
-          s.circle = false; // rect for blade look
-          registry_.emplace<Sprite>(blade, s);
-          OrbitBlade ob{};
-          ob.damage = damage;
-          ob.radius = w.orbitRadius;
-          ob.speed = w.orbitSpeed;
-          ob.angle = angle;
-          ob.pierce = pierce;
-          ob.color = w.color;
-          registry_.emplace<OrbitBlade>(blade, ob);
-        }
+        // Orbit blades are created once in addWeapon() and persist
+        // Just reset the cooldown timer here
         w.timer = cooldown;
         break;
       }
@@ -582,7 +555,7 @@ void Game::fireWeapons() {
             while (diff > kPi) diff -= 2.0F * kPi;
             while (diff < -kPi) diff += 2.0F * kPi;
             if (std::abs(diff) <= halfAngle) {
-              applyEnemyDamage(e, damage);
+              applyEnemyDamage(e, damage * stats_.damageMul);
               const auto& er = view.get<Radius>(e);
               spawnParticles(et.x, et.y, {1.0F, 0.5F, 0.1F, 1.0F}, 4, 3.0F);
             }
@@ -596,11 +569,20 @@ void Game::fireWeapons() {
         for (int p = 0; p < count; ++p) {
           const float offset = (static_cast<float>(p) - static_cast<float>(count - 1) * 0.5F) * w.spread;
           const float angle = baseAngle + offset;
-          const float tx = pt.x + std::cos(angle) * w.speed * w.life; // approximate landing
-          const float ty = pt.y + std::sin(angle) * w.speed * w.life;
+          // Calculate horizontal distance to target
+          const float range = w.speed * w.life; // approximate range
+          const float tx = pt.x + std::cos(angle) * range;
+          const float ty = pt.y + std::sin(angle) * range;
           const auto bomb = registry_.create();
           registry_.emplace<Transform>(bomb, pt.x, pt.y, pt.x, pt.y);
-          registry_.emplace<Velocity>(bomb, std::cos(angle) * w.speed, std::sin(angle) * w.speed);
+          // Calculate initial velocity for parabolic arc
+          // Horizontal velocity
+          const float vx = std::cos(angle) * w.speed;
+          // Vertical velocity to achieve bombArcHeight at midpoint
+          // Using: H = vy^2 / (2*g) => vy = sqrt(2*g*H)
+          const float gravity = 30.0F; // matches updateBombProjectiles
+          const float vy = std::sqrt(2.0F * gravity * w.bombArcHeight);
+          registry_.emplace<Velocity>(bomb, vx, vy);
           registry_.emplace<Radius>(bomb, 0.2F);
           Sprite s{};
           s.color = w.color;
@@ -726,7 +708,7 @@ void Game::fireWeapons() {
           while (diff > kPi) diff -= 2.0F * kPi;
           while (diff < -kPi) diff += 2.0F * kPi;
           if (std::abs(diff) <= halfAngle) {
-            applyEnemyDamage(e, damage);
+            applyEnemyDamage(e, damage * stats_.damageMul);
             // Knockback
             auto* ev = registry_.try_get<Velocity>(e);
             if (ev) {
@@ -1044,6 +1026,8 @@ void Game::updateProjectiles() {
 void Game::updateOrbitBlades() {
   if (player_ == entt::null || !registry_.valid(player_)) return;
   const auto& pt = registry_.get<Transform>(player_);
+  const float scaledDamageMul = stats_.damageMul;
+  const int scaledPierceAdd = stats_.pierceAdd;
   auto view = registry_.view<Transform, OrbitBlade>();
   for (const auto e : view) {
     auto& t = view.get<Transform>(e);
@@ -1069,8 +1053,10 @@ void Game::updateOrbitBlades() {
       auto* eh = registry_.try_get<Health>(en);
       if (eh == nullptr || eh->hp <= 0.0F) continue;
 
+      const float damage = ob.damage * scaledDamageMul;
+      const int pierce = ob.pierce + scaledPierceAdd;
       const float hpBefore = eh->hp;
-      applyEnemyDamage(en, ob.damage);
+      applyEnemyDamage(en, damage);
       const float dealt = hpBefore - eh->hp;
       if (dealt > 0.0F && stats_.lifesteal > 0.0F && player_ != entt::null) {
         auto& hp = registry_.get<Health>(player_);
@@ -1092,11 +1078,7 @@ void Game::updateBombProjectiles() {
     t.px = t.x;
     t.py = t.y;
 
-    // Parabolic arc motion
     const float dt = 1.0F / 60.0F;
-    const float progress = 1.0F - bp.life / bp.initialLife;
-    (void)progress;  // used for future arc calculation
-    // Better: track initial life
     bp.life -= dt;
     if (bp.life <= 0.0F) {
       // Explode on timeout
@@ -1105,8 +1087,10 @@ void Game::updateBombProjectiles() {
       continue;
     }
 
-    // Simple parabolic: add gravity component
-    v.y -= 9.81F * dt * 0.3F; // scaled gravity
+    // Proper parabolic arc: apply gravity
+    // Gravity scaled to game units (world units per second^2)
+    const float gravity = -30.0F; // tuned for game scale
+    v.y += gravity * dt;
     t.x += v.x * dt;
     t.y += v.y * dt;
 
@@ -1194,8 +1178,8 @@ void Game::updateBoomerangProjectiles() {
       const float dy = pt.y - t.y;
       const float dist = std::sqrt(dx * dx + dy * dy);
       if (dist > 0.001F) {
-        v.x = (dx / dist) * bp.maxRange * bp.returnSpeed;
-        v.y = (dy / dist) * bp.maxRange * bp.returnSpeed;
+        v.x = (dx / dist) * bp.returnSpeed;
+        v.y = (dy / dist) * bp.returnSpeed;
       }
       // Check if reached player
       if (dist < 0.5F) {
@@ -1281,9 +1265,10 @@ void Game::updateBounceProjectiles() {
       const float hitR = r.r + er.r;
       if (dx * dx + dy * dy > hitR * hitR) return;
 
-      const float currentDamage = bp.damage * std::powf(bp.damageMul, static_cast<float>(bp.bounceCount));
+      const float scaledDamage = bp.damage * stats_.damageMul * std::powf(bp.damageMul, static_cast<float>(bp.bounceCount));
+      const int pierce = bp.pierce + stats_.pierceAdd;
       const float hpBefore = eh->hp;
-      applyEnemyDamage(enemy, currentDamage);
+      applyEnemyDamage(enemy, scaledDamage);
       const float dealt = hpBefore - eh->hp;
       if (dealt > 0.0F && stats_.lifesteal > 0.0F && player_ != entt::null) {
         auto& hp = registry_.get<Health>(player_);
@@ -1371,7 +1356,7 @@ void Game::updateBeamEffects() {
       if (eh == nullptr || eh->hp <= 0.0F) continue;
 
       const float hpBefore = eh->hp;
-      applyEnemyDamage(en, be.damage / 60.0F); // per-tick damage
+      applyEnemyDamage(en, be.damage * stats_.damageMul / 60.0F); // per-tick damage with scaling
       const float dealt = hpBefore - eh->hp;
       if (dealt > 0.0F && stats_.lifesteal > 0.0F && player_ != entt::null) {
         auto& hp = registry_.get<Health>(player_);
@@ -1426,7 +1411,7 @@ void Game::updateZoneEffects() {
           auto* eh = registry_.try_get<Health>(en);
           if (eh == nullptr || eh->hp <= 0.0F) continue;
 
-          const float dmg = ze.dps * ze.tickRate;
+          const float dmg = ze.dps * ze.tickRate * stats_.damageMul;
           const float hpBefore = eh->hp;
           applyEnemyDamage(en, dmg);
           const float dealt = hpBefore - eh->hp;
@@ -1480,7 +1465,7 @@ void Game::updateChainLightning() {
     }
 
     // Damage the target
-    const float damage = cl.damage * std::powf(cl.damageMul, static_cast<float>(cl.jumpsDone));
+    const float damage = cl.damage * stats_.damageMul * std::powf(cl.damageMul, static_cast<float>(cl.jumpsDone));
     auto* eh = registry_.try_get<Health>(nextTarget);
     if (eh && eh->hp > 0.0F) {
       const float hpBefore = eh->hp;
@@ -1545,7 +1530,7 @@ void Game::updateNovaRing() {
           if (eh == nullptr || eh->hp <= 0.0F) continue;
 
           const float hpBefore = eh->hp;
-          applyEnemyDamage(en, nr.damagePerTick);
+          applyEnemyDamage(en, nr.damagePerTick * stats_.damageMul);
           const float dealt = hpBefore - eh->hp;
           if (dealt > 0.0F && stats_.lifesteal > 0.0F && player_ != entt::null) {
             auto& hp = registry_.get<Health>(player_);
@@ -1986,6 +1971,7 @@ void Game::addWeapon(int defIndex) {
   const auto& def = content_.weapons[static_cast<std::size_t>(defIndex)];
   auto& w = weapons_[weaponCount_++];
   w.def = defIndex;
+  w.attackType = def.attackType;
   w.cooldown = def.cooldown;
   w.timer = 0.0F;
   w.damage = def.damage;
@@ -1995,6 +1981,95 @@ void Game::addWeapon(int defIndex) {
   w.pierce = def.pierce;
   w.spread = def.spread;
   w.color = def.projColor;
+
+  // Cone
+  w.coneAngle = def.coneAngle;
+  w.coneRange = def.coneRange;
+  w.coneTickRate = def.coneTickRate;
+  w.coneTimer = 0.0F;
+
+  // Orbit
+  w.orbitRadius = def.orbitRadius;
+  w.orbitSpeed = def.orbitSpeed;
+  w.orbitCount = def.orbitCount;
+  w.orbitAngle = 0.0F;
+
+  // Bomb
+  w.bombArcHeight = def.bombArcHeight;
+  w.bombExplodeRadius = def.bombExplodeRadius;
+  w.bombKnockback = def.bombKnockback;
+  w.bombFuse = def.bombFuse;
+
+  // Boomerang
+  w.boomerangRange = def.boomerangRange;
+  w.boomerangReturnSpeed = def.boomerangReturnSpeed;
+
+  // Bounce
+  w.bounceCount = def.bounceCount;
+  w.bounceRange = def.bounceRange;
+  w.bounceDamageMul = def.bounceDamageMul;
+
+  // Beam
+  w.beamRange = def.beamRange;
+  w.beamWidth = def.beamWidth;
+  w.beamDuration = def.beamDuration;
+
+  // Sweep
+  w.sweepAngle = def.sweepAngle;
+  w.sweepRadius = def.sweepRadius;
+  w.sweepKnockback = def.sweepKnockback;
+
+  // Zone
+  w.zoneRadius = def.zoneRadius;
+  w.zoneDuration = def.zoneDuration;
+  w.zoneDps = def.zoneDps;
+  w.zoneMaxPools = def.zoneMaxPools;
+
+  // Chain
+  w.chainJumpRange = def.chainJumpRange;
+  w.chainMaxJumps = def.chainMaxJumps;
+  w.chainDamageMul = def.chainDamageMul;
+
+  // Nova
+  w.novaMaxRadius = def.novaMaxRadius;
+  w.novaExpandSpeed = def.novaExpandSpeed;
+  w.novaDamagePerTick = def.novaDamagePerTick;
+  w.novaTickRate = def.novaTickRate;
+  w.novaRadius = 0.0F;
+  w.novaTimer = 0.0F;
+  w.novaActive = false;
+
+  // General projectile fields
+  w.area = 0.0F;
+  w.strength = 0.0F;
+  w.homing = false;
+  w.bounces = 0;
+
+  // Create orbit blades if this is an orbit weapon
+  if (w.attackType == AttackType::Orbit && player_ != entt::null && registry_.valid(player_)) {
+    const auto& pt = registry_.get<Transform>(player_);
+    for (int b = 0; b < w.orbitCount; ++b) {
+      const float angle = (static_cast<float>(b) * 2.0F * kPi / static_cast<float>(w.orbitCount));
+      const auto blade = registry_.create();
+      const float bx = pt.x + std::cos(angle) * w.orbitRadius;
+      const float by = pt.y + std::sin(angle) * w.orbitRadius;
+      registry_.emplace<Transform>(blade, bx, by, bx, by);
+      registry_.emplace<Velocity>(blade);
+      registry_.emplace<Radius>(blade, 0.18F);
+      Sprite s{};
+      s.color = w.color;
+      s.circle = false;
+      registry_.emplace<Sprite>(blade, s);
+      OrbitBlade ob{};
+      ob.damage = w.damage;
+      ob.radius = w.orbitRadius;
+      ob.speed = w.orbitSpeed;
+      ob.angle = angle;
+      ob.pierce = w.pierce;
+      ob.color = w.color;
+      registry_.emplace<OrbitBlade>(blade, ob);
+    }
+  }
 }
 
 void Game::applyWeaponEffect(int slotIndex, std::string_view effect, float value) {
