@@ -2,6 +2,20 @@
 
 Vampire Survivors-like roguelike. C++20, SDL3 + OpenGL 3.3, CMake + vcpkg.
 
+Multi-weapon build-your-arsenal roguelike: 14 weapons (incl. 2 evolutions),
+18 enemy types with elite/champion traits, 72 upgrades (normal / unique /
+milestone), regenerating shield + defense + lifesteal, and a difficulty ramp
+that kicks in from ~60s.
+
+## Documentation
+
+- [docs/mechanics.md](docs/mechanics.md) — formulas (defense, shield, XP),
+  level-ups, rerolls, evolutions, elites/traits, spawn & ramp curves
+- [docs/content.md](docs/content.md) — all weapons, enemies, upgrades
+  (generated from `assets/data/*.toml` by `tools/gendocs.py`)
+- [docs/architecture.md](docs/architecture.md) — ECS, timestep, systems
+  order, rendering, content pipeline
+
 ## Requirements
 
 - CMake ≥ 3.26, Ninja
@@ -39,7 +53,9 @@ Run: `./build/debug/test-game`.
 | Key            | Action                          |
 |----------------|---------------------------------|
 | WASD / arrows  | Move (attacks fire automatically) |
-| 1 / 2 / 3      | Pick an upgrade on level-up     |
+| 1 / 2 / 3      | Pick an upgrade / weapon on level-up |
+| 4              | Pick card 4 — or the free reroll when only 3 cards are shown |
+| 5              | Pick card 5 (Gambler's Eye extends the choice) |
 | Esc            | Pause / resume                  |
 | R              | Restart after death             |
 
@@ -74,12 +90,25 @@ without recompiling.
 
 Balance lives in `assets/data/*.toml`, loaded at startup — no rebuild needed:
 
-- `weapons.toml` — damage, cooldown, projectile count/speed, pierce
-- `enemies.toml` — hp, speed, contact damage, radius, xp, spawn time (`unlock_at`), weight, color, shape
-- `upgrades.toml` — level-up choices: `effect` id + `value` + `max_stacks`
+- `weapons.toml` — damage, cooldown, projectile count/speed/pierce/spread,
+  `starter` flags and `requires` evolution pairs
+- `enemies.toml` — hp, speed, contact damage, radius, xp, spawn time
+  (`unlock_at`), weight, color, shape
+- `upgrades.toml` — level-up cards: `kind` (`normal` / `unique` / `milestone`),
+  `effect` id + `value`, `max_stacks`, optional `weapon` tag and milestone `level`
 
 Effects understood by the game: `damage_mul`, `cooldown_mul`, `speed_mul`,
-`pickup_mul`, `max_hp_add`, `regen_add`, `proj_add`, `pierce_add`, `heal`.
+`pickup_mul`, `max_hp_add`, `regen_add`, `proj_add`, `pierce_add`, `heal`,
+`defense_add`, `lifesteal_add`, `shield_add`, plus the unique-item effects
+(`fan`, `thorns`, `extra_choice`, `reroll_add`, `adrenaline`, `black_hole`,
+`chain`, `blood_price`, `ice_blood`) and per-weapon effects (`w_damage_add`,
+`w_proj_add`, `w_pierce_add`, `w_cd_mul`).
+
+Regenerate the content reference docs after touching the TOML:
+
+```sh
+python3 tools/gendocs.py
+```
 
 ## Layout
 
@@ -88,6 +117,8 @@ src/core/   engine layer: batcher (GL instancing), spatial hash, timestep, windo
 src/game/   gameplay layer: components, systems, TOML content loader
 tests/      headless unit tests (Catch2)
 assets/     data/ (TOML balance), sprites/ (textures, optional)
+tools/      gendocs.py (regenerates docs/content.md from the TOML)
+docs/       mechanics.md, content.md, architecture.md
 cmake/      warning/sanitizer/LTO modules
 ```
 
