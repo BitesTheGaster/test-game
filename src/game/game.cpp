@@ -500,7 +500,9 @@ void Game::fireWeapons() {
     }
   }
 
-  const float baseAngle = found ? std::atan2(targetY - pt.y, targetX - pt.x) : 0.0F;
+  if (!found) return; // No enemies - don't fire
+
+  const float baseAngle = std::atan2(targetY - pt.y, targetX - pt.x);
 
   for (int i = 0; i < weaponCount_; ++i) {
     auto& w = weapons_[i];

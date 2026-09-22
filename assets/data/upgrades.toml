@@ -232,7 +232,7 @@ max_stacks = 1
 [[upgrade]]
 id = "pledge"
 name = "Stony Pledge"
-desc = "+10 defense (blocks 2 flat + ~3% scaling)"
+desc = "+10 defense"
 effect = "defense_add"
 value = 10
 max_stacks = 4
