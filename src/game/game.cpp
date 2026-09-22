@@ -52,7 +52,7 @@ UpgradeEffectResult applyUpgrade(PlayerStats& stats, std::string_view effect, fl
     return {true, 0.0F, 0.0F};
   }
   if (effect == "cooldown_mul") {
-    stats.cooldownMul = std::max(0.25F, stats.cooldownMul + value);
+    stats.cooldownMul += value;
     return {true, 0.0F, 0.0F};
   }
   if (effect == "speed_mul") {
@@ -105,7 +105,7 @@ UpgradeEffectResult applyUpgrade(PlayerStats& stats, std::string_view effect, fl
   if (effect == "fan") {
     // Top-tier spread: double the volley angle and (roughly) double fire rate.
     stats.spreadMul += value * 2.0F;
-    stats.cooldownMul = std::max(0.25F, stats.cooldownMul * (1.0F / (1.0F + value)));
+    stats.cooldownMul *= (1.0F / (1.0F + value));
     return {true, 0.0F, 0.0F};
   }
   if (effect == "thorns") {
@@ -246,6 +246,9 @@ void Game::advance(float frameDt, const FrameInput& input) {
       }
     } else if (input.choose5 && n >= 5) {
       chooseUpgrade(4);
+    }
+    if (input.restart && state_ == RunState::LevelUp) {
+      reroll(); // R key rerolls the current choices
     }
   }
 
@@ -513,7 +516,7 @@ void Game::fireWeapons() {
       s.color = w.color;
       s.circle = true;
       registry_.emplace<Sprite>(proj, s);
-      registry_.emplace<Projectile>(proj, damage, pierce, w.life);
+      registry_.emplace<Projectile>(proj, damage, pierce, w.life, w.area, w.strength, w.homing, w.bounces, 0);
     }
   }
 }
@@ -625,6 +628,32 @@ void Game::updateProjectiles() {
 
     t.px = t.x;
     t.py = t.y;
+
+    // Homing: steer toward the nearest enemy each tick.
+    if (pr.homing) {
+      float bestDist2 = 1e12F;
+      float tx = t.x, ty = t.y;
+      auto enemies = registry_.view<Transform, Enemy>();
+      for (const auto oe : enemies) {
+        const auto& ot = enemies.get<Transform>(oe);
+        const float dx = ot.x - t.x;
+        const float dy = ot.y - t.y;
+        const float d2 = dx * dx + dy * dy;
+        if (d2 < bestDist2) { bestDist2 = d2; tx = ot.x; ty = ot.y; }
+      }
+      if (bestDist2 < 1e11F) {
+        const float a = std::atan2(ty - t.y, tx - t.x);
+        const float cur = std::atan2(v.y, v.x);
+        float diff = a - cur;
+        while (diff >  kPi)  diff -= 2.0F * kPi;
+        while (diff < -kPi)  diff += 2.0F * kPi;
+        const float steer = std::clamp(diff, -0.12F, 0.12F);
+        const float ca = cur + steer;
+        v.x = std::cos(ca) * std::sqrt(v.x * v.x + v.y * v.y);
+        v.y = std::sin(ca) * std::sqrt(v.x * v.x + v.y * v.y);
+      }
+    }
+
     t.x += v.x / 60.0F;
     t.y += v.y / 60.0F;
     pr.life -= 1.0F / 60.0F;
@@ -639,7 +668,7 @@ void Game::updateProjectiles() {
       const auto enemy = static_cast<entt::entity>(id);
       if (!registry_.valid(enemy) || !registry_.all_of<Enemy>(enemy)) return;
       auto* eh = registry_.try_get<Health>(enemy);
-      if (eh == nullptr || eh->hp <= 0.0F) return; // already dead this tick
+      if (eh == nullptr || eh->hp <= 0.0F) return;
       const auto& et = registry_.get<Transform>(enemy);
       const auto& er = registry_.get<Radius>(enemy);
       const float dx = et.x - t.x;
@@ -656,6 +685,32 @@ void Game::updateProjectiles() {
         hp.hp = std::min(hp.max, hp.hp + dealt * stats_.lifesteal);
       }
 
+      // Knockback on hit.
+      if (pr.strength > 0.0F && player_ != entt::null) {
+        const auto& ptx = registry_.get<Transform>(player_);
+        const float pushAngle = std::atan2(et.y - ptx.y, et.x - ptx.x);
+        auto* ev = registry_.try_get<Velocity>(enemy);
+        if (ev) {
+          ev->x += std::cos(pushAngle) * pr.strength / 60.0F;
+          ev->y += std::sin(pushAngle) * pr.strength / 60.0F;
+        }
+      }
+
+      // Area splash.
+      if (pr.area > 0.0F) {
+        auto splashView = registry_.view<Transform, Health, Radius>();
+        for (const auto se : splashView) {
+          const auto& st = splashView.get<Transform>(se);
+          const auto& sr = splashView.get<Radius>(se);
+          const float sdx = st.x - et.x;
+          const float sdy = st.y - et.y;
+          if (sdx * sdx + sdy * sdy < pr.area * pr.area) {
+            applyEnemyDamage(se, pr.damage * 0.5F);
+          }
+        }
+        spawnParticles(et.x, et.y, {1.0F, 0.5F, 0.1F, 1.0F}, 16, 5.0F);
+      }
+
       // Chain lightning on every third hit.
       if (stats_.chain != 0 && dealt > 0.0F) {
         ++chainCounter_;
@@ -666,6 +721,20 @@ void Game::updateProjectiles() {
 
       spawnParticles(et.x, et.y, {1.0F, 0.8F, 0.3F, 1.0F}, 3, 3.0F);
       --pr.pierce;
+
+      // Bounce logic.
+      if (pr.bounces > 0 && pr.bounceCount < pr.bounces) {
+        ++pr.bounceCount;
+        // Reflect velocity off the nearest enemy surface normal.
+        const float nx = dx / hitR;
+        const float ny = dy / hitR;
+        const float dot = v.x * nx + v.y * ny;
+        v.x = (v.x - 2.0F * dot * nx) * 0.7F;
+        v.y = (v.y - 2.0F * dot * ny) * 0.7F;
+        spent = true;
+        return; // keep the projectile alive, don't destroy
+      }
+
       if (pr.pierce < 0) {
         spent = true;
         destroyQueue_.push_back(e);
@@ -840,23 +909,76 @@ void Game::spawnWave() {
     }
   }
 
-  // Spawn point: well off-screen, with a telegraph before the enemy arrives.
-  const float angle = unit(rng_) * 2.0F * kPi;
-  const float x = pt.x + std::cos(angle) * kSpawnDist;
-  const float y = pt.y + std::sin(angle) * kSpawnDist;
+  // Pack spawning: after ~90s, groups of 2-3 enemies arrive together.
+  const int packSize = (simTime_ >= 90.0F && unit(rng_) < 0.40F)
+                       ? static_cast<int>(2.0F + unit(rng_) * 1.5F)
+                       : 1;
 
-  PendingSpawn pending{};
-  pending.x = x;
-  pending.y = y;
-  pending.t = kSpawnTelegraph;
-  pending.def = defIndex;
-  pending.hpMul = std::max(1.0F, hpMul);
-  pending.touchMul = touchMul;
-  pending.speedMul = speedMul;
-  pending.xpMul = xpMul;
-  pending.traits = traits;
-  pending.tier = tier;
-  pending_.push_back(pending);
+  // Cluster center: a random angle at spawn distance. Subsequent pack
+  // members spawn close to this center so enemies approach together.
+  const float centerAngle = unit(rng_) * 2.0F * kPi;
+
+  for (int member = 0; member < packSize; ++member) {
+    const float angle = centerAngle
+        + (packSize > 1 ? (static_cast<float>(member) - static_cast<float>(packSize - 1) * 0.5F) * 0.35F : 0.0F)
+        + (member > 0 ? (unit(rng_) - 0.5F) * 0.5F : 0.0F);
+    const float x = pt.x + std::cos(angle) * kSpawnDist;
+    const float y = pt.y + std::sin(angle) * kSpawnDist;
+
+    // Per-member elite/champion rolls (each enemy rolls independently).
+    bool memberElite = false;
+    bool memberChampion = false;
+    if (simTime_ >= 60.0F && unit(rng_) < 0.05F) memberElite = true;
+    if (simTime_ >= 150.0F && unit(rng_) < 0.02F) memberChampion = true;
+    if (memberChampion) memberElite = true;
+
+    float mHpMul = hpScale;
+    float mTouchMul = 1.0F;
+    float mSpeedMul = 1.0F;
+    float mXpMul = 1.0F;
+    std::uint32_t mTraits = TraitNone;
+    std::uint8_t mTier = 0;
+    if (memberElite) {
+      mTier = memberChampion ? 2 : 1;
+      mHpMul *= memberChampion ? kChampionHpMul : kEliteHpMul;
+      mTouchMul = memberChampion ? 2.0F : 1.5F;
+      mXpMul = memberChampion ? 5.0F : 3.0F;
+      const int traitCount =
+          std::min(4, 1 + static_cast<int>(simTime_ / 90.0F)) + (memberChampion ? 1 : 0);
+      std::array<bool, PickCount> used{};
+      for (int k = 0; k < traitCount; ++k) {
+        int pick = static_cast<int>(unit(rng_) * static_cast<float>(PickCount));
+        int guard = static_cast<int>(PickCount);
+        while (guard-- > 0 && used[static_cast<std::size_t>(pick)]) {
+          pick = (pick + 1) % static_cast<int>(PickCount);
+        }
+        used[static_cast<std::size_t>(pick)] = true;
+        switch (pick) {
+          case PickFast: mSpeedMul *= 1.7F; break;
+          case PickArmored: mHpMul *= 2.5F; mTouchMul *= 1.3F; break;
+          case PickRegenerating: mTraits |= TraitRegenerating; break;
+          case PickExplosive: mTraits |= TraitExplosive; break;
+          case PickVenomous: mTraits |= TraitVenomous; break;
+          case PickVampiric: mTraits |= TraitVampiric; break;
+          case PickShielded: mTraits |= TraitShielded; break;
+          default: break;
+        }
+      }
+    }
+
+    PendingSpawn pending{};
+    pending.x = x;
+    pending.y = y;
+    pending.t = kSpawnTelegraph;
+    pending.def = defIndex;
+    pending.hpMul = std::max(1.0F, mHpMul);
+    pending.touchMul = mTouchMul;
+    pending.speedMul = mSpeedMul;
+    pending.xpMul = mXpMul;
+    pending.traits = mTraits;
+    pending.tier = mTier;
+    pending_.push_back(pending);
+  }
 }
 
 void Game::processPendingSpawns() {
@@ -928,7 +1050,7 @@ void Game::buildChoices() {
       }
       return;
     }
-    // No milestone content for this exact level: behave like a normal level-up.
+    // No defined milestone for this exact level: behave like a normal level-up.
   }
   milestoneOffer_ = false;
 
@@ -1070,7 +1192,7 @@ void Game::applyWeaponEffect(int slotIndex, std::string_view effect, float value
   } else if (effect == "w_pierce_add") {
     w.pierce += static_cast<int>(value);
   } else if (effect == "w_cd_mul") {
-    w.cooldown = std::max(0.08F, w.cooldown * (1.0F + value));
+    w.cooldown *= (1.0F + value);
   }
 }
 
@@ -1170,6 +1292,37 @@ void Game::grantXp(float amount) {
   if (state_ == RunState::Playing && xp_ >= xpNext_) {
     enterLevelUp();
   }
+}
+
+
+// Greedy word-wrap: renders str in lines that fit maxWidth pixels.
+static void renderWrappedText(core::render::Batcher& b, float x, float y,
+                              float scale, core::render::Color c,
+                              std::string_view str, float maxWidth,
+                              float lineHeight) {
+  std::string current;
+  auto flush = [&]() {
+    if (!current.empty()) {
+      b.text(x, y, scale, c, current);
+      y += lineHeight;
+      current.clear();
+    }
+  };
+  // Manual word split to avoid <sstream>/<random> overload ambiguity.
+  std::string_view rest(str);
+  while (!rest.empty()) {
+    const std::size_t space = rest.find(' ');
+    const std::string_view word = rest.substr(0, space);
+    if (space != std::string_view::npos) rest.remove_prefix(space + 1);
+    else rest = std::string_view();
+    const std::string trial = current.empty()
+        ? std::string(word) : current + " " + std::string(word);
+    if (b.textWidth(scale, trial) > maxWidth && !current.empty()) {
+      flush();
+    }
+    current = trial;
+  }
+  flush();
 }
 
 void Game::spawnParticles(float x, float y, core::render::Color c, int count, float speed) {
@@ -1285,8 +1438,18 @@ void Game::render(core::render::Batcher& b, float alpha) {
                Color{0.9F, 0.25F, 0.25F, 1.0F});
       }
 
-      // Elite/champion name tags are rendered in the screen pass.
+      // Elite/champion glow aura instead of a text label —
+      // a pulsing ring makes them identifiable at a glance.
       if (tr != nullptr && tr->tier > 0) {
+        const float pulse = 1.0F + 0.20F * std::sin(simTime_ * 6.0F);
+        const float glowR = r.r * 1.6F * pulse;
+        Color glow = tr->tier >= 2 ? Color{1.0F, 0.40F, 0.10F, 0.35F}
+                                    : Color{1.0F, 0.85F, 0.20F, 0.30F};
+        b.circle(x, y, glowR, glow);
+        // Brighter inner ring.
+        b.circle(x, y, r.r * 1.15F * pulse,
+                 tr->tier >= 2 ? Color{1.0F, 0.55F, 0.20F, 0.55F}
+                               : Color{1.0F, 0.95F, 0.40F, 0.50F});
         labels_.push_back({x, y,
                            tr->tier >= 2 ? Color{1.0F, 0.55F, 0.35F, 1.0F}
                                          : Color{1.0F, 0.9F, 0.5F, 1.0F},
@@ -1442,7 +1605,9 @@ void Game::render(core::render::Batcher& b, float alpha) {
         if (choice.kind == Choice::Kind::Upgrade) {
           const auto& def = content_.upgrades[static_cast<std::size_t>(choice.index)];
           b.text(x + 16.0F, y + 52.0F, 2.3F, white, def.name);
-          b.text(x + 16.0F, y + 80.0F, 1.7F, Color{0.85F, 0.85F, 0.9F, 1.0F}, def.desc);
+          renderWrappedText(b, x + 16.0F, y + 80.0F, 1.7F,
+                            Color{0.85F, 0.85F, 0.9F, 1.0F}, def.desc,
+                            cardW - 32.0F, 10.0F);
           const std::string stacks =
               "STACKS " + std::to_string(upgradeStacks(static_cast<std::size_t>(choice.index))) +
               "/" + std::to_string(def.maxStacks);
@@ -1450,7 +1615,9 @@ void Game::render(core::render::Batcher& b, float alpha) {
         } else {
           const auto& def = content_.weapons[static_cast<std::size_t>(choice.index)];
           b.text(x + 16.0F, y + 52.0F, 2.3F, white, def.name);
-          b.text(x + 16.0F, y + 80.0F, 1.7F, Color{0.85F, 0.85F, 0.9F, 1.0F}, def.desc);
+          renderWrappedText(b, x + 16.0F, y + 80.0F, 1.7F,
+                            Color{0.85F, 0.85F, 0.9F, 1.0F}, def.desc,
+                            cardW - 32.0F, 10.0F);
           const std::string tag = def.prereqs.empty() ? "NEW WEAPON"
                                                        : "EVOLUTION! (A+B)";
           b.text(x + 16.0F, y + cardH - 30.0F, 1.5F, teal, tag);

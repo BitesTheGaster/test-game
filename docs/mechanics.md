@@ -74,6 +74,14 @@ large hits.
   spread never wraps around backward.
 - A weapon is never offered twice; owned weapons are removed from the grant
   pool.
+- Each weapon has a distinct **role**: some are rapid spray (flame, ember),
+  some are piercing snipers (crossbow, scythe), some are area-splash (hammer,
+  nova), some bounce (orb), and some home toward the target (crossbow, shuriken,
+  nova). Check `content.md` for the per-weapon traits column.
+- Weapon fields `area` (splash radius), `strength` (knockback), `homing` and
+  `bounces` are honored: area deals half-damage in a radius on hit, strength
+  pushes the struck enemy, homing steers the projectile toward the nearest
+  foe each tick, and bounces reflect the projectile off the hit surface.
 
 ### Evolutions (A + B = C)
 
@@ -163,6 +171,8 @@ relative `weight`, and `color`/`shape`.
   pointing at the spawn for off-screen spawns.
 - Enemy type is picked by **weighted roll among unlocked types** (`simTime >=
   unlockAt`), so the roster rotates in over time.
+- After ~90 s, enemies arrive in **packs of 2–3** at clustered angles,
+  so the player faces groups instead of one-at-a-time trickles.
 
 ### Difficulty ramp
 

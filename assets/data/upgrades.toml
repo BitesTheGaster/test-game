@@ -248,17 +248,17 @@ max_stacks = 2
 [[upgrade]]
 id = "ward_small"
 name = "Minor Ward"
-desc = "+20 regenerating shield"
+desc = "+15 regenerating shield"
 effect = "shield_add"
-value = 20
+value = 15
 max_stacks = 3
 
 [[upgrade]]
 id = "ward_great"
 name = "Runic Ward"
-desc = "+45 regenerating shield"
+desc = "+30 regenerating shield"
 effect = "shield_add"
-value = 45
+value = 30
 max_stacks = 2
 
 [[upgrade]]
@@ -266,7 +266,7 @@ id = "leech_gold"
 name = "Gilded Fangs"
 desc = "+2% lifesteal"
 effect = "lifesteal_add"
-value = 0.02
+value = 0.01
 max_stacks = 3
 
 [[upgrade]]
@@ -274,7 +274,7 @@ id = "leech_soul"
 name = "Soulfeed"
 desc = "+4% lifesteal"
 effect = "lifesteal_add"
-value = 0.04
+value = 0.02
 max_stacks = 2
 
 # --- Weapon-focused cards (only appear for owned weapons) ---------------------
@@ -475,9 +475,9 @@ kind = "unique"
 [[upgrade]]
 id = "m5_aegis"
 name = "Aegis"
-desc = "MILESTONE: +60 regenerating shield"
+desc = "MILESTONE: +45 regenerating shield"
 effect = "shield_add"
-value = 60
+value = 45
 max_stacks = 1
 kind = "milestone"
 level = 5
@@ -651,3 +651,64 @@ value = 2.0
 max_stacks = 1
 kind = "milestone"
 level = 30
+# --- Extended milestones (35+) ---------------------------------------------
+
+[[upgrade]]
+id = "m35_fury"
+name = "Blood Fury"
+desc = "MILESTONE: +180% damage"
+effect = "damage_mul"
+value = 1.8
+max_stacks = 1
+kind = "milestone"
+level = 35
+
+[[upgrade]]
+id = "m35_ward"
+name = "Eternal Ward"
+desc = "MILESTONE: +350 regenerating shield"
+effect = "shield_add"
+value = 350
+max_stacks = 1
+kind = "milestone"
+level = 35
+
+[[upgrade]]
+id = "m40_annihilate"
+name = "Annihilate"
+desc = "MILESTONE: +250% damage"
+effect = "damage_mul"
+value = 2.5
+max_stacks = 1
+kind = "milestone"
+level = 40
+
+[[upgrade]]
+id = "m40_fortify"
+name = "Fortify"
+desc = "MILESTONE: +450 defense"
+effect = "defense_add"
+value = 450
+max_stacks = 1
+kind = "milestone"
+level = 40
+
+[[upgrade]]
+id = "m45_transcend"
+name = "Transcend"
+desc = "MILESTONE: +350% damage"
+effect = "damage_mul"
+value = 3.5
+max_stacks = 1
+kind = "milestone"
+level = 45
+
+[[upgrade]]
+id = "m45_impervious"
+name = "Impervious"
+desc = "MILESTONE: +600 regenerating shield"
+effect = "shield_add"
+value = 600
+max_stacks = 1
+kind = "milestone"
+level = 45

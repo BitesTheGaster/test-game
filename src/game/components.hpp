@@ -65,6 +65,11 @@ struct Projectile {
   float damage = 1.0F;
   int pierce = 0;
   float life = 1.5F;
+  float area = 0.0F;      // explosion radius on impact
+  float strength = 0.0F;  // knockback force on hit
+  bool homing = false;    // homes toward nearest enemy each tick
+  int bounces = 0;        // wall bounces remaining after impact
+  int bounceCount = 0;    // how many bounces have happened
 };
 
 struct Xp {

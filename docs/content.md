@@ -15,27 +15,27 @@ python3 tools/gendocs.py
 
 ### Base weapons
 
-| Name | ID | Damage | Cooldown (s) | Projectiles | Proj. speed | Pierce | Spread (rad) | Starter | Description |
-|---|---|---|---|---|---|---|---|---|---|
-| Arcane Wand | wand | 7 | 0.55 | 1 | 13 | 0 | 0.16 | yes | Reliable magic bolts. |
-| Throwing Dagger | dagger | 4 | 0.3 | 2 | 16 | 1 | 0.22 | yes | Fast twin blades that pierce a little. |
-| Heavy Crossbow | crossbow | 18 | 1.1 | 1 | 20 | 3 | 0.16 | yes | Slow, hits like a truck, punches lines. |
-| Ember Sprayer | flame | 3 | 0.18 | 3 | 9 | 1 | 0.3 |  | A flurry of short-lived embers. |
-| Runic Hammer | hammer | 32 | 1.6 | 1 | 7 | 4 | 0.16 |  | Slow sledgehammer bolts that shred crowds. |
-| Storm Shuriken | shuriken | 6 | 0.4 | 2 | 18 | 0 | 0.25 |  | Swift twin dashes of wind. |
-| Spark Spitter | ember | 2.5 | 0.22 | 4 | 10 | 1 | 0.38 |  | A violent drizzle of fire sparks. |
-| Void Orb | orb | 38 | 1.4 | 1 | 6 | 5 | 0.16 |  | One slowly rolling globe that chews through lines. |
-| Scattergun | fan | 5 | 0.7 | 5 | 12 | 0 | 0.55 |  | Five shots in a wide arc every level-up. |
-| Soul Scythe | scythe | 45 | 1.1 | 1 | 12 | 6 | 0.16 |  | One huge sweeping arc. Maximum pierce. |
-| Crystal Needles | needle | 3.5 | 0.28 | 3 | 22 | 0 | 0.2 |  | Hair-thin projectiles at absurd speed. |
-| Solar Lance | beam | 70 | 2.2 | 1 | 26 | 0 | 0.1 |  | A devastating slow beam that never pierces. |
+| Name | ID | Damage | Cooldown (s) | Projectiles | Proj. speed | Pierce | Spread (rad) | Starter | Traits | Description |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Arcane Wand | wand | 7 | 0.55 | 1 | 13 | 0 | 0.16 | yes |  | Reliable magic bolts. The balanced baseline. |
+| Throwing Dagger | dagger | 4 | 0.25 | 2 | 18 | 1 | 0.3 | yes |  | Fast twin blades — rapid close-range flurry. |
+| Heavy Crossbow | crossbow | 18 | 1.1 | 1 | 20 | 3 | 0.16 | yes | homing | Slow, homing piercing bolt that hits through crowds. |
+| Ember Sprayer | flame | 3 | 0.18 | 3 | 9 | 1 | 0.4 |  |  | A wide spray of short-lived embers — close-range denial. |
+| Runic Hammer | hammer | 32 | 1.6 | 1 | 7 | 4 | 0.16 |  | splash knock | Slow sledgehammer with AoE splash and knockback. |
+| Storm Shuriken | shuriken | 6 | 0.4 | 2 | 18 | 0 | 0.25 |  | homing | Swift homing twins that track the target. |
+| Spark Spitter | ember | 2.5 | 0.22 | 4 | 10 | 1 | 0.45 |  |  | A violent drizzle of fire sparks — rapid spray. |
+| Void Orb | orb | 38 | 1.4 | 1 | 6 | 5 | 0.16 |  | splash bounce2 | A rolling bomb that bounces and detonates. |
+| Scattergun | fan | 5 | 0.7 | 5 | 12 | 0 | 0.7 |  |  | Five shots in a very wide arc — close-range cone. |
+| Soul Scythe | scythe | 45 | 1.1 | 1 | 12 | 6 | 0.16 |  | knock | One huge sweeping arc with heavy knockback. |
+| Crystal Needles | needle | 3.5 | 0.28 | 3 | 24 | 0 | 0.2 |  |  | Hair-thin projectiles at absurd speed. |
+| Solar Lance | beam | 70 | 2.2 | 1 | 30 | 0 | 0.1 |  |  | A devastating slow beam — instant, unblockable. |
 
 ### Evolutions (A + B = C)
 
-| Name | ID | Requires | Damage | Cooldown (s) | Projectiles | Pierce | Description |
-|---|---|---|---|---|---|---|---|
-| Storm Caller | storm | wand + ember | 10 | 0.5 | 6 | 2 | Wand + Spark Spitter. A grid of lightning bolts. |
-| Void Nova | nova | orb + scythe | 90 | 1.6 | 1 | 10 | Void Orb + Soul Scythe. One unstoppable black star. |
+| Name | ID | Requires | Damage | Cooldown (s) | Projectiles | Pierce | Area | Description |
+|---|---|---|---|---|---|---|---|---|
+| Storm Caller | storm | wand + ember | 10 | 0.5 | 6 | 2 | Wand + Spark Spitter. A grid of homing lightning bolts. |
+| Void Nova | nova | orb + scythe | 90 | 1.6 | 1 | 10 | Void Orb + Soul Scythe. One unstoppable black star explosion. |
 
 ---
 
@@ -99,10 +99,10 @@ python3 tools/gendocs.py
 | Surge | surge | cooldown_mul | -0.25 | 1 |  |  | -25% attack cooldown |
 | Stony Pledge | pledge | defense_add | 10 | 4 |  |  | +10 defense (blocks 2 flat + ~3% scaling) |
 | Iron Conviction | conviction | defense_add | 25 | 2 |  |  | +25 defense |
-| Minor Ward | ward_small | shield_add | 20 | 3 |  |  | +20 regenerating shield |
-| Runic Ward | ward_great | shield_add | 45 | 2 |  |  | +45 regenerating shield |
-| Gilded Fangs | leech_gold | lifesteal_add | 0.02 | 3 |  |  | +2% lifesteal |
-| Soulfeed | leech_soul | lifesteal_add | 0.04 | 2 |  |  | +4% lifesteal |
+| Minor Ward | ward_small | shield_add | 15 | 3 |  |  | +15 regenerating shield |
+| Runic Ward | ward_great | shield_add | 30 | 2 |  |  | +30 regenerating shield |
+| Gilded Fangs | leech_gold | lifesteal_add | 0.01 | 3 |  |  | +2% lifesteal |
+| Soulfeed | leech_soul | lifesteal_add | 0.02 | 2 |  |  | +4% lifesteal |
 | Wand Focus | w_wand_power | w_damage_add | 8 | 3 | wand |  | Arcane Wand: +8 damage |
 | Wand Channeling | w_wand_speed | w_cd_mul | -0.18 | 2 | wand |  | Arcane Wand: -18% cooldown |
 | Dagger Honing | w_dagger_power | w_damage_add | 5 | 3 | dagger |  | Throwing Dagger: +5 damage each |
@@ -134,7 +134,7 @@ python3 tools/gendocs.py
 
 | Name | ID | Effect | Value | Max stacks | Weapon | Level | Description |
 |---|---|---|---|---|---|---|---|
-| Aegis | m5_aegis | shield_add | 60 | 1 |  | 5 | MILESTONE: +60 regenerating shield |
+| Aegis | m5_aegis | shield_add | 45 | 1 |  | 5 | MILESTONE: +45 regenerating shield |
 | Blood Pact | m5_pact | lifesteal_add | 0.06 | 1 |  | 5 | MILESTONE: +6% lifesteal |
 | Tempest | m5_tempest | proj_add | 2 | 1 |  | 5 | MILESTONE: +2 projectiles to every weapon |
 | Stone Mantle | m10_mantle | defense_add | 60 | 1 |  | 10 | MILESTONE: +60 defense |
@@ -152,8 +152,14 @@ python3 tools/gendocs.py
 | Ascendant Skin | m30_ascend | defense_add | 200 | 1 |  | 30 | MILESTONE: +200 defense |
 | Starlight Ward | m30_starlight | shield_add | 500 | 1 |  | 30 | MILESTONE: +500 regenerating shield |
 | Overdrive | m30_overdrive | damage_mul | 2 | 1 |  | 30 | MILESTONE: +200% damage |
+| Blood Fury | m35_fury | damage_mul | 1.8 | 1 |  | 35 | MILESTONE: +180% damage |
+| Eternal Ward | m35_ward | shield_add | 350 | 1 |  | 35 | MILESTONE: +350 regenerating shield |
+| Annihilate | m40_annihilate | damage_mul | 2.5 | 1 |  | 40 | MILESTONE: +250% damage |
+| Fortify | m40_fortify | defense_add | 450 | 1 |  | 40 | MILESTONE: +450 defense |
+| Transcend | m45_transcend | damage_mul | 3.5 | 1 |  | 45 | MILESTONE: +350% damage |
+| Impervious | m45_impervious | shield_add | 600 | 1 |  | 45 | MILESTONE: +600 regenerating shield |
 
-**Totals:** 72 upgrades (45 normal, 9 unique, 18 milestones).
+**Totals:** 78 upgrades (45 normal, 9 unique, 24 milestones).
 
 
 ---

@@ -49,7 +49,7 @@ struct PlayerStats {
   // Unique-item effects (each is a distinct mechanic):
   float spreadMul = 1.0F; // widens weapon volleys (fan item)
   int extraChoice = 0;    // +N level-up cards
-  int rerollCharges = 0;  // +N free rerolls per level-up
+  int rerollCharges = 1;  // +N free rerolls per level-up (1 base)
   float thornsDmg = 0.0F; // AoE burst around player on hit
   int adrenaline = 0;     // speed burst when HP is low
   int blackHole = 0;      // periodic enemy pull
@@ -131,6 +131,10 @@ private:
     int pierce = 0;
     float spread = 0.16F;
     core::render::Color color{1.0F, 0.95F, 0.55F, 1.0F};
+    float area = 0.0F;      // explosion radius on impact (splash)
+    float strength = 0.0F;  // knockback force on hit
+    bool homing = false;    // homes toward nearest enemy
+    int bounces = 0;        // wall bounces after impact
   };
   static constexpr int kMaxWeapons = 4;
 

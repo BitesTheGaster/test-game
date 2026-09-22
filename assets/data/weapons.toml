@@ -1,15 +1,33 @@
 # Base weapons. Modifiers come from upgrades.
+#
+# Weapon roles:
+#   dagger  — fast twin hits, close-range flurry
+#   wand    — balanced single bolt, reliable baseline
+#   needle  — rapid tight stream, fast projectiles
+#   flame   — wide spray, area denial at close range
+#   ember   — very rapid spray, many small projectiles
+#   shuriken— fast homing twins, track the target
+#   fan     — very wide cone, close-range burst
+#   crossbow— slow homing piercing bolt, hits through groups
+#   hammer  — slow heavy AoE with knockback
+#   scythe  — slow massive sweep, maximum pierce
+#   orb     — rolling bomb that bounces and explodes
+#   beam    — slow but instant, devastating single beam
+#   storm   — evolution (wand + ember), lightning grid
+#   nova    — evolution (orb + scythe), black star explosion
+#
 # - starter = true: one of these is rolled as the run-start weapon.
 # - requires = [a, b]: evolution weapon, offered as a level-up grant once you
 #   own both prerequisites (NOT in the normal random grant pool before that).
-# - spread: volley angle between projectiles in radians (widened by the
-#   "Spreadshot" unique)
-# - proj_color: projectile tint
+# - area: explosion radius on impact (splash damage).
+# - strength: knockback force applied to the hit enemy.
+# - homing: projectile steers toward the nearest enemy each tick.
+# - bounces: number of wall bounces after the first impact.
 
 [[weapon]]
 id = "wand"
 name = "Arcane Wand"
-desc = "Reliable magic bolts."
+desc = "Reliable magic bolts. The balanced baseline."
 damage = 7.0
 cooldown = 0.55
 projectiles = 1
@@ -23,21 +41,21 @@ starter = true
 [[weapon]]
 id = "dagger"
 name = "Throwing Dagger"
-desc = "Fast twin blades that pierce a little."
+desc = "Fast twin blades — rapid close-range flurry."
 damage = 4.0
-cooldown = 0.30
+cooldown = 0.25
 projectiles = 2
-proj_speed = 16.0
-proj_life = 1.0
+proj_speed = 18.0
+proj_life = 0.9
 pierce = 1
-spread = 0.22
+spread = 0.30
 proj_color = [0.85, 0.9, 1.0, 1.0]
 starter = true
 
 [[weapon]]
 id = "crossbow"
 name = "Heavy Crossbow"
-desc = "Slow, hits like a truck, punches lines."
+desc = "Slow, homing piercing bolt that hits through crowds."
 damage = 18.0
 cooldown = 1.10
 projectiles = 1
@@ -47,24 +65,25 @@ pierce = 3
 spread = 0.16
 proj_color = [0.95, 0.8, 0.5, 1.0]
 starter = true
+homing = true
 
 [[weapon]]
 id = "flame"
 name = "Ember Sprayer"
-desc = "A flurry of short-lived embers."
+desc = "A wide spray of short-lived embers — close-range denial."
 damage = 3.0
 cooldown = 0.18
 projectiles = 3
 proj_speed = 9.0
 proj_life = 0.6
 pierce = 1
-spread = 0.30
+spread = 0.40
 proj_color = [1.0, 0.55, 0.25, 1.0]
 
 [[weapon]]
 id = "hammer"
 name = "Runic Hammer"
-desc = "Slow sledgehammer bolts that shred crowds."
+desc = "Slow sledgehammer with AoE splash and knockback."
 damage = 32.0
 cooldown = 1.60
 projectiles = 1
@@ -73,11 +92,13 @@ proj_life = 1.2
 pierce = 4
 spread = 0.16
 proj_color = [0.75, 0.7, 0.95, 1.0]
+area = 1.5
+strength = 3.0
 
 [[weapon]]
 id = "shuriken"
 name = "Storm Shuriken"
-desc = "Swift twin dashes of wind."
+desc = "Swift homing twins that track the target."
 damage = 6.0
 cooldown = 0.40
 projectiles = 2
@@ -86,24 +107,25 @@ proj_life = 1.3
 pierce = 0
 spread = 0.25
 proj_color = [0.6, 0.9, 1.0, 1.0]
+homing = true
 
 [[weapon]]
 id = "ember"
 name = "Spark Spitter"
-desc = "A violent drizzle of fire sparks."
+desc = "A violent drizzle of fire sparks — rapid spray."
 damage = 2.5
 cooldown = 0.22
 projectiles = 4
 proj_speed = 10.0
 proj_life = 0.5
 pierce = 1
-spread = 0.38
+spread = 0.45
 proj_color = [1.0, 0.4, 0.15, 1.0]
 
 [[weapon]]
 id = "orb"
 name = "Void Orb"
-desc = "One slowly rolling globe that chews through lines."
+desc = "A rolling bomb that bounces and detonates."
 damage = 38.0
 cooldown = 1.40
 projectiles = 1
@@ -112,24 +134,26 @@ proj_life = 2.0
 pierce = 5
 spread = 0.16
 proj_color = [0.75, 0.45, 1.0, 1.0]
+bounces = 2
+area = 1.0
 
 [[weapon]]
 id = "fan"
 name = "Scattergun"
-desc = "Five shots in a wide arc every level-up."
+desc = "Five shots in a very wide arc — close-range cone."
 damage = 5.0
 cooldown = 0.70
 projectiles = 5
 proj_speed = 12.0
 proj_life = 0.8
 pierce = 0
-spread = 0.55
+spread = 0.70
 proj_color = [0.9, 0.55, 0.35, 1.0]
 
 [[weapon]]
 id = "scythe"
 name = "Soul Scythe"
-desc = "One huge sweeping arc. Maximum pierce."
+desc = "One huge sweeping arc with heavy knockback."
 damage = 45.0
 cooldown = 1.10
 projectiles = 1
@@ -138,6 +162,7 @@ proj_life = 1.6
 pierce = 6
 spread = 0.16
 proj_color = [0.7, 1.0, 0.8, 1.0]
+strength = 2.0
 
 [[weapon]]
 id = "needle"
@@ -146,7 +171,7 @@ desc = "Hair-thin projectiles at absurd speed."
 damage = 3.5
 cooldown = 0.28
 projectiles = 3
-proj_speed = 22.0
+proj_speed = 24.0
 proj_life = 0.9
 pierce = 0
 spread = 0.20
@@ -155,12 +180,12 @@ proj_color = [0.5, 0.95, 0.9, 1.0]
 [[weapon]]
 id = "beam"
 name = "Solar Lance"
-desc = "A devastating slow beam that never pierces."
+desc = "A devastating slow beam — instant, unblockable."
 damage = 70.0
 cooldown = 2.20
 projectiles = 1
-proj_speed = 26.0
-proj_life = 2.4
+proj_speed = 30.0
+proj_life = 2.0
 pierce = 0
 spread = 0.10
 proj_color = [1.0, 1.0, 0.75, 1.0]
@@ -170,27 +195,30 @@ proj_color = [1.0, 1.0, 0.75, 1.0]
 [[weapon]]
 id = "storm"
 name = "Storm Caller"
-desc = "Wand + Spark Spitter. A grid of lightning bolts."
+desc = "Wand + Spark Spitter. A grid of homing lightning bolts."
 damage = 10.0
 cooldown = 0.50
 projectiles = 6
 proj_speed = 14.0
 proj_life = 1.0
 pierce = 2
-spread = 0.45
+spread = 0.50
 proj_color = [0.55, 1.0, 1.0, 1.0]
 requires = ["wand", "ember"]
+homing = true
 
 [[weapon]]
 id = "nova"
 name = "Void Nova"
-desc = "Void Orb + Soul Scythe. One unstoppable black star."
+desc = "Void Orb + Soul Scythe. One unstoppable black star explosion."
 damage = 90.0
 cooldown = 1.60
 projectiles = 1
 proj_speed = 8.0
-proj_life = 2.6
+proj_life = 2.4
 pierce = 10
 spread = 0.16
 proj_color = [0.5, 0.3, 1.0, 1.0]
 requires = ["orb", "scythe"]
+area = 3.0
+homing = true

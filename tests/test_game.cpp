@@ -95,7 +95,7 @@ TEST_CASE("applyUpgrade supports unique-item effects") {
   REQUIRE(game::applyUpgrade(s, "extra_choice", 1.0F).valid);
   REQUIRE(s.extraChoice == 1);
   REQUIRE(game::applyUpgrade(s, "reroll_add", 1.0F).valid);
-  REQUIRE(s.rerollCharges == 1);
+  REQUIRE(s.rerollCharges == 2);  // default 1 base + 1 from item
   REQUIRE(game::applyUpgrade(s, "thorns", 3.0F).valid);
   REQUIRE(s.thornsDmg == Catch::Approx(3.0F));
   REQUIRE(game::applyUpgrade(s, "adrenaline", 1.0F).valid);
@@ -243,7 +243,11 @@ TEST_CASE("Reroll refreshes the offered choices once per level-up") {
   REQUIRE(g.state() == game::RunState::LevelUp); // still choosing
   REQUIRE(g.rerollsUsed() == 1);
 
-  // A second reroll in the same level-up is a no-op.
+  // A second reroll also succeeds (1 base + 1 from reroll_add = 2 budget).
   g.advance(1.0F / 60.0F, in);
-  REQUIRE(g.rerollsUsed() == 1);
+  REQUIRE(g.rerollsUsed() == 2);
+
+  // A third reroll is a no-op (budget exhausted).
+  g.advance(1.0F / 60.0F, in);
+  REQUIRE(g.rerollsUsed() == 2);
 }

@@ -26,6 +26,10 @@ struct WeaponDef {
   core::render::Color projColor{1.0F, 0.95F, 0.55F, 1.0F};
   bool starter = false;   // may be rolled as the run-start weapon
   std::vector<std::string> prereqs; // evolution prerequisites (weapon ids)
+  float area = 0.0F;      // explosion radius on impact (splash)
+  float strength = 0.0F;  // knockback force on hit (0 = none)
+  bool homing = false;    // projectile homes toward the nearest enemy
+  int bounces = 0;        // number of wall bounces after impact
 };
 
 struct EnemyDef {

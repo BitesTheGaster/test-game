@@ -51,22 +51,29 @@ def weapons_md() -> str:
     base = [w for w in ws if not w.get("requires")]
     evo = [w for w in ws if w.get("requires")]
 
+    def _w(w):
+        extra = []
+        if w.get("area", 0.0) > 0.0: extra.append("splash")
+        if w.get("homing"): extra.append("homing")
+        if w.get("bounces", 0) > 0: extra.append("bounce" + str(w["bounces"]))
+        if w.get("strength", 0.0) > 0.0: extra.append("knock")
+        return " ".join(extra)
     rows = [[w["name"], w["id"], fmt(w["damage"]), fmt(w["cooldown"]),
              fmt(w["projectiles"]), fmt(w["proj_speed"]), fmt(w["pierce"]),
              fmt(w.get("spread", 0.16)),
-             "yes" if w.get("starter") else "", md_escape(w["desc"])]
+             "yes" if w.get("starter") else "", _w(w), md_escape(w["desc"])]
             for w in base]
     s = "### Base weapons\n\n"
     s += table(["Name", "ID", "Damage", "Cooldown (s)", "Projectiles",
                 "Proj. speed", "Pierce", "Spread (rad)", "Starter",
-                "Description"], rows)
+                "Traits", "Description"], rows)
 
     rows = [[w["name"], w["id"], " + ".join(w["requires"]), fmt(w["damage"]),
              fmt(w["cooldown"]), fmt(w["projectiles"]), fmt(w["pierce"]),
              md_escape(w["desc"])] for w in evo]
     s += "\n\n### Evolutions (A + B = C)\n\n"
     s += table(["Name", "ID", "Requires", "Damage", "Cooldown (s)",
-                "Projectiles", "Pierce", "Description"], rows)
+                "Projectiles", "Pierce", "Area", "Description"], rows)
     return s
 
 
