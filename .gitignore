@@ -1,0 +1,18 @@
+# Build directories
+build/
+out/
+cmake-build-*/
+
+# vcpkg
+vcpkg_installed/
+third_party/vcpkg/
+
+# IDE
+.vscode/
+.idea/
+.cache/
+compile_commands.json
+
+# OS
+.DS_Store
+Thumbs.db
