@@ -47,6 +47,24 @@ float requireFloat(const toml::table& t, const char* key, const std::string& whe
   return *v;
 }
 
+AttackType parseAttackType(const toml::table& t, const std::string& where) {
+  const auto v = t["attack_type"].value<std::string>();
+  if (!v) return AttackType::Projectile;
+  std::string s = *v;
+  if (s == "projectile") return AttackType::Projectile;
+  if (s == "orbit") return AttackType::Orbit;
+  if (s == "cone") return AttackType::Cone;
+  if (s == "bomb") return AttackType::Bomb;
+  if (s == "boomerang") return AttackType::Boomerang;
+  if (s == "bounce") return AttackType::Bounce;
+  if (s == "beam") return AttackType::Beam;
+  if (s == "sweep") return AttackType::Sweep;
+  if (s == "zone") return AttackType::Zone;
+  if (s == "chain") return AttackType::Chain;
+  if (s == "nova") return AttackType::Nova;
+  throw std::runtime_error(where + ": unknown attack_type \"" + s + "\"");
+}
+
 toml::table parseTable(const std::filesystem::path& file) {
   try {
     return toml::parse_file(file.string());
@@ -96,6 +114,7 @@ Content loadContent(const std::filesystem::path& dir) {
       def.id = requireString(*t, "id", where);
       def.name = requireString(*t, "name", where);
       def.desc = (*t)["desc"].value<std::string>().value_or("Auto-fires at the nearest enemy.");
+      def.attackType = parseAttackType(*t, where);
       def.damage = requireFloat(*t, "damage", where);
       def.cooldown = requireFloat(*t, "cooldown", where);
       def.projectiles = static_cast<int>((*t)["projectiles"].value_or(1));
@@ -117,11 +136,59 @@ Content loadContent(const std::filesystem::path& dir) {
           def.prereqs.push_back(*s);
         }
       }
-      def.area = (*t)["area"].value_or(0.0F);
-      def.strength = (*t)["strength"].value_or(0.0F);
-      def.homing = (*t)["homing"].value_or(false);
-      def.bounces = static_cast<int>((*t)["bounces"].value_or(0));
-      def.shape = (*t)["shape"].value_or("circle");
+
+      // Cone
+      def.coneAngle = (*t)["cone_angle"].value_or(0.8F);
+      def.coneRange = (*t)["cone_range"].value_or(2.5F);
+      def.coneTickRate = (*t)["cone_tick_rate"].value_or(0.1F);
+
+      // Orbit
+      def.orbitRadius = (*t)["orbit_radius"].value_or(1.2F);
+      def.orbitSpeed = (*t)["orbit_speed"].value_or(2.0F);
+      def.orbitCount = static_cast<int>((*t)["orbit_count"].value_or(2));
+
+      // Bomb
+      def.bombArcHeight = (*t)["bomb_arc_height"].value_or(2.0F);
+      def.bombExplodeRadius = (*t)["bomb_explode_radius"].value_or(1.5F);
+      def.bombKnockback = (*t)["bomb_knockback"].value_or(3.0F);
+      def.bombFuse = (*t)["bomb_fuse"].value_or(0.0F);
+
+      // Boomerang
+      def.boomerangRange = (*t)["boomerang_range"].value_or(4.0F);
+      def.boomerangReturnSpeed = (*t)["boomerang_return_speed"].value_or(1.5F);
+
+      // Bounce
+      def.bounceCount = static_cast<int>((*t)["bounce_count"].value_or(3));
+      def.bounceRange = (*t)["bounce_range"].value_or(2.5F);
+      def.bounceDamageMul = (*t)["bounce_damage_mul"].value_or(0.7F);
+
+      // Beam
+      def.beamRange = (*t)["beam_range"].value_or(8.0F);
+      def.beamWidth = (*t)["beam_width"].value_or(0.3F);
+      def.beamDuration = (*t)["beam_duration"].value_or(0.15F);
+
+      // Sweep
+      def.sweepAngle = (*t)["sweep_angle"].value_or(3.14F);
+      def.sweepRadius = (*t)["sweep_radius"].value_or(2.0F);
+      def.sweepKnockback = (*t)["sweep_knockback"].value_or(2.0F);
+
+      // Zone
+      def.zoneRadius = (*t)["zone_radius"].value_or(1.2F);
+      def.zoneDuration = (*t)["zone_duration"].value_or(4.0F);
+      def.zoneDps = (*t)["zone_dps"].value_or(15.0F);
+      def.zoneMaxPools = static_cast<int>((*t)["zone_max_pools"].value_or(3));
+
+      // Chain
+      def.chainJumpRange = (*t)["chain_jump_range"].value_or(2.5F);
+      def.chainMaxJumps = static_cast<int>((*t)["chain_max_jumps"].value_or(4));
+      def.chainDamageMul = (*t)["chain_damage_mul"].value_or(0.6F);
+
+      // Nova
+      def.novaMaxRadius = (*t)["nova_max_radius"].value_or(4.0F);
+      def.novaExpandSpeed = (*t)["nova_expand_speed"].value_or(3.0F);
+      def.novaDamagePerTick = (*t)["nova_damage_per_tick"].value_or(25.0F);
+      def.novaTickRate = (*t)["nova_tick_rate"].value_or(0.15F);
+
       content.weapons.push_back(std::move(def));
     }
   }

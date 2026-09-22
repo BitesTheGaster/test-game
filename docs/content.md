@@ -10,28 +10,29 @@ Regenerate with:
 python3 tools/gendocs.py
 ```
 
-**Totals:** 10 weapons (8 base +
+**Totals:** 11 weapons (9 base +
 2 evolutions), 18 enemies.
 
 ### Base weapons
 
-| Name | ID | Damage | Cooldown (s) | Projectiles | Proj. speed | Pierce | Spread (rad) | Starter | Shape | Traits | Description |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| Arcane Wand | wand | 8 | 0.5 | 1 | 14 | 0 | 0.1 | yes | circle |  | Single reliable bolt. The baseline — accurate, consistent. |
-| Throwing Dagger | dagger | 5 | 0.2 | 2 | 20 | 1 | 0.35 | yes | triangle |  | Twin blades at melee range. Insane DPS if you stay close. |
-| Heavy Crossbow | crossbow | 22 | 1.2 | 1 | 18 | 4 | 0.08 | yes | rect | homing | Slow homing bolt that pierces through entire crowds. |
-| Runic Hammer | hammer | 40 | 1.8 | 1 | 6 | 0 | 0.05 |  | large_circle | splash knock | Artillery strike. Massive AoE explosion with heavy knockback. |
-| Void Orb | orb | 45 | 1.5 | 1 | 5.5 | 0 | 0.05 |  | large_circle | splash bounce3 | Rolling bomb. Bounces off walls and enemies, then detonates. |
-| Solar Lance | beam | 35 | 0.08 | 1 | 100 | 10 | 0 |  | line |  | Channeled instant laser. Hold to melt everything in a line. |
-| Soul Scythe | scythe | 18 | 0.9 | 1 | 16 | 8 | 0 |  | rect | knock | Wide death sweep. Cleaves everything in a cone ahead. |
-| Crystal Needles | needle | 3 | 0.06 | 1 | 28 | 1 | 0 |  | rect |  | Hair-thin stream at absurd speed. Sustained shredder. |
+| Name | ID | Damage | Cooldown (s) | Projectiles | Proj. speed | Pierce | Spread (rad) | Starter | Traits | Description |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Arcane Wand | wand | 8 | 0.5 | 1 | 14 | 0 | 0.1 | yes |  | Reliable magic bolts. The balanced baseline. |
+| Throwing Dagger | dagger | 5 | 0.4 | 3 | 0 | 0 | 0 | yes |  | Orbiting knives that carve up anything close. |
+| Heavy Crossbow | crossbow | 20 | 1.2 | 1 | 22 | 4 | 0.08 | yes | homing | Slow, homing piercing bolt that punches through crowds. |
+| Ember Sprayer | flame | 4 | 0.35 | 1 | 0 | 0 | 0 |  |  | Cone of fire — instant damage in a wide arc. |
+| Runic Hammer | hammer | 45 | 1.8 | 1 | 8 | 0 | 0 |  |  | Arcing bomb with massive explosion and knockback. |
+| Storm Shuriken | shuriken | 8 | 0.6 | 2 | 16 | 1 | 0.2 |  |  | Boomerang blades — hit going out AND coming back. |
+| Void Orb | orb | 35 | 1.5 | 1 | 7 | 5 | 0 |  |  | Slow bouncing orb that detonates on each impact. |
+| Soul Scythe | scythe | 55 | 1.3 | 1 | 0 | 0 | 0 |  |  | Devastating 360° sweep around you. |
+| Solar Lance | beam | 90 | 2.5 | 1 | 0 | 0 | 0 |  |  | Instant hitscan beam — deletes a line. |
 
 ### Evolutions (A + B = C)
 
-| Name | ID | Requires | Damage | Cooldown (s) | Projectiles | Pierce | Area | Shape | Description |
-|---|---|---|---|---|---|---|---|---|---|
-| Storm Caller | storm | wand + needle | 12 | 0.45 | 8 | 3 | 0 | star | Wand + Needle. Grid of homing lightning that chains between enemies. |
-| Void Nova | nova | orb + hammer | 120 | 2 | 1 | 0 | 4 | large_circle | Orb + Hammer. Giant meteor that bounces and leaves craters. |
+| Name | ID | Requires | Damage | Cooldown (s) | Projectiles | Pierce | Area | Description |
+|---|---|---|---|---|---|---|---|---|
+| Storm Caller | storm | wand + crossbow | 15 | 0.45 | 1 | 0 | Wand + Crossbow. Lightning chains between enemies. |
+| Void Nova | nova | orb + hammer | 40 | 1.8 | 1 | 0 | Orb + Hammer. Expanding ring of destruction. |
 
 ---
 

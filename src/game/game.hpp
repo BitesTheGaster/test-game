@@ -122,6 +122,7 @@ private:
   // Owned weapons (fixed slots, no allocation on the hot path).
   struct WeaponSlot {
     int def = -1;
+    AttackType attackType = AttackType::Projectile;
     float cooldown = 0.5F;
     float timer = 0.0F;
     float damage = 5.0F;
@@ -131,11 +132,69 @@ private:
     int pierce = 0;
     float spread = 0.16F;
     core::render::Color color{1.0F, 0.95F, 0.55F, 1.0F};
-    float area = 0.0F;      // explosion radius on impact (splash)
-    float strength = 0.0F;  // knockback force on hit
-    bool homing = false;    // homes toward nearest enemy
-    int bounces = 0;        // wall bounces after impact
-    std::string shape = "circle"; // projectile shape
+
+    // Cone
+    float coneAngle = 0.8F;
+    float coneRange = 2.5F;
+    float coneTickRate = 0.1F;
+    float coneTimer = 0.0F;        // for continuous cone damage
+
+    // Orbit
+    float orbitRadius = 1.2F;
+    float orbitSpeed = 2.0F;
+    int orbitCount = 2;
+    float orbitAngle = 0.0F;       // current rotation angle
+
+    // Bomb
+    float bombArcHeight = 2.0F;
+    float bombExplodeRadius = 1.5F;
+    float bombKnockback = 3.0F;
+    float bombFuse = 0.0F;
+
+    // Boomerang
+    float boomerangRange = 4.0F;
+    float boomerangReturnSpeed = 1.5F;
+
+    // Bounce
+    int bounceCount = 3;
+    float bounceRange = 2.5F;
+    float bounceDamageMul = 0.7F;
+
+    // Beam
+    float beamRange = 8.0F;
+    float beamWidth = 0.3F;
+    float beamDuration = 0.15F;
+
+    // Sweep
+    float sweepAngle = 3.14F;
+    float sweepRadius = 2.0F;
+    float sweepKnockback = 2.0F;
+
+    // Zone
+    float zoneRadius = 1.2F;
+    float zoneDuration = 4.0F;
+    float zoneDps = 15.0F;
+    int zoneMaxPools = 3;
+
+    // Chain (evolution)
+    float chainJumpRange = 2.5F;
+    int chainMaxJumps = 4;
+    float chainDamageMul = 0.6F;
+
+    // Nova (evolution)
+    float novaMaxRadius = 4.0F;
+    float novaExpandSpeed = 3.0F;
+    float novaDamagePerTick = 25.0F;
+    float novaTickRate = 0.15F;
+    float novaRadius = 0.0F;       // current radius
+    float novaTimer = 0.0F;        // tick timer
+    bool novaActive = false;       // whether nova is expanding
+
+    // General projectile fields (for projectile/boomerang/bounce)
+    float area = 0.0F;
+    float strength = 0.0F;
+    bool homing = false;
+    int bounces = 0;
   };
   static constexpr int kMaxWeapons = 4;
 
@@ -174,6 +233,15 @@ private:
   void movePlayer();
   void updateEnemies();
   void updateProjectiles();
+  void updateOrbitBlades();
+  void updateBombProjectiles();
+  void updateBoomerangProjectiles();
+  void updateBounceProjectiles();
+  void updateBeamEffects();
+  void updateSweepEffects();
+  void updateZoneEffects();
+  void updateChainLightning();
+  void updateNovaRing();
   void updatePickups();
   void updateShield();
   void updateUniqueEffects();
@@ -191,6 +259,7 @@ private:
   void applyEnemyDamage(entt::entity e, float dmg);
   void killEnemy(entt::entity e);
   void chainBolt(float x, float y, float dmg);
+  void explodeBomb(entt::entity bomb, const BombProjectile& bp, float x, float y);
   void hurtPlayer(float amount);
   void spawnParticles(float x, float y, core::render::Color c, int count, float speed);
 
@@ -219,13 +288,6 @@ private:
   // Shield state (regen delay resets whenever damage is absorbed).
   float shield_ = 0.0F;
   float shieldDelay_ = 0.0F;
-  float prevShield_ = 0.0F; // for shield break detection
-
-  // Visual feedback state.
-  float screenShake_ = 0.0F;    // screen shake intensity (world units)
-  float hitPause_ = 0.0F;       // hit pause timer (seconds)
-  struct DmgNumber { float x, y, life, value; core::render::Color color; };
-  std::vector<DmgNumber> dmgNumbers_;
 
   // Unique-item state.
   int rerollsUsed_ = 0; // free rerolls consumed this level-up
