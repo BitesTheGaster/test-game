@@ -1,4 +1,5 @@
 # Level-up upgrades. effect = id understood by applyUpgrade(), value = per-stack magnitude.
+# Multiple entries may share an effect; max_stacks keeps each variant bounded.
 
 [[upgrade]]
 id = "damage"
@@ -71,3 +72,147 @@ desc = "+1 HP per second"
 effect = "regen_add"
 value = 1.0
 max_stacks = 4
+
+[[upgrade]]
+id = "might"
+name = "Might"
+desc = "+25% damage"
+effect = "damage_mul"
+value = 0.25
+max_stacks = 4
+
+[[upgrade]]
+id = "quickdraw"
+name = "Quickdraw"
+desc = "-15% attack cooldown"
+effect = "cooldown_mul"
+value = -0.15
+max_stacks = 3
+
+[[upgrade]]
+id = "twin_shot"
+name = "Twin Cast"
+desc = "+1 projectile"
+effect = "proj_add"
+value = 1
+max_stacks = 2
+
+[[upgrade]]
+id = "windrunner"
+name = "Windrunner"
+desc = "+8% move speed"
+effect = "speed_mul"
+value = 0.08
+max_stacks = 6
+
+[[upgrade]]
+id = "feast"
+name = "Dark Feast"
+desc = "Heal 40 HP"
+effect = "heal"
+value = 40
+max_stacks = 2
+
+[[upgrade]]
+id = "constitution"
+name = "Iron Constitution"
+desc = "+35 max HP and heal 35"
+effect = "max_hp_add"
+value = 35
+max_stacks = 4
+
+[[upgrade]]
+id = "bulwark"
+name = "Bulwark"
+desc = "+50 max HP and heal 50"
+effect = "max_hp_add"
+value = 50
+max_stacks = 2
+
+[[upgrade]]
+id = "vitality"
+name = "Vitality"
+desc = "+2 HP per second"
+effect = "regen_add"
+value = 2.0
+max_stacks = 2
+
+[[upgrade]]
+id = "treasure"
+name = "Treasure Sense"
+desc = "+100% pickup range"
+effect = "pickup_mul"
+value = 1.0
+max_stacks = 2
+
+[[upgrade]]
+id = "harvester"
+name = "Harvester"
+desc = "+80% pickup range"
+effect = "pickup_mul"
+value = 0.80
+max_stacks = 2
+
+[[upgrade]]
+id = "garrote"
+name = "Garrote Bolts"
+desc = "+2 pierce"
+effect = "pierce_add"
+value = 2
+max_stacks = 1
+
+[[upgrade]]
+id = "echoes"
+name = "Battle Echoes"
+desc = "-20% attack cooldown"
+effect = "cooldown_mul"
+value = -0.20
+max_stacks = 2
+
+[[upgrade]]
+id = "barrage"
+name = "Barrage"
+desc = "+2 projectiles"
+effect = "proj_add"
+value = 2
+max_stacks = 1
+
+[[upgrade]]
+id = "rejuvenation"
+name = "Rejuvenation"
+desc = "Heal 60 HP"
+effect = "heal"
+value = 60
+max_stacks = 1
+
+[[upgrade]]
+id = "fervor"
+name = "Fervor"
+desc = "+35% damage"
+effect = "damage_mul"
+value = 0.35
+max_stacks = 2
+
+[[upgrade]]
+id = "gale"
+name = "Gale Steps"
+desc = "+15% move speed"
+effect = "speed_mul"
+value = 0.15
+max_stacks = 2
+
+[[upgrade]]
+id = "heartwood"
+name = "Heartwood"
+desc = "+70 max HP and heal 70"
+effect = "max_hp_add"
+value = 70
+max_stacks = 1
+
+[[upgrade]]
+id = "surge"
+name = "Surge"
+desc = "-25% attack cooldown"
+effect = "cooldown_mul"
+value = -0.25
+max_stacks = 1

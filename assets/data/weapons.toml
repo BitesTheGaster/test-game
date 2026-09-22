@@ -1,4 +1,6 @@
 # Base weapons. Modifiers come from upgrades.
+# NOTE: only weapons[0] (wand) is equipped at run start; the rest are roster
+# content for future pickups/level-up weapon grants.
 
 [[weapon]]
 id = "wand"
@@ -19,3 +21,43 @@ projectiles = 2
 proj_speed = 16.0
 proj_life = 1.0
 pierce = 1
+
+[[weapon]]
+id = "crossbow"
+name = "Heavy Crossbow"
+damage = 18.0
+cooldown = 1.10
+projectiles = 1
+proj_speed = 20.0
+proj_life = 1.8
+pierce = 3
+
+[[weapon]]
+id = "flame"
+name = "Ember Sprayer"
+damage = 3.0
+cooldown = 0.18
+projectiles = 3
+proj_speed = 9.0
+proj_life = 0.6
+pierce = 1
+
+[[weapon]]
+id = "hammer"
+name = "Runic Hammer"
+damage = 32.0
+cooldown = 1.60
+projectiles = 1
+proj_speed = 7.0
+proj_life = 1.2
+pierce = 4
+
+[[weapon]]
+id = "shuriken"
+name = "Storm Shuriken"
+damage = 6.0
+cooldown = 0.40
+projectiles = 2
+proj_speed = 18.0
+proj_life = 1.3
+pierce = 0

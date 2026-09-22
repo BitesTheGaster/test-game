@@ -77,7 +77,7 @@ void Game::reset() {
   xp_ = 0.0F;
   xpNext_ = xpForLevel(level_);
   kills_ = 0;
-  spawnTimer_ = 0.0F;
+  spawnTimer_ = 2.0F; // grace period: no enemies for the first 2 seconds
   iframes_ = 0.0F;
   stats_ = PlayerStats{};
   std::fill(stacks_.begin(), stacks_.end(), 0);
@@ -451,8 +451,8 @@ void Game::spawnWave() {
   spawnTimer_ -= 1.0F / 60.0F;
   if (spawnTimer_ > 0.0F) return;
 
-  // Difficulty ramp: interval shrinks over time.
-  spawnTimer_ = std::max(0.10F, 0.9F - simTime_ * 0.008F);
+  // Difficulty ramp: interval shrinks over time; first ~30s stay forgiving.
+  spawnTimer_ = std::max(0.15F, 1.2F - simTime_ * 0.005F);
 
   // Weighted pick among unlocked enemy types.
   float totalWeight = 0.0F;
@@ -482,8 +482,8 @@ void Game::spawnWave() {
   const float x = pt.x + std::cos(angle) * kSpawnDist;
   const float y = pt.y + std::sin(angle) * kSpawnDist;
 
-  // Gradual HP scaling keeps late runs challenging.
-  const float hpScale = 1.0F + simTime_ / 90.0F;
+  // Gradual HP scaling keeps late runs challenging (gentle early ramp).
+  const float hpScale = 1.0F + simTime_ / 150.0F;
 
   const auto e = registry_.create();
   registry_.emplace<Transform>(e, x, y, x, y);
