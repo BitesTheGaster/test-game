@@ -41,8 +41,8 @@ curves. Tables of all content are generated into
 | Stat | Also affects |
 |------|--------------|
 | Cooldown / attack speed | **Dagger orbit spin** — faster fire rate makes blades rotate faster (`orbitSpeed / cooldownMul`) |
-| Projectiles | **Scythe arc radius** (+15% per extra projectile), **Nova ring radius** (+10%) |
-| Pierce | **Bounce bounces** and **Chain jumps** (one more each) |
+| Projectiles | **Cone range** (+25%/proj), **Bomb arc height** (+25%), **Beam width** (+15%), **Scythe arc** (+15%), **Nova radius** (+10%), **Zone radius** (+20%) |
+| Pierce | **Bounce bounces**, **Chain jumps** (one more each), **Bomb knockback** (+0.5), **Zone DPS** (+2) |
 
 ### Defense
 

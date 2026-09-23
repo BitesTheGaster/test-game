@@ -571,7 +571,8 @@ void Game::fireWeapons() {
         // Instant cone damage - no projectiles, just damage in cone area
         if (found) {
           const float coneAngle = w.coneAngle;
-          const float coneRange = w.coneRange;
+          // More projectiles = a wider cone sweep.
+          const float coneRange = w.coneRange * (1.0F + stats_.projAdd * 0.25F);
           const float halfAngle = coneAngle * 0.5F;
           auto view = registry_.view<Transform, Health, Radius, Enemy>();
           for (const auto e : view) {
@@ -611,6 +612,8 @@ void Game::fireWeapons() {
           // Vertical velocity to achieve bombArcHeight at midpoint
           // Using: H = vy^2 / (2*g) => vy = sqrt(2*g*H)
           const float gravity = 30.0F; // matches updateBombProjectiles
+          // More projectiles = a taller arc; more pierce = harder knockback.
+          const float arcHeight = w.bombArcHeight * (1.0F + stats_.projAdd * 0.25F);
           const float vy = std::sqrt(2.0F * gravity * w.bombArcHeight);
           registry_.emplace<Velocity>(bomb, vx, vy);
           registry_.emplace<Radius>(bomb, 0.2F);
@@ -621,10 +624,10 @@ void Game::fireWeapons() {
           BombProjectile bp{};
           bp.damage = damage;
           bp.explodeRadius = w.bombExplodeRadius;
-          bp.knockback = w.bombKnockback;
+          bp.knockback = w.bombKnockback + stats_.pierceAdd * 0.5F;
           bp.life = w.life;
           bp.initialLife = w.life;
-          bp.arcHeight = w.bombArcHeight;
+          bp.arcHeight = arcHeight;
           bp.startX = pt.x;
           bp.startY = pt.y;
           bp.targetX = tx;
@@ -694,11 +697,13 @@ void Game::fireWeapons() {
       }
       case AttackType::Beam: {
         if (found) {
+          // More projectiles = a wider beam.
+          const float beamWidth = w.beamWidth * (1.0F + stats_.projAdd * 0.15F);
           const float endX = pt.x + std::cos(baseAngle) * w.beamRange;
           const float endY = pt.y + std::sin(baseAngle) * w.beamRange;
           const auto beam = registry_.create();
           registry_.emplace<Transform>(beam, pt.x, pt.y, pt.x, pt.y);
-          registry_.emplace<Radius>(beam, w.beamWidth * 0.5F);
+          registry_.emplace<Radius>(beam, beamWidth * 0.5F);
           Sprite s{};
           s.color = w.color;
           s.circle = false;
@@ -706,7 +711,7 @@ void Game::fireWeapons() {
           BeamEffect be{};
           be.damage = w.damage; // base; updateBeamEffects scales by damageMul
           be.range = w.beamRange;
-          be.width = w.beamWidth;
+          be.width = beamWidth;
           be.duration = w.beamDuration;
           be.timer = w.beamDuration;
           be.startX = pt.x;
@@ -823,6 +828,8 @@ void Game::fireWeapons() {
       case AttackType::Zone: {
         // Zone - create damage zone at target location
         if (found) {
+          // More projectiles = a wider zone; more pierce = denser damage.
+          const float zr = w.zoneRadius * (1.0F + stats_.projAdd * 0.2F);
           for (int p = 0; p < count; ++p) {
             const float offset = (static_cast<float>(p) - static_cast<float>(count - 1) * 0.5F) * w.spread;
             const float angle = baseAngle + offset;
@@ -837,8 +844,8 @@ void Game::fireWeapons() {
             s.color.a = 0.3F;
             registry_.emplace<Sprite>(zone, s);
             ZoneEffect ze{};
-            ze.dps = w.zoneDps;
-            ze.radius = w.zoneRadius;
+            ze.dps = w.zoneDps + stats_.pierceAdd * 2.0F;
+            ze.radius = zr;
             ze.duration = w.zoneDuration;
             ze.tickRate = w.coneTickRate;
             ze.timer = 0.0F;
