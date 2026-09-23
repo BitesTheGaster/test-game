@@ -50,14 +50,13 @@ Run: `./build/debug/test-game`.
 
 ## Controls
 
-| Key            | Action                          |
-|----------------|---------------------------------|
-| WASD / arrows  | Move (attacks fire automatically) |
-| 1 / 2 / 3      | Pick an upgrade / weapon on level-up |
-| 4              | Pick card 4 — or the free reroll when only 3 cards are shown |
-| 5              | Pick card 5 (Gambler's Eye extends the choice) |
-| Esc            | Pause / resume                  |
-| R              | Restart after death             |
+| Key         | Action                                    |
+|-------------|-------------------------------------------|
+| WASD / arrows | Move (attacks fire automatically)         |
+| 1 / 2 / 3 / 4 / 5 | Pick the matching card on level-up   |
+| R           | Reroll the level-up choice (1 free per level, more with Second Chance) |
+| Esc         | Pause / resume — overlays your character sheet |
+| R (after death) | Restart                              |
 
 ## Assets: where to put textures
 

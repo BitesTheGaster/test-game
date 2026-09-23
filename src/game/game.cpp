@@ -3,22 +3,23 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdio>
 #include <stdexcept>
 
 namespace game {
 namespace {
 
 constexpr float kPi = 3.14159265358979F;
-constexpr std::size_t kMaxEnemies = 4000;
+constexpr std::size_t kMaxEnemies = 8000;
 constexpr float kSpawnDist = 11.0F;
 constexpr float kSpawnTelegraph = 0.6F; // seconds a spawn marker is visible
 constexpr float kPickupDist = 0.45F;
 constexpr float kShieldRegenRate = 10.0F;   // HP/s once out of combat
 constexpr float kShieldRegenDelay = 4.0F;   // seconds without damage
-constexpr float kContactIframes = 0.55F;
+constexpr float kContactIframes = 0.30F;    // enemies connect more often
 
-constexpr float kEliteHpMul = 3.5F;
-constexpr float kChampionHpMul = 5.0F;
+constexpr float kEliteHpMul = 4.0F;
+constexpr float kChampionHpMul = 7.0F;
 
 // Trait pool: a growing count of traits is rolled for elite/champion enemies.
 enum PickTrait : int {
@@ -88,6 +89,11 @@ UpgradeEffectResult applyUpgrade(PlayerStats& stats, std::string_view effect, fl
   }
   if (effect == "lifesteal_add") {
     stats.lifesteal += value;
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "lifesteal_heal") {
+    // Vampiric Heart: each lifesteal proc heals 2 instead of 1.
+    stats.lifestealHeal = static_cast<int>(value);
     return {true, 0.0F, 0.0F};
   }
   if (effect == "shield_add") {
@@ -238,17 +244,11 @@ void Game::advance(float frameDt, const FrameInput& input) {
     if (input.choose1 && n >= 1) chooseUpgrade(0);
     else if (input.choose2 && n >= 2) chooseUpgrade(1);
     else if (input.choose3 && n >= 3) chooseUpgrade(2);
-    else if (input.choose4) {
-      if (n >= 4) {
-        chooseUpgrade(3);
-      } else {
-        reroll(); // with only three cards, key 4 is the free reroll
-      }
-    } else if (input.choose5 && n >= 5) {
-      chooseUpgrade(4);
-    }
+    else if (input.choose4 && n >= 4) chooseUpgrade(3);
+    else if (input.choose5 && n >= 5) chooseUpgrade(4);
+    // R is *always* the reroll key on level-up (even with 4+ cards).
     if (input.restart && state_ == RunState::LevelUp) {
-      reroll(); // R key rerolls the current choices
+      reroll();
     }
   }
 
@@ -428,7 +428,9 @@ void Game::updateEnemies() {
       const float ox = t.x - ot.x;
       const float oy = t.y - ot.y;
       const float d2 = ox * ox + oy * oy;
-      const float minDist = (r.r + orr.r) * 0.9F;
+      // Enemies get extra clearance from the player character so they hover
+      // just outside it instead of piling flush on top of the player.
+      const float minDist = (r.r + orr.r) * 0.9F + (other == player_ ? 0.35F : 0.0F);
       if (d2 < minDist * minDist && d2 > 0.0001F) {
         const float d = std::sqrt(d2);
         sepX += (ox / d) * (minDist - d);
@@ -445,6 +447,18 @@ void Game::updateEnemies() {
 
     v.x = dx * effSpeed + sepX * 12.0F;
     v.y = dy * effSpeed + sepY * 12.0F;
+
+    // Cap total speed: separation between tightly-packed enemies (the player
+    // itself is a hash neighbour too) can otherwise fling an enemy at many
+    // times its base speed — the "enemy suddenly accelerates into the player"
+    // behaviour. Base speed is ~2, so 2.5x still allows fast trait bursts.
+    const float maxSpeed = std::max(en.speed * 2.5F, 4.0F);
+    const float sp2 = v.x * v.x + v.y * v.y;
+    if (sp2 > maxSpeed * maxSpeed) {
+      const float inv = maxSpeed / std::sqrt(sp2);
+      v.x *= inv;
+      v.y *= inv;
+    }
     t.x += v.x / 60.0F;
     t.y += v.y / 60.0F;
 
@@ -936,6 +950,29 @@ void Game::chainBolt(float x, float y, float dmg) {
   }
 }
 
+// Chance-based lifesteal: a damaging hit with lifesteal L has L% chance to
+// heal 1 HP. L >= 100 guarantees the first point and rolls the excess
+// (L - 100)% for a second point. The Vampiric Heart unique heals 2 per proc.
+void Game::tryLifesteal() {
+  if (stats_.lifesteal <= 0.0F) return;
+  if (player_ == entt::null || !registry_.valid(player_)) return;
+  auto& hp = registry_.get<Health>(player_);
+  if (hp.hp >= hp.max) return;
+  std::uniform_real_distribution<float> unit(0.0F, 100.0F);
+  const float L = stats_.lifesteal;
+  const float heal = stats_.lifestealHeal >= 2 ? 2.0F : 1.0F;
+  int procs = 0;
+  if (L >= 100.0F) {
+    procs = 1;
+    if (unit(rng_) < (L - 100.0F)) ++procs;
+  } else if (unit(rng_) < L) {
+    procs = 1;
+  }
+  if (procs > 0) {
+    hp.hp = std::min(hp.max, hp.hp + heal * static_cast<float>(procs));
+  }
+}
+
 void Game::updateProjectiles() {
   auto view = registry_.view<Transform, Velocity, Projectile, Radius>();
   for (const auto e : view) {
@@ -994,14 +1031,11 @@ void Game::updateProjectiles() {
       const float hitR = r.r + er.r;
       if (dx * dx + dy * dy > hitR * hitR) return;
 
-      // Damage, then lifesteal off the damage actually dealt.
+      // Damage, then roll chance-based lifesteal.
       const float hpBefore = eh->hp;
       applyEnemyDamage(enemy, pr.damage);
       const float dealt = hpBefore - eh->hp;
-      if (dealt > 0.0F && stats_.lifesteal > 0.0F && player_ != entt::null) {
-        auto& hp = registry_.get<Health>(player_);
-        hp.hp = std::min(hp.max, hp.hp + dealt * stats_.lifesteal);
-      }
+      if (dealt > 0.0F) tryLifesteal();
 
       // Knockback on hit.
       if (pr.strength > 0.0F && player_ != entt::null) {
@@ -1102,10 +1136,7 @@ void Game::updateOrbitBlades() {
       const float hpBefore = eh->hp;
       applyEnemyDamage(en, damage);
       const float dealt = hpBefore - eh->hp;
-      if (dealt > 0.0F && stats_.lifesteal > 0.0F && player_ != entt::null) {
-        auto& hp = registry_.get<Health>(player_);
-        hp.hp = std::min(hp.max, hp.hp + dealt * stats_.lifesteal);
-      }
+      if (dealt > 0.0F) tryLifesteal();
       spawnParticles(et.x, et.y, {0.85F, 0.9F, 1.0F, 1.0F}, 2, 2.0F);
     }
   }
@@ -1253,10 +1284,7 @@ void Game::updateBoomerangProjectiles() {
       const float hpBefore = eh->hp;
       applyEnemyDamage(enemy, bp.damage);
       const float dealt = hpBefore - eh->hp;
-      if (dealt > 0.0F && stats_.lifesteal > 0.0F && player_ != entt::null) {
-        auto& hp = registry_.get<Health>(player_);
-        hp.hp = std::min(hp.max, hp.hp + dealt * stats_.lifesteal);
-      }
+      if (dealt > 0.0F) tryLifesteal();
 
       spawnParticles(et.x, et.y, {0.6F, 0.9F, 1.0F, 1.0F}, 3, 3.0F);
       --bp.pierce;
@@ -1315,10 +1343,7 @@ void Game::updateBounceProjectiles() {
       const float hpBefore = eh->hp;
       applyEnemyDamage(enemy, scaledDamage);
       const float dealt = hpBefore - eh->hp;
-      if (dealt > 0.0F && stats_.lifesteal > 0.0F && player_ != entt::null) {
-        auto& hp = registry_.get<Health>(player_);
-        hp.hp = std::min(hp.max, hp.hp + dealt * stats_.lifesteal);
-      }
+      if (dealt > 0.0F) tryLifesteal();
 
       // Find next bounce target
       bp.bounceCount++;
@@ -1403,10 +1428,7 @@ void Game::updateBeamEffects() {
       const float hpBefore = eh->hp;
       applyEnemyDamage(en, be.damage * stats_.damageMul / 60.0F); // per-tick damage with scaling
       const float dealt = hpBefore - eh->hp;
-      if (dealt > 0.0F && stats_.lifesteal > 0.0F && player_ != entt::null) {
-        auto& hp = registry_.get<Health>(player_);
-        hp.hp = std::min(hp.max, hp.hp + dealt * stats_.lifesteal);
-      }
+      if (dealt > 0.0F) tryLifesteal();
       spawnParticles(et.x, et.y, {1.0F, 1.0F, 0.75F, 1.0F}, 2, 2.0F);
     }
   }
@@ -1460,10 +1482,7 @@ void Game::updateZoneEffects() {
           const float hpBefore = eh->hp;
           applyEnemyDamage(en, dmg);
           const float dealt = hpBefore - eh->hp;
-          if (dealt > 0.0F && stats_.lifesteal > 0.0F && player_ != entt::null) {
-            auto& hp = registry_.get<Health>(player_);
-            hp.hp = std::min(hp.max, hp.hp + dealt * stats_.lifesteal);
-          }
+          if (dealt > 0.0F) tryLifesteal();
           spawnParticles(et.x, et.y, {1.0F, 0.4F, 0.15F, 1.0F}, 2, 2.0F);
         }
       }
@@ -1516,10 +1535,7 @@ void Game::updateChainLightning() {
       const float hpBefore = eh->hp;
       applyEnemyDamage(nextTarget, damage);
       const float dealt = hpBefore - eh->hp;
-      if (dealt > 0.0F && stats_.lifesteal > 0.0F && player_ != entt::null) {
-        auto& hp = registry_.get<Health>(player_);
-        hp.hp = std::min(hp.max, hp.hp + dealt * stats_.lifesteal);
-      }
+      if (dealt > 0.0F) tryLifesteal();
 
       const auto& targetT = registry_.get<Transform>(nextTarget);
       spawnParticles(targetT.x, targetT.y, {0.55F, 1.0F, 1.0F, 1.0F}, 8, 4.0F);
@@ -1577,10 +1593,7 @@ void Game::updateNovaRing() {
           const float hpBefore = eh->hp;
           applyEnemyDamage(en, nr.damagePerTick * stats_.damageMul);
           const float dealt = hpBefore - eh->hp;
-          if (dealt > 0.0F && stats_.lifesteal > 0.0F && player_ != entt::null) {
-            auto& hp = registry_.get<Health>(player_);
-            hp.hp = std::min(hp.max, hp.hp + dealt * stats_.lifesteal);
-          }
+          if (dealt > 0.0F) tryLifesteal();
           spawnParticles(et.x, et.y, {0.5F, 0.3F, 1.0F, 1.0F}, 4, 3.0F);
         }
       }
@@ -1679,90 +1692,92 @@ void Game::spawnWave() {
   if (content_.enemies.empty()) return;
   if (registry_.view<Enemy>().size() >= kMaxEnemies) return;
 
+  std::uniform_real_distribution<float> unit(0.0F, 1.0F);
+
+  // Difficulty scalars used by both the regular spawn and horde bursts:
+  // HP scales steeper so later waves threaten the leveled arsenal, move speed
+  // drifts up so enemies keep pace with a leveled player.
+  const float hpScale = 1.0F + simTime_ / 70.0F;
+  const float speedScale = std::min(1.35F, 1.0F + simTime_ / 600.0F);
+
+  // Weighted pick among unlocked enemy types (regular spawn + horde bursts).
+  auto pickDef = [&]() -> int {
+    float totalWeight = 0.0F;
+    for (const auto& def : content_.enemies) {
+      if (simTime_ >= def.unlockAt) {
+        totalWeight += def.weight;
+      }
+    }
+    if (totalWeight <= 0.0F) return -1;
+    float roll = unit(rng_) * totalWeight;
+    for (std::size_t i = 0; i < content_.enemies.size(); ++i) {
+      const auto& candidate = content_.enemies[i];
+      if (simTime_ < candidate.unlockAt) continue;
+      roll -= candidate.weight;
+      if (roll <= 0.0F) return static_cast<int>(i);
+    }
+    return -1;
+  };
+
+  // Periodic horde bursts tick every frame (not per normal spawn) so their
+  // cadence stays a flat ~40-50s. A full ring of enemies closes in from every
+  // side — this is what makes it a horde game rather than a trickle shooter.
+  if (player_ != entt::null && registry_.valid(player_)) {
+    hordeTimer_ -= 1.0F / 60.0F;
+    if (hordeTimer_ <= 0.0F) {
+      hordeTimer_ = 40.0F + unit(rng_) * 10.0F;
+      const int hordeDef = pickDef();
+      if (hordeDef >= 0) {
+        const auto& hpt = registry_.get<Transform>(player_);
+        const int hordeSize = std::min(24, 10 + static_cast<int>(simTime_ / 30.0F));
+        for (int m = 0; m < hordeSize; ++m) {
+          const float angle =
+              (static_cast<float>(m) / static_cast<float>(hordeSize)) * 2.0F * kPi +
+              (unit(rng_) - 0.5F) * 0.4F;
+          PendingSpawn pending{};
+          pending.x = hpt.x + std::cos(angle) * kSpawnDist;
+          pending.y = hpt.y + std::sin(angle) * kSpawnDist;
+          pending.t = kSpawnTelegraph;
+          pending.def = hordeDef;
+          pending.hpMul = std::max(1.0F, hpScale);
+          pending.touchMul = 1.0F;
+          pending.speedMul = speedScale;
+          pending.xpMul = 1.0F;
+          pending.traits = TraitNone;
+          pending.tier = 0;
+          pending_.push_back(pending);
+        }
+      }
+    }
+  }
+
   spawnTimer_ -= 1.0F / 60.0F;
   if (spawnTimer_ > 0.0F) return;
 
-  // Two-phase ramp: gentle through the first minute, aggressive afterwards.
-  if (simTime_ < 45.0F) {
-    spawnTimer_ = 1.4F - simTime_ * 0.004F;
+  // Difficulty ramp: comfortable start, then spawns accelerate hard so the
+  // screen fills with hordes (floor ~0.12s between spawns).
+  if (simTime_ < 30.0F) {
+    spawnTimer_ = 1.2F - simTime_ * 0.005F;
+  } else if (simTime_ < 90.0F) {
+    spawnTimer_ = std::max(0.45F, 1.05F - (simTime_ - 30.0F) * 0.01F);
   } else {
-    spawnTimer_ = std::max(0.22F, 1.22F - (simTime_ - 45.0F) * 0.02F);
+    spawnTimer_ = std::max(0.12F, 0.45F - (simTime_ - 90.0F) * 0.004F);
   }
 
-  // Weighted pick among unlocked enemy types.
-  float totalWeight = 0.0F;
-  for (const auto& def : content_.enemies) {
-    if (simTime_ >= def.unlockAt) {
-      totalWeight += def.weight;
-    }
-  }
-  if (totalWeight <= 0.0F) return;
-
-  std::uniform_real_distribution<float> unit(0.0F, 1.0F);
-  float roll = unit(rng_) * totalWeight;
-  int defIndex = -1;
-  for (std::size_t i = 0; i < content_.enemies.size(); ++i) {
-    const auto& candidate = content_.enemies[i];
-    if (simTime_ < candidate.unlockAt) continue;
-    roll -= candidate.weight;
-    if (roll <= 0.0F) {
-      defIndex = static_cast<int>(i);
-      break;
-    }
-  }
+  const int defIndex = pickDef();
   if (defIndex < 0) return;
 
   if (player_ == entt::null || !registry_.valid(player_)) return;
   const auto& pt = registry_.get<Transform>(player_);
 
-  // Gradual HP scaling (ramps from ~1 minute onward).
-  const float hpScale = 1.0F + simTime_ / 90.0F;
-
-  // Elite / champion rolls. Trait count grows with time (1 + t/90, max 4).
-  bool elite = false;
-  bool champion = false;
-  if (simTime_ >= 60.0F && unit(rng_) < 0.05F) elite = true;
-  if (simTime_ >= 150.0F && unit(rng_) < 0.02F) champion = true;
-  if (champion) elite = true;
-
-  float hpMul = hpScale; (void)hpMul;
-  float touchMul = 1.0F; (void)touchMul;
-  float speedMul = 1.0F; (void)speedMul;
-  float xpMul = 1.0F; (void)xpMul;
-  std::uint32_t traits = TraitNone; (void)traits;
-  std::uint8_t tier = 0; (void)tier;
-  if (elite) {
-    tier = champion ? 2 : 1;
-    hpMul *= champion ? kChampionHpMul : kEliteHpMul;
-    touchMul = champion ? 2.0F : 1.5F;
-    xpMul = champion ? 5.0F : 3.0F;
-    const int traitCount =
-        std::min(4, 1 + static_cast<int>(simTime_ / 90.0F)) + (champion ? 1 : 0);
-    std::array<bool, PickCount> used{};
-    for (int k = 0; k < traitCount; ++k) {
-      int pick = static_cast<int>(unit(rng_) * static_cast<float>(PickCount));
-      int guard = static_cast<int>(PickCount);
-      while (guard-- > 0 && used[static_cast<std::size_t>(pick)]) {
-        pick = (pick + 1) % static_cast<int>(PickCount);
-      }
-      used[static_cast<std::size_t>(pick)] = true;
-      switch (pick) {
-        case PickFast: speedMul *= 1.7F; break;
-        case PickArmored: hpMul *= 2.5F; touchMul *= 1.3F; break;
-        case PickRegenerating: traits |= TraitRegenerating; break;
-        case PickExplosive: traits |= TraitExplosive; break;
-        case PickVenomous: traits |= TraitVenomous; break;
-        case PickVampiric: traits |= TraitVampiric; break;
-        case PickShielded: traits |= TraitShielded; break;
-        default: break;
-      }
-    }
+  // Pack spawning grows into hordes: every minute adds another chance to
+  // include an extra member, so late runs face clusters instead of singles.
+  int packSize = 1;
+  const int extraRolls = std::min(8, 1 + static_cast<int>(simTime_ / 60.0F));
+  for (int k = 0; k < extraRolls; ++k) {
+    if (unit(rng_) < 0.65F) ++packSize;
   }
-
-  // Pack spawning: after ~90s, groups of 2-3 enemies arrive together.
-  const int packSize = (simTime_ >= 90.0F && unit(rng_) < 0.40F)
-                       ? static_cast<int>(2.0F + unit(rng_) * 1.5F)
-                       : 1;
+  packSize = std::min(9, packSize);
 
   // Cluster center: a random angle at spawn distance. Subsequent pack
   // members spawn close to this center so enemies approach together.
@@ -1776,23 +1791,25 @@ void Game::spawnWave() {
     const float y = pt.y + std::sin(angle) * kSpawnDist;
 
     // Per-member elite/champion rolls (each enemy rolls independently).
-    bool memberElite = false;
-    bool memberChampion = false;
-    if (simTime_ >= 60.0F && unit(rng_) < 0.05F) memberElite = true;
-    if (simTime_ >= 150.0F && unit(rng_) < 0.02F) memberChampion = true;
+    // Elites from 45s, champions from 120s; chances creep up with time.
+    const float eliteChance = std::min(0.15F, 0.05F + simTime_ * 0.0005F);
+    const float champChance = std::min(0.05F, 0.015F + simTime_ * 0.00025F);
+    bool memberElite = simTime_ >= 45.0F && unit(rng_) < eliteChance;
+    bool memberChampion = simTime_ >= 120.0F && unit(rng_) < champChance;
     if (memberChampion) memberElite = true;
 
     float mHpMul = hpScale;
     float mTouchMul = 1.0F;
-    float mSpeedMul = 1.0F;
+    float mSpeedMul = speedScale;
     float mXpMul = 1.0F;
     std::uint32_t mTraits = TraitNone;
     std::uint8_t mTier = 0;
     if (memberElite) {
       mTier = memberChampion ? 2 : 1;
       mHpMul *= memberChampion ? kChampionHpMul : kEliteHpMul;
-      mTouchMul = memberChampion ? 2.0F : 1.5F;
+      mTouchMul = memberChampion ? 2.5F : 1.5F;
       mXpMul = memberChampion ? 5.0F : 3.0F;
+      if (memberChampion) mSpeedMul *= 1.3F; // champions press the player hard
       const int traitCount =
           std::min(4, 1 + static_cast<int>(simTime_ / 90.0F)) + (memberChampion ? 1 : 0);
       std::array<bool, PickCount> used{};
@@ -1847,7 +1864,9 @@ void Game::spawnEnemy(const PendingSpawn& p) {
   const auto& def = content_.enemies[static_cast<std::size_t>(p.def)];
   const bool elite = p.tier > 0;
   const float hp = def.hp * p.hpMul;
-  const float radius = def.radius * (elite ? 1.35F : 1.0F);
+  // Champions are noticeably larger than elites (tier 2 vs tier 1).
+  const float radius = def.radius *
+                       (p.tier >= 2 ? 1.6F : (p.tier == 1 ? 1.35F : 1.0F));
 
   const auto e = registry_.create();
   registry_.emplace<Transform>(e, p.x, p.y, p.x, p.y);
@@ -2119,28 +2138,26 @@ void Game::syncOrbitBlades(int slot) {
 
   const int desired = std::max(1, w.projectiles + stats_.projAdd);
 
-  // Count blades already owned by this slot and remember the last angle so new
-  // blades slot into the rotation without snapping existing ones.
-  int existing = 0;
-  float lastAngle = -1.0F;
+  // Collect this slot's blades, remembering the first blade's angle as the
+  // rotation phase so the ring keeps its orientation when re-laid out.
+  std::vector<entt::entity> blades;
+  float phase = 0.0F;
+  bool havePhase = false;
   for (const auto e : registry_.view<OrbitBlade>()) {
     auto& ob = registry_.get<OrbitBlade>(e);
     if (ob.weaponIndex == slot) {
-      ++existing;
-      lastAngle = ob.angle;
+      if (!havePhase) {
+        phase = ob.angle;
+        havePhase = true;
+      }
+      blades.push_back(e);
     }
   }
-  if (existing >= desired) return;
 
-  const auto& pt = registry_.get<Transform>(player_);
-  while (existing < desired) {
-    const float angle = lastAngle < 0.0F
-        ? static_cast<float>(existing) * 2.0F * kPi / static_cast<float>(desired)
-        : lastAngle + 2.0F * kPi / static_cast<float>(desired);
-    const float bx = pt.x + std::cos(angle) * w.orbitRadius;
-    const float by = pt.y + std::sin(angle) * w.orbitRadius;
+  // Grow (or shrink) the ring to the desired blade count.
+  while (static_cast<int>(blades.size()) < desired) {
     const auto blade = registry_.create();
-    registry_.emplace<Transform>(blade, bx, by, bx, by);
+    registry_.emplace<Transform>(blade, 0.0F, 0.0F, 0.0F, 0.0F);
     registry_.emplace<Velocity>(blade);
     registry_.emplace<Radius>(blade, 0.18F);
     Sprite s{};
@@ -2151,13 +2168,34 @@ void Game::syncOrbitBlades(int slot) {
     ob.damage = w.damage;
     ob.radius = w.orbitRadius;
     ob.speed = w.orbitSpeed;
-    ob.angle = angle;
+    ob.angle = 0.0F;
     ob.pierce = w.pierce;
     ob.color = w.color;
     ob.weaponIndex = slot;
     registry_.emplace<OrbitBlade>(blade, ob);
-    lastAngle = angle;
-    ++existing;
+    blades.push_back(blade);
+  }
+  while (static_cast<int>(blades.size()) > desired) {
+    destroyQueue_.push_back(blades.back());
+    blades.pop_back();
+  }
+
+  // Re-space ALL blades evenly around the circle so a newly added dagger
+  // cannot bunch up next to the previous one. The ring phase is snapped to
+  // the nearest even multiple of `step` so one blade always sits exactly on
+  // the +X axis after a re-sync (predictable ring, plain rotation continues).
+  const float step = 2.0F * kPi / static_cast<float>(desired);
+  phase = std::round(phase / step) * step;
+  const auto& pt = registry_.get<Transform>(player_);
+  for (int i = 0; i < desired; ++i) {
+    const auto e = blades[static_cast<std::size_t>(i)];
+    auto& ob = registry_.get<OrbitBlade>(e);
+    ob.angle = phase + static_cast<float>(i) * step;
+    auto& t = registry_.get<Transform>(e);
+    t.px = pt.x;
+    t.py = pt.y;
+    t.x = pt.x + std::cos(ob.angle) * w.orbitRadius;
+    t.y = pt.y + std::sin(ob.angle) * w.orbitRadius;
   }
 }
 
@@ -2327,6 +2365,34 @@ std::size_t Game::debugEnemyCount() const {
   return registry_.view<Enemy>().size();
 }
 
+std::vector<float> Game::testEnemySpeeds() const {
+  std::vector<float> out;
+  auto view = registry_.view<Transform, Velocity, Enemy>();
+  out.reserve(enemyCount());
+  for (const auto e : view) {
+    const auto& v = view.get<Velocity>(e);
+    out.push_back(std::sqrt(v.x * v.x + v.y * v.y));
+  }
+  return out;
+}
+
+std::vector<float> Game::testOrbitBladeGaps(int slot) const {
+  std::vector<float> angles;
+  for (const auto e : registry_.view<OrbitBlade>()) {
+    const auto& ob = registry_.get<OrbitBlade>(e);
+    if (ob.weaponIndex == slot) angles.push_back(ob.angle);
+  }
+  std::sort(angles.begin(), angles.end());
+  std::vector<float> gaps;
+  if (angles.size() < 2) return gaps;
+  for (std::size_t i = 0; i + 1 < angles.size(); ++i) {
+    gaps.push_back(angles[i + 1] - angles[i]);
+  }
+  // Wrap-around gap between the last and first blade.
+  gaps.push_back(angles.front() + 2.0F * kPi - angles.back());
+  return gaps;
+}
+
 
 std::vector<std::string> wrapWords(std::string_view str, std::size_t maxChars) {
   std::vector<std::string> lines;
@@ -2365,6 +2431,112 @@ static void renderWrappedText(core::render::Batcher& b, float x, float y,
   for (const auto& line : wrapWords(str, maxChars)) {
     b.text(x, y, scale, c, line);
     y += lineHeight;
+  }
+}
+
+// Human-readable labels for attack patterns (ASCII only - font is 32..96).
+static const char* attackTypeName(AttackType t) {
+  switch (t) {
+    case AttackType::Projectile: return "shot";
+    case AttackType::Orbit: return "orbit";
+    case AttackType::Cone: return "cone";
+    case AttackType::Bomb: return "bomb";
+    case AttackType::Boomerang: return "boomerang";
+    case AttackType::Bounce: return "bounce";
+    case AttackType::Beam: return "beam";
+    case AttackType::Sweep: return "sweep";
+    case AttackType::Zone: return "zone";
+    case AttackType::Chain: return "chain";
+    case AttackType::Nova: return "nova";
+  }
+  return "?";
+}
+
+static std::string fit1(float v) {
+  char buf[32];
+  std::snprintf(buf, sizeof(buf), "%.1f", static_cast<double>(v));
+  return buf;
+}
+
+// Character sheet shown when the run is paused (ESC).
+void Game::renderPlayerStats(core::render::Batcher& b, float px, float py) {
+  const core::render::Color gold{1.0F, 0.85F, 0.4F, 1.0F};
+  const core::render::Color dim{0.72F, 0.72F, 0.82F, 1.0F};
+  const core::render::Color teal{0.4F, 0.9F, 0.9F, 1.0F};
+
+  std::vector<std::string> rows;
+  rows.push_back("LEVEL " + std::to_string(level_) + "      XP " +
+                 std::to_string(static_cast<int>(xp_)) + "/" +
+                 std::to_string(static_cast<int>(xpNext_)));
+  rows.push_back("TIME " + std::to_string(static_cast<int>(simTime_)) + "S     KILLS " +
+                 std::to_string(kills_));
+  float hpNow = 0.0F;
+  float hpMax = stats_.maxHp;
+  if (player_ != entt::null && registry_.valid(player_)) {
+    const auto& h = registry_.get<Health>(player_);
+    hpNow = h.hp;
+    hpMax = h.max;
+  }
+  rows.push_back("HP " + std::to_string(static_cast<int>(hpNow)) + "/" +
+                 std::to_string(static_cast<int>(hpMax)) + "    REGEN " +
+                 fit1(stats_.regen) + "/S");
+  rows.push_back("SHIELD " + std::to_string(static_cast<int>(shield_)) + "/" +
+                 std::to_string(static_cast<int>(stats_.shieldMax)) + "  DEFENSE " +
+                 std::to_string(static_cast<int>(stats_.defense)));
+  rows.push_back("DAMAGE X" + fit1(stats_.damageMul) + "    COOLDOWN X" +
+                 fit1(stats_.cooldownMul));
+  std::string speedRow = "SPEED X" + fit1(stats_.speedMul) + "     PICKUP X" +
+                         fit1(stats_.pickupMul);
+  if (stats_.lifesteal > 0.0F) {
+    speedRow += "   LIFE " + std::to_string(static_cast<int>(stats_.lifesteal)) + "%";
+    if (stats_.lifestealHeal >= 2) speedRow += " X2";
+  }
+  rows.push_back(speedRow);
+  rows.push_back("PROJECTILES +" + std::to_string(stats_.projAdd) + "   PIERCE +" +
+                 std::to_string(stats_.pierceAdd));
+  if (stats_.extraChoice > 0) {
+    rows.push_back("+1 CARD PER LEVEL-UP");
+  }
+  if (stats_.rerollCharges > 1) {
+    rows.push_back("+1 REROLL PER LEVEL-UP");
+  }
+
+  rows.push_back(""); // spacer
+  rows.push_back("WEAPONS " + std::to_string(weaponCount_) + "/" +
+                 std::to_string(kMaxWeapons) + ":");
+  for (int i = 0; i < weaponCount_; ++i) {
+    const auto& w = weapons_[i];
+    const auto& def = content_.weapons[static_cast<std::size_t>(w.def)];
+    rows.push_back(def.name + " [" + attackTypeName(w.attackType) + "] D" +
+                   std::to_string(static_cast<int>(w.damage)) + " N" +
+                   std::to_string(w.projectiles) + " CD" + fit1(w.cooldown) + "S");
+  }
+
+  const float lineH = 17.0F;
+  const float padX = 24.0F;
+  const float panelW = 560.0F;
+  const float panelX = px * 0.5F - panelW * 0.5F;
+  const float panelY = 40.0F;
+
+  // Measure the content height first so the backdrop fits, then draw text.
+  float yEnd = panelY + 52.0F;
+  for (const auto& r : rows) {
+    yEnd += r.empty() ? 10.0F : lineH;
+  }
+  const float panelH = std::min((yEnd - panelY) + 22.0F, py - 70.0F);
+  b.rectTopLeft(panelX, panelY, panelW, panelH, core::render::Color{0.08F, 0.07F, 0.12F, 0.92F});
+  b.rectTopLeft(panelX, panelY, panelW, 4.0F, teal);
+  const std::string title = "PLAYER - PAUSED  [ESC] RESUME";
+  b.text(panelX + padX, panelY + 14.0F, 3.0F, gold, title);
+
+  float y = panelY + 52.0F;
+  for (const auto& r : rows) {
+    if (r.empty()) {
+      y += 10.0F;
+      continue;
+    }
+    b.text(panelX + padX, y, 2.0F, dim, r);
+    y += lineH;
   }
 }
 
@@ -2572,26 +2744,28 @@ void Game::render(core::render::Batcher& b, float alpha) {
     }
   }
 
-  // Beams: glow + bright core sampled along start->end.
+  // Beams: tight bright core + faint glow sampled densely along start->end.
   {
     auto view = registry_.view<BeamEffect>();
     for (const auto e : view) {
       const auto& be = view.get<BeamEffect>(e);
       const float fade = be.duration > 0.001F ? be.timer / be.duration : 0.0F;
       Color glow = be.color;
-      glow.a = 0.30F * fade;
+      glow.a = 0.16F * fade;
       Color core = be.color;
-      core.a = 0.90F * fade;
+      core.a = 1.0F * fade;
       const float dx = be.endX - be.startX;
       const float dy = be.endY - be.startY;
       const float len = std::sqrt(dx * dx + dy * dy);
       if (len < 0.001F) continue;
-      const int steps = std::max(1, static_cast<int>(len / std::max(0.08F, be.width * 0.35F)));
+      // Dense sampling (0.15x width per step) keeps the beam a solid line
+      // instead of a string of soft blobs.
+      const int steps = std::max(1, static_cast<int>(len / std::max(0.03F, be.width * 0.15F)));
       for (int s = 0; s <= steps; ++s) {
         const float fr = static_cast<float>(s) / static_cast<float>(steps);
         const float sx = be.startX + dx * fr;
         const float sy = be.startY + dy * fr;
-        b.circle(sx, sy, be.width * 0.60F, glow);
+        b.circle(sx, sy, be.width * 0.52F, glow);
         b.circle(sx, sy, be.width * 0.30F, core);
       }
     }
@@ -2822,7 +2996,7 @@ void Game::render(core::render::Batcher& b, float alpha) {
           b.text(x + 16.0F, y + 52.0F, 2.3F, white, def.name);
           renderWrappedText(b, x + 16.0F, y + 80.0F, 1.7F,
                             Color{0.85F, 0.85F, 0.9F, 1.0F}, def.desc,
-                            cardW - 32.0F, 10.0F);
+                            cardW - 32.0F, 14.0F);
           const std::string stacks =
               "STACKS " + std::to_string(upgradeStacks(static_cast<std::size_t>(choice.index))) +
               "/" + std::to_string(def.maxStacks);
@@ -2832,7 +3006,7 @@ void Game::render(core::render::Batcher& b, float alpha) {
           b.text(x + 16.0F, y + 52.0F, 2.3F, white, def.name);
           renderWrappedText(b, x + 16.0F, y + 80.0F, 1.7F,
                             Color{0.85F, 0.85F, 0.9F, 1.0F}, def.desc,
-                            cardW - 32.0F, 10.0F);
+                            cardW - 32.0F, 14.0F);
           const std::string tag = def.prereqs.empty() ? "NEW WEAPON"
                                                        : "EVOLUTION! (A+B)";
           b.text(x + 16.0F, y + cardH - 30.0F, 1.5F, teal, tag);
@@ -2841,19 +3015,18 @@ void Game::render(core::render::Batcher& b, float alpha) {
       }
     }
 
-    // Reroll hint (only while key 4 is not needed to pick a 4th card).
-    if (choices_.size() <= 3 && rerollsUsed_ < 1 + stats_.rerollCharges) {
-      const std::string hint = "[4] REROLL (free once per level)";
+    // Reroll hint (R is always the reroll key on level-up).
+    if (rerollsUsed_ < 1 + stats_.rerollCharges) {
+      const std::string hint = "[R] REROLL (free once per level)";
       b.text(px * 0.5F - b.textWidth(2.0F, hint) * 0.5F, py * 0.66F, 2.0F,
              Color{0.7F, 0.7F, 0.8F, 1.0F}, hint);
     }
   }
 
-  // Pause overlay.
+  // Pause overlay: ESC pauses and lets you read your character sheet.
   if (state_ == RunState::Paused) {
     b.rectTopLeft(0.0F, 0.0F, px, py, Color{0.0F, 0.0F, 0.0F, 0.5F});
-    const std::string pauseText = "PAUSED - ESC TO RESUME";
-    b.text(px * 0.5F - b.textWidth(4.0F, pauseText) * 0.5F, py * 0.45F, 4.0F, white, pauseText);
+    renderPlayerStats(b, px, py);
   }
 
   // Game over overlay.

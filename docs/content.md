@@ -94,12 +94,12 @@ python3 tools/gendocs.py
 | Gale Steps | gale | speed_mul | 0.15 | 2 |  |  | +15% move speed |
 | Heartwood | heartwood | max_hp_add | 70 | 1 |  |  | +70 max HP and heal 70 |
 | Surge | surge | cooldown_mul | -0.25 | 1 |  |  | -25% attack cooldown |
-| Stony Pledge | pledge | defense_add | 10 | 4 |  |  | +10 defense (blocks 2 flat + ~3% scaling) |
+| Stony Pledge | pledge | defense_add | 10 | 4 |  |  | +10 defense |
 | Iron Conviction | conviction | defense_add | 25 | 2 |  |  | +25 defense |
 | Minor Ward | ward_small | shield_add | 15 | 3 |  |  | +15 regenerating shield |
 | Runic Ward | ward_great | shield_add | 30 | 2 |  |  | +30 regenerating shield |
-| Gilded Fangs | leech_gold | lifesteal_add | 0.01 | 3 |  |  | +2% lifesteal |
-| Soulfeed | leech_soul | lifesteal_add | 0.02 | 2 |  |  | +4% lifesteal |
+| Gilded Fangs | leech_gold | lifesteal_add | 10 | 3 |  |  | +10% lifesteal |
+| Soulfeed | leech_soul | lifesteal_add | 15 | 2 |  |  | +15% lifesteal |
 | Wand Focus | w_wand_power | w_damage_add | 8 | 3 | wand |  | Arcane Wand: +8 damage |
 | Wand Channeling | w_wand_speed | w_cd_mul | -0.18 | 2 | wand |  | Arcane Wand: -18% cooldown |
 | Dagger Honing | w_dagger_power | w_damage_add | 5 | 3 | dagger |  | Throwing Dagger: +5 damage each |
@@ -126,18 +126,19 @@ python3 tools/gendocs.py
 | Storm Bolt | u_chain | chain | 1 | 1 |  |  | Every 3rd projectile hit chains lightning to 3 nearby enemies |
 | Blood Price | u_blood_price | blood_price | 1 | 1 |  |  | Every 20 kills detonates a burst around you |
 | Cold Blood | u_ice_blood | ice_blood | 1 | 1 |  |  | Enemies that hit you are slowed for 2s |
+| Vampiric Heart | u_vampiric_heart | lifesteal_heal | 2 | 1 |  |  | Lifesteal heals 2 HP per proc instead of 1 |
 
 ### Milestones (every 5th level)
 
 | Name | ID | Effect | Value | Max stacks | Weapon | Level | Description |
 |---|---|---|---|---|---|---|---|
 | Aegis | m5_aegis | shield_add | 45 | 1 |  | 5 | MILESTONE: +45 regenerating shield |
-| Blood Pact | m5_pact | lifesteal_add | 0.06 | 1 |  | 5 | MILESTONE: +6% lifesteal |
+| Blood Pact | m5_pact | lifesteal_add | 15 | 1 |  | 5 | MILESTONE: +15% lifesteal |
 | Tempest | m5_tempest | proj_add | 2 | 1 |  | 5 | MILESTONE: +2 projectiles to every weapon |
 | Stone Mantle | m10_mantle | defense_add | 60 | 1 |  | 10 | MILESTONE: +60 defense |
 | Frenzy | m10_frenzy | cooldown_mul | -0.3 | 1 |  | 10 | MILESTONE: -30% attack cooldown |
 | Reaper's Grasp | m10_grasp | pierce_add | 3 | 1 |  | 10 | MILESTONE: +3 pierce to every weapon |
-| Crimson Crown | m15_crown | lifesteal_add | 0.08 | 1 |  | 15 | MILESTONE: +8% lifesteal |
+| Crimson Crown | m15_crown | lifesteal_add | 20 | 1 |  | 15 | MILESTONE: +20% lifesteal |
 | Titan Heart | m15_titan | max_hp_add | 120 | 1 |  | 15 | MILESTONE: +120 max HP and heal 120 |
 | Overload | m15_overload | damage_mul | 0.6 | 1 |  | 15 | MILESTONE: +60% damage |
 | Void Symbiosis | m20_void | damage_mul | 0.9 | 1 |  | 20 | MILESTONE: +90% damage |
@@ -156,7 +157,7 @@ python3 tools/gendocs.py
 | Transcend | m45_transcend | damage_mul | 3.5 | 1 |  | 45 | MILESTONE: +350% damage |
 | Impervious | m45_impervious | shield_add | 600 | 1 |  | 45 | MILESTONE: +600 regenerating shield |
 
-**Totals:** 78 upgrades (45 normal, 9 unique, 24 milestones).
+**Totals:** 79 upgrades (45 normal, 10 unique, 24 milestones).
 
 
 ---

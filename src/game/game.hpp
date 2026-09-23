@@ -48,8 +48,10 @@ struct PlayerStats {
 
   // Defense: one curve yields both a flat and a percent reduction.
   float defense = 0.0F;
-  // Lifesteal: fraction of weapon damage dealt that heals the player.
+  // Lifesteal: chance-based. L% = L% chance per damaging hit to heal
+  // `lifestealHeal` HP; at L >= 100 the first point is guaranteed.
   float lifesteal = 0.0F;
+  int lifestealHeal = 1; // HP per proc (Vampiric Heart unique raises to 2)
   // Shield: regenerating damage buffer (see rules in game.hpp docs).
   float shieldMax = 0.0F;
 
@@ -139,6 +141,11 @@ public:
   }
   // Test helper: current HP of the first Enemy in the registry (-1 if none).
   [[nodiscard]] float testFirstEnemyHp() const;
+  // Test helper: current speed (velocity magnitude) of every live Enemy.
+  [[nodiscard]] std::vector<float> testEnemySpeeds() const;
+  // Test helper: circular angular gaps (radians) between a slot's orbit
+  // blades, sorted. All gaps equal 2*pi/count when blades are evenly spaced.
+  [[nodiscard]] std::vector<float> testOrbitBladeGaps(int slot) const;
 
   // Debug introspection for tests: how many live entities each attack type has.
   struct DebugCounts {
@@ -298,9 +305,11 @@ private:
   void applyEnemyDamage(entt::entity e, float dmg);
   void killEnemy(entt::entity e);
   void chainBolt(float x, float y, float dmg);
+  void tryLifesteal(); // chance-based heal on a damaging hit
   void explodeBomb(entt::entity bomb, const BombProjectile& bp, float x, float y);
   void hurtPlayer(float amount);
   void spawnParticles(float x, float y, core::render::Color c, int count, float speed);
+  void renderPlayerStats(core::render::Batcher& b, float px, float py);
 
   WeaponSlot weapons_[kMaxWeapons];
   int weaponCount_ = 0;
@@ -320,6 +329,7 @@ private:
   float xpNext_ = 6.0F;
   int kills_ = 0;
   float spawnTimer_ = 0.0F;
+  float hordeTimer_ = 120.0F;  // first horde burst arrives at ~2 minutes
   bool wavesEnabled_ = true; // tests may freeze spawning for determinism
   float iframes_ = 0.0F;
   float moveX_ = 0.0F; // latched input for fixed steps

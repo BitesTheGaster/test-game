@@ -18,6 +18,9 @@ curves. Tables of all content are generated into
   share the same target so the whole arsenal focuses the biggest threat.
 - Killing enemies drops XP gems. Leveling up opens a card choice (see
   [Level-ups](#level-ups)).
+- **Esc** pauses the run and overlays a **character sheet**: level/XP, time,
+  kills, HP/regen, shield/defense, damage/cooldown, speed/pickup/lifesteal and
+  the full list of owned weapons with their numbers.
 - Dying shows the game-over screen; **R** restarts (deterministic seed 1337).
 
 ## The player
@@ -28,7 +31,7 @@ curves. Tables of all content are generated into
 | Regen | Flat HP per second (`regen_add`) |
 | Defense | One stat that mitigates all damage (see below) |
 | Shield | Absorbs damage point-for-point before HP, regenerates out of combat |
-| Lifesteal | Fraction of **actually dealt** damage healed back |
+| Lifesteal | Per-hit chance to heal; see [Lifesteal & healing](#lifesteal--healing) |
 | Move speed | Base × `speedMul` |
 | Damage / cooldown | Global multipliers applying to every weapon |
 | Projectiles / pierce | Additive buffs applied to every weapon |
@@ -61,8 +64,12 @@ large hits.
 ### Lifesteal & healing
 
 - Heal upgrades (`heal`) restore flat HP instantly.
-- Lifesteal heals `dealt × lifesteal` where `dealt` is damage a projectile
-  actually applied (after an enemy's shield absorption), capped at max HP.
+- **Lifesteal is chance-based**: a damaging hit with lifesteal `L` has an
+  `L%` chance to heal **1 HP** (capped at max HP). At `L ≥ 100` the first
+  point is guaranteed and the excess `(L − 100)%` rolls for a **second**
+  point — so 150 lifesteal means 100% for 1 HP and 50% for another.
+- The **Vampiric Heart** unique makes every lifesteal proc heal **2 HP**
+  instead of 1.
 - Regen adds flat HP every fixed tick (0.0556 HP/s per point).
 
 ## Weapons
@@ -125,8 +132,9 @@ Each level-up shows **3 cards, plus** one extra per `extraChoice`
   `rerollCharges` (Second Chance → 2 total).
 - Rerolling rebuilds the whole choice set from scratch (including a fresh
   weapon/unique roll).
-- **Keys:** with 3 cards, `4` is the free reroll; with 4 cards `4` picks card
-  4 and `5` picks card 5 (mirroring 1–3).
+- **Keys:** `1`–`5` pick the matching card. **`R` always rerolls** the
+  level-up choice while free rerolls remain; it does nothing once the budget
+  is spent.
 - The reroll hint is shown under the cards when free rerolls remain.
 
 ### Unique items (one-time, rule-changing)
@@ -145,6 +153,7 @@ once. See [`content.md`](content.md) for the exact list; the rules they bend:
 | Storm Bolt | Every 3rd projectile hit chains lightning to 3 nearby enemies |
 | Blood Price | Every 20 kills detonates a burst around you |
 | Cold Blood | Enemies that hit you are slowed for 2s (45% speed) |
+| Vampiric Heart | Lifesteal procs heal 2 HP instead of 1 |
 
 ### Milestones
 
@@ -171,21 +180,38 @@ relative `weight`, and `color`/`shape`.
   pointing at the spawn for off-screen spawns.
 - Enemy type is picked by **weighted roll among unlocked types** (`simTime >=
   unlockAt`), so the roster rotates in over time.
-- After ~90 s, enemies arrive in **packs of 2–3** at clustered angles,
-  so the player faces groups instead of one-at-a-time trickles.
+- From ~45 s enemies arrive in **clusters** instead of one-at-a-time
+  trickles, and packs grow every minute (up to ~9 enemies per pack).
+- Every ~40–50 s a **horde burst** spawns a full ring of 10–24 enemies from
+  every side at once, with telegraphs ringing the whole screen.
+
+### Enemy separation
+
+- A spatial hash separates enemies from each other **and from the player**.
+  Enemies hold a small buffer around the player character so they hover just
+  outside it instead of piling flush on top of it.
+- After separation, enemy velocities are **clamped** (at most `max(speed·2.5,
+  4.0)` units/s), so a dense huddle can never fling members at absurd speeds
+  toward the player — no vacuum "suction" into the player.
 
 ### Difficulty ramp
 
-Two phase curves on the spawn interval, tuned so the first minute is a
-warm-up and difficulty bites from ~60 s:
+Three phases on the spawn interval, tuned so the first half-minute is a
+warm-up and difficulty bites hard from ~90 s:
 
 ```text
-t < 45 s :  interval = 1.4 − t·0.004        (1.40 s → 1.22 s)
-t ≥ 45 s :  interval = max(0.22, 1.22 − (t−45)·0.02)   (1.22 s → min 0.22 s)
+t < 30 s :  interval = 1.2 − t·0.005         (1.20 s → 1.05 s)
+30–90 s  :  interval = max(0.45, 1.05 − (t−30)·0.01)   (→ 0.45 s)
+t ≥ 90 s :  interval = max(0.12, 0.45 − (t−90)·0.004) (→ min 0.12 s)
 ```
 
-Enemy HP also scales globally: every enemy's HP is multiplied by
-`1 + t/90`, so a 2-minute run has ×2.33 the base HP, a 4-minute run ×3.67.
+- Enemy HP also scales globally: every enemy's HP is multiplied by
+  `1 + t/70`, so a 2-minute run faces ×2.71 the base HP, a 4-minute run
+  ×4.43.
+- Enemy **move speed** drifts up over the run (`×1` → `×1.35` at ~3.5 min)
+  so late waves stay threatening even for a leveled arsenal.
+- Up to **8000 enemies** can be alive at once; the cap protects the frame
+  rate rather than throttling spawns.
 
 ### Elites & champions
 
@@ -193,12 +219,14 @@ From elapsed time `t`:
 
 | Roll | Becomes | Chance | HP | Touch | XP |
 |------|---------|--------|----|-------|----|
-| t ≥ 60 s | Elite | 5% per spawn | ×3.5 | ×1.5 | ×3 |
-| t ≥ 150 s | Champion | 2% per spawn | ×5 | ×2 | ×5 |
+| t ≥ 45 s | Elite | 5% → 15% (creeps up) | ×4 | ×1.5 | ×3 |
+| t ≥ 120 s | Champion | ~2% → 5% (creeps up) | ×7 | ×2.5 | ×5 |
 
-- Elites are visually **tinted toward white** and 1.35× larger, always show a
-  HP bar, and display a **name tag** with their trait list above them.
-- Champions also get a distinctive tag.
+- Champions fight harder than elites: they also move **×1.3 faster** than
+  their base speed and spawn **1.6× larger** (elites are 1.35×).
+- Elites are visually **tinted toward white** and always show their enlarged
+  hitbox, a HP bar, and a **name tag** with their trait list above them.
+- Champions get a distinctive gold-ish tag of their own.
 
 **Trait pool** (compiled in `game.cpp`, `PickTrait`): `fast, armored,
 regenerating, explosive, venomous, vampiric, shielded`. The number of traits
@@ -220,9 +248,9 @@ traits so the player can react.
 ### Contact damage
 
 Hits go through the standard mitigation/shield pipeline, then grant the
-player 0.55 s of contact invulnerability (about long enough to move out).
-Tougher enemies survive hits because the ramp multiplies their HP — nothing
-is one-shotted out of its weight class.
+player 0.30 s of contact invulnerability — enemies connect noticeably more
+often, so positioning matters. Tougher enemies survive hits because the ramp
+multiplies their HP — nothing is one-shotted out of its weight class.
 
 ## Combat helpers
 

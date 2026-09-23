@@ -76,9 +76,10 @@ TEST_CASE("applyUpgrade supports the defense / shield / lifesteal tree") {
   REQUIRE(de.valid);
   REQUIRE(s.defense == Catch::Approx(25.0F));
 
-  const auto ls = game::applyUpgrade(s, "lifesteal_add", 0.04F);
+  // Lifesteal is a per-hit percentage now (150 = 100% for 1 HP + 50% for a 2nd).
+  const auto ls = game::applyUpgrade(s, "lifesteal_add", 150.0F);
   REQUIRE(ls.valid);
-  REQUIRE(s.lifesteal == Catch::Approx(0.04F));
+  REQUIRE(s.lifesteal == Catch::Approx(150.0F));
 
   const auto sh = game::applyUpgrade(s, "shield_add", 60.0F);
   REQUIRE(sh.valid);
@@ -103,6 +104,8 @@ TEST_CASE("applyUpgrade supports unique-item effects") {
   REQUIRE(s.adrenaline == 1);
   REQUIRE(game::applyUpgrade(s, "chain", 1.0F).valid);
   REQUIRE(s.chain == 1);
+  REQUIRE(game::applyUpgrade(s, "lifesteal_heal", 2.0F).valid);
+  REQUIRE(s.lifestealHeal == 2);
 }
 
 TEST_CASE("xpForLevel grows monotonically") {
@@ -239,7 +242,7 @@ TEST_CASE("Reroll refreshes the offered choices once per level-up") {
   REQUIRE(g.upgradeChoices().size() == 3);
 
   game::FrameInput in{};
-  in.choose4 = true; // key 4 is the free reroll with three cards
+  in.restart = true; // R is always the reroll key on level-up
   g.advance(1.0F / 60.0F, in);
   REQUIRE(g.state() == game::RunState::LevelUp); // still choosing
   REQUIRE(g.rerollsUsed() == 1);
@@ -251,6 +254,74 @@ TEST_CASE("Reroll refreshes the offered choices once per level-up") {
   // A third reroll is a no-op (budget exhausted).
   g.advance(1.0F / 60.0F, in);
   REQUIRE(g.rerollsUsed() == 2);
+}
+
+// --- Enemy movement ----------------------------------------------------------
+
+TEST_CASE("Enemy separation speed is clamped (no vacuum darting)") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 13};
+  g.testDisableWaves();
+  // Tight cluster: heavily overlapping enemies get a large separation force
+  // that used to fling them at many times their base speed whenever they
+  // bunched up around the player.
+  const float kOff[][2] = {
+      {-0.10F, -0.10F}, {0.10F, -0.10F}, {0.00F, 0.10F}, {-0.10F, 0.10F},
+      {0.10F, 0.10F},   {0.00F, -0.10F}, {-0.10F, 0.00F}, {0.10F, 0.00F},
+      {-0.10F, -0.05F}, {0.10F, -0.05F}, {-0.10F, 0.05F}, {0.10F, 0.05F}};
+  for (const auto& o : kOff) g.testSpawnEnemyAt(o[0], o[1]);
+
+  float worst = 0.0F;
+  for (int f = 0; f < 120; ++f) {
+    g.advance(1.0F / 60.0F, game::FrameInput{});
+    for (const float s : g.testEnemySpeeds()) {
+      worst = std::max(worst, s);
+    }
+  }
+  // Clamp is max(speed * 2.5, 4.0); test enemies are speed 0 -> 4.0 u/s cap.
+  REQUIRE(worst <= 4.0001F);
+}
+
+TEST_CASE("Orbit daggers stay evenly spaced when projectiles are added") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 13};
+  g.testDisableWaves();
+
+  int daggerIdx = -1;
+  for (std::size_t i = 0; i < content.weapons.size(); ++i) {
+    if (content.weapons[i].id == "dagger") {
+      daggerIdx = static_cast<int>(i);
+      break;
+    }
+  }
+  REQUIRE(daggerIdx >= 0);
+  g.testClearWeapons(); // drop the random starter weapon so dagger is slot 0
+  g.testAddWeapon(daggerIdx);
+  REQUIRE(g.debugCounts().orbitBlades == 3);
+
+  constexpr float kTau = 6.283185307179586F;
+  auto checkEven = [&](int expected) {
+    const auto gaps = g.testOrbitBladeGaps(0);
+    REQUIRE(gaps.size() == static_cast<std::size_t>(expected));
+    const float target = kTau / static_cast<float>(expected);
+    for (const float gap : gaps) {
+      REQUIRE(gap == Catch::Approx(target).margin(0.02F));
+    }
+  };
+
+  checkEven(3);
+
+  // "+1 projectile" Dagger Volley cards must re-space the whole ring instead
+  // of stacking the new dagger onto the previous one.
+  g.testAddWeaponUpgrade(0, "w_proj_add", 1);
+  g.advance(1.0F / 60.0F, game::FrameInput{});
+  REQUIRE(g.debugCounts().orbitBlades == 4);
+  checkEven(4);
+
+  g.testAddWeaponUpgrade(0, "w_proj_add", 1);
+  g.advance(1.0F / 60.0F, game::FrameInput{});
+  REQUIRE(g.debugCounts().orbitBlades == 5);
+  checkEven(5);
 }
 
 // --- Weapon attack types -----------------------------------------------------

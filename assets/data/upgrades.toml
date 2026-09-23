@@ -264,17 +264,17 @@ max_stacks = 2
 [[upgrade]]
 id = "leech_gold"
 name = "Gilded Fangs"
-desc = "+2% lifesteal"
+desc = "+10% lifesteal"
 effect = "lifesteal_add"
-value = 0.01
+value = 10
 max_stacks = 3
 
 [[upgrade]]
 id = "leech_soul"
 name = "Soulfeed"
-desc = "+4% lifesteal"
+desc = "+15% lifesteal"
 effect = "lifesteal_add"
-value = 0.02
+value = 15
 max_stacks = 2
 
 # --- Weapon-focused cards (only appear for owned weapons) ---------------------
@@ -470,6 +470,15 @@ value = 1
 max_stacks = 1
 kind = "unique"
 
+[[upgrade]]
+id = "u_vampiric_heart"
+name = "Vampiric Heart"
+desc = "Lifesteal heals 2 HP per proc instead of 1"
+effect = "lifesteal_heal"
+value = 2
+max_stacks = 1
+kind = "unique"
+
 # --- Milestones (levels 5, 10, 15, ...) --------------------------------------
 
 [[upgrade]]
@@ -485,9 +494,9 @@ level = 5
 [[upgrade]]
 id = "m5_pact"
 name = "Blood Pact"
-desc = "MILESTONE: +6% lifesteal"
+desc = "MILESTONE: +15% lifesteal"
 effect = "lifesteal_add"
-value = 0.06
+value = 15
 max_stacks = 1
 kind = "milestone"
 level = 5
@@ -535,9 +544,9 @@ level = 10
 [[upgrade]]
 id = "m15_crown"
 name = "Crimson Crown"
-desc = "MILESTONE: +8% lifesteal"
+desc = "MILESTONE: +20% lifesteal"
 effect = "lifesteal_add"
-value = 0.08
+value = 20
 max_stacks = 1
 kind = "milestone"
 level = 15
