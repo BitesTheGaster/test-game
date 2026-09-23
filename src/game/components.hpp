@@ -79,6 +79,7 @@ struct OrbitBlade {
   float speed = 2.0F;      // radians per second
   float angle = 0.0F;      // current angle
   int pierce = 0;
+  int weaponIndex = -1;    // owning weapon slot (-1 = orphaned)
   core::render::Color color{1.0F, 1.0F, 1.0F, 1.0F};
 };
 

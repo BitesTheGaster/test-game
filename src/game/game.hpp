@@ -10,9 +10,16 @@
 
 #include <cstdint>
 #include <random>
+#include <string>
+#include <string_view>
 #include <vector>
 
 namespace game {
+
+// Word-wraps `str` into lines of at most `maxChars` characters (word-based,
+// single words longer than the limit overflow their own line). Shared between
+// the level-up card renderer and unit tests.
+std::vector<std::string> wrapWords(std::string_view str, std::size_t maxChars);
 
 // Normalized input gathered by main() from SDL each frame.
 struct FrameInput {
@@ -120,6 +127,34 @@ public:
   void grantXp(float amount);
   // Test helper: add weapon by index (bypasses normal level-up flow)
   void testAddWeapon(int defIndex) { addWeapon(defIndex); }
+  // Test helper: drop owned weapons + their persistent entities (orbit blades).
+  void testClearWeapons();
+  // Test helper: place a stationary, high-HP enemy at a world position.
+  void testSpawnEnemyAt(float x, float y);
+  // Test helper: freeze wave spawning so tests control the enemy pool exactly.
+  void testDisableWaves() { wavesEnabled_ = false; }
+  // Test helper: apply a per-weapon upgrade (same path as weapon Focus cards).
+  void testAddWeaponUpgrade(int slot, std::string_view effect, float value) {
+    applyWeaponEffect(slot, effect, value);
+  }
+  // Test helper: current HP of the first Enemy in the registry (-1 if none).
+  [[nodiscard]] float testFirstEnemyHp() const;
+
+  // Debug introspection for tests: how many live entities each attack type has.
+  struct DebugCounts {
+    std::size_t projectiles = 0;
+    std::size_t orbitBlades = 0;
+    std::size_t bombs = 0;
+    std::size_t boomerangs = 0;
+    std::size_t bounces = 0;
+    std::size_t beams = 0;
+    std::size_t sweeps = 0;
+    std::size_t zones = 0;
+    std::size_t chains = 0;
+    std::size_t novas = 0;
+  };
+  [[nodiscard]] DebugCounts debugCounts() const;
+  [[nodiscard]] std::size_t debugEnemyCount() const;
 
 private:
   // Owned weapons (fixed slots, no allocation on the hot path).
@@ -254,6 +289,7 @@ private:
   void chooseUpgrade(int slot);
   void reroll();
   void addWeapon(int defIndex);
+  void syncOrbitBlades(int slot); // add orbit blades up to the current count
   void applyWeaponEffect(int slotIndex, std::string_view effect, float value);
   int findWeaponSlot(std::string_view weaponId) const;
   bool ownsWeapon(int defIndex) const;
@@ -284,6 +320,7 @@ private:
   float xpNext_ = 6.0F;
   int kills_ = 0;
   float spawnTimer_ = 0.0F;
+  bool wavesEnabled_ = true; // tests may freeze spawning for determinism
   float iframes_ = 0.0F;
   float moveX_ = 0.0F; // latched input for fixed steps
   float moveY_ = 0.0F;

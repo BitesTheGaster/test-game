@@ -485,6 +485,7 @@ void Game::fireWeapons() {
   float bestDist2 = 1e12F;
   float targetX = 0.0F;
   float targetY = 0.0F;
+  entt::entity bestEnemy = entt::null;
   bool found = false;
   auto enemies = registry_.view<Transform, Enemy>();
   for (const auto e : enemies) {
@@ -496,11 +497,24 @@ void Game::fireWeapons() {
       bestDist2 = d2;
       targetX = t.x;
       targetY = t.y;
+      bestEnemy = e;
       found = true;
     }
   }
 
-  if (!found) return; // No enemies - don't fire
+  if (!found) {
+    // No enemies: weapons idle-rev. Timers keep ticking so the first enemy
+    // does not get dumped on with a full volley of instant shots.
+    const float dt = 1.0F / 60.0F;
+    for (int i = 0; i < weaponCount_; ++i) {
+      auto& w = weapons_[i];
+      w.timer -= dt;
+      if (w.timer <= 0.0F) {
+        w.timer = w.cooldown * stats_.cooldownMul;
+      }
+    }
+    return;
+  }
 
   const float baseAngle = std::atan2(targetY - pt.y, targetX - pt.x);
 
@@ -557,7 +571,7 @@ void Game::fireWeapons() {
             while (diff > kPi) diff -= 2.0F * kPi;
             while (diff < -kPi) diff += 2.0F * kPi;
             if (std::abs(diff) <= halfAngle) {
-              applyEnemyDamage(e, damage * stats_.damageMul);
+              applyEnemyDamage(e, damage);
               const auto& er = view.get<Radius>(e); (void)er;
               spawnParticles(et.x, et.y, {1.0F, 0.5F, 0.1F, 1.0F}, 4, 3.0F);
             }
@@ -676,7 +690,7 @@ void Game::fireWeapons() {
           s.circle = false;
           registry_.emplace<Sprite>(beam, s);
           BeamEffect be{};
-          be.damage = damage;
+          be.damage = w.damage; // base; updateBeamEffects scales by damageMul
           be.range = w.beamRange;
           be.width = w.beamWidth;
           be.duration = w.beamDuration;
@@ -710,7 +724,7 @@ void Game::fireWeapons() {
           while (diff > kPi) diff -= 2.0F * kPi;
           while (diff < -kPi) diff += 2.0F * kPi;
           if (std::abs(diff) <= halfAngle) {
-            applyEnemyDamage(e, damage * stats_.damageMul);
+            applyEnemyDamage(e, damage);
             // Knockback
             auto* ev = registry_.try_get<Velocity>(e);
             if (ev) {
@@ -721,12 +735,34 @@ void Game::fireWeapons() {
             spawnParticles(et.x, et.y, {0.7F, 1.0F, 0.8F, 1.0F}, 6, 4.0F);
           }
         }
+        // Visual: a fading arc wedge along the strike direction.
+        const auto se = registry_.create();
+        registry_.emplace<Transform>(se, pt.x, pt.y, pt.x, pt.y);
+        registry_.emplace<Radius>(se, sweepRadius);
+        SweepEffect sw{};
+        sw.damage = w.damage; // instant damage stays in fireWeapons
+        sw.radius = sweepRadius;
+        sw.angle = sweepAngle;
+        sw.knockback = w.sweepKnockback;
+        sw.duration = 0.25F;
+        sw.timer = 0.25F;
+        sw.startAngle = baseAngle - halfAngle;
+        sw.endAngle = baseAngle + halfAngle;
+        sw.color = w.color;
+        registry_.emplace<SweepEffect>(se, sw);
         w.timer = cooldown;
         break;
       }
       case AttackType::Chain: {
-        // Chain lightning - find target and create chain effect
+        // Chain lightning - strike the nearest enemy, then chain onward.
         if (found) {
+          // The first jump originates from the target's own position, so hit
+          // it immediately (otherwise a lone enemy would never take damage).
+          if (bestEnemy != entt::null && registry_.valid(bestEnemy)) {
+            applyEnemyDamage(bestEnemy, damage);
+            const auto& bt = registry_.get<Transform>(bestEnemy);
+            spawnParticles(bt.x, bt.y, {0.55F, 1.0F, 1.0F, 1.0F}, 6, 4.0F);
+          }
           const auto chain = registry_.create();
           registry_.emplace<Transform>(chain, targetX, targetY, targetX, targetY);
           registry_.emplace<Radius>(chain, w.chainJumpRange);
@@ -735,7 +771,7 @@ void Game::fireWeapons() {
           s.circle = true;
           registry_.emplace<Sprite>(chain, s);
           ChainLightning cl{};
-          cl.damage = damage;
+          cl.damage = w.damage; // base; updateChainLightning scales by damageMul
           cl.maxJumps = w.chainMaxJumps;
           cl.jumpRange = w.chainJumpRange;
           cl.damageMul = w.chainDamageMul;
@@ -1028,12 +1064,20 @@ void Game::updateProjectiles() {
 void Game::updateOrbitBlades() {
   if (player_ == entt::null || !registry_.valid(player_)) return;
   const auto& pt = registry_.get<Transform>(player_);
-  const float scaledDamageMul = stats_.damageMul;
-  const int scaledPierceAdd = stats_.pierceAdd;
   auto view = registry_.view<Transform, OrbitBlade>();
   for (const auto e : view) {
     auto& t = view.get<Transform>(e);
     auto& ob = view.get<OrbitBlade>(e);
+
+    // Derive damage/pierce from the owning weapon slot each tick so upgrades
+    // taken after the dagger was acquired still apply to existing blades.
+    const float damage = (ob.weaponIndex >= 0 && ob.weaponIndex < weaponCount_)
+                             ? weapons_[ob.weaponIndex].damage * stats_.damageMul
+                             : ob.damage * stats_.damageMul;
+    const int pierce = (ob.weaponIndex >= 0 && ob.weaponIndex < weaponCount_)
+                           ? weapons_[ob.weaponIndex].pierce + stats_.pierceAdd
+                           : ob.pierce + stats_.pierceAdd;
+    (void)pierce;
 
     t.px = t.x;
     t.py = t.y;
@@ -1055,8 +1099,6 @@ void Game::updateOrbitBlades() {
       auto* eh = registry_.try_get<Health>(en);
       if (eh == nullptr || eh->hp <= 0.0F) continue;
 
-      const float damage = ob.damage * scaledDamageMul;
-      const int pierce = ob.pierce + scaledPierceAdd; (void)pierce;
       const float hpBefore = eh->hp;
       applyEnemyDamage(en, damage);
       const float dealt = hpBefore - eh->hp;
@@ -1267,7 +1309,8 @@ void Game::updateBounceProjectiles() {
       const float hitR = r.r + er.r;
       if (dx * dx + dy * dy > hitR * hitR) return;
 
-      const float scaledDamage = bp.damage * stats_.damageMul * std::powf(bp.damageMul, static_cast<float>(bp.bounceCount));
+      const float scaledDamage =
+          bp.damage * std::powf(bp.damageMul, static_cast<float>(bp.bounceCount));
       const int pierce = bp.pierce + stats_.pierceAdd; (void)pierce;
       const float hpBefore = eh->hp;
       applyEnemyDamage(enemy, scaledDamage);
@@ -1552,6 +1595,10 @@ void Game::updatePickups() {
 
   auto view = registry_.view<Transform, Velocity, Xp, Radius>();
   for (const auto e : view) {
+    // Living enemies also carry an Xp component (awarded on death) but are
+    // never pickups: without this guard every enemy that gets within magnet
+    // range was vacuumed into the player and destroyed without dying.
+    if (registry_.all_of<Enemy>(e)) continue;
     auto& t = view.get<Transform>(e);
     auto& v = view.get<Velocity>(e);
 
@@ -1628,6 +1675,7 @@ void Game::updateUniqueEffects() {
 }
 
 void Game::spawnWave() {
+  if (!wavesEnabled_) return;
   if (content_.enemies.empty()) return;
   if (registry_.view<Enemy>().size() >= kMaxEnemies) return;
 
@@ -1937,6 +1985,15 @@ void Game::chooseUpgrade(int slot) {
     }
     ++stacks_[static_cast<std::size_t>(choice.index)];
 
+    // Global "+1 projectile" upgrades also add orbit blades.
+    if (def.effect == "proj_add") {
+      for (int s = 0; s < weaponCount_; ++s) {
+        if (weapons_[s].attackType == AttackType::Orbit) {
+          syncOrbitBlades(s);
+        }
+      }
+    }
+
     if (player_ != entt::null && registry_.valid(player_)) {
       auto& hp = registry_.get<Health>(player_);
       hp.max = stats_.maxHp;
@@ -2047,30 +2104,60 @@ void Game::addWeapon(int defIndex) {
   w.homing = def.homing;
   w.bounces = 0;
 
-  // Create orbit blades if this is an orbit weapon
+  // Create orbit blades if this is an orbit weapon. The blade count tracks
+  // w.projectiles + stats_.projAdd so "+1 projectile" upgrades add blades.
   if (w.attackType == AttackType::Orbit && player_ != entt::null && registry_.valid(player_)) {
-    const auto& pt = registry_.get<Transform>(player_);
-    for (int b = 0; b < w.orbitCount; ++b) {
-      const float angle = (static_cast<float>(b) * 2.0F * kPi / static_cast<float>(w.orbitCount));
-      const auto blade = registry_.create();
-      const float bx = pt.x + std::cos(angle) * w.orbitRadius;
-      const float by = pt.y + std::sin(angle) * w.orbitRadius;
-      registry_.emplace<Transform>(blade, bx, by, bx, by);
-      registry_.emplace<Velocity>(blade);
-      registry_.emplace<Radius>(blade, 0.18F);
-      Sprite s{};
-      s.color = w.color;
-      s.circle = false;
-      registry_.emplace<Sprite>(blade, s);
-      OrbitBlade ob{};
-      ob.damage = w.damage;
-      ob.radius = w.orbitRadius;
-      ob.speed = w.orbitSpeed;
-      ob.angle = angle;
-      ob.pierce = w.pierce;
-      ob.color = w.color;
-      registry_.emplace<OrbitBlade>(blade, ob);
+    syncOrbitBlades(weaponCount_ - 1);
+  }
+}
+
+void Game::syncOrbitBlades(int slot) {
+  if (slot < 0 || slot >= weaponCount_) return;
+  if (player_ == entt::null || !registry_.valid(player_)) return;
+  auto& w = weapons_[slot];
+  if (w.attackType != AttackType::Orbit) return;
+
+  const int desired = std::max(1, w.projectiles + stats_.projAdd);
+
+  // Count blades already owned by this slot and remember the last angle so new
+  // blades slot into the rotation without snapping existing ones.
+  int existing = 0;
+  float lastAngle = -1.0F;
+  for (const auto e : registry_.view<OrbitBlade>()) {
+    auto& ob = registry_.get<OrbitBlade>(e);
+    if (ob.weaponIndex == slot) {
+      ++existing;
+      lastAngle = ob.angle;
     }
+  }
+  if (existing >= desired) return;
+
+  const auto& pt = registry_.get<Transform>(player_);
+  while (existing < desired) {
+    const float angle = lastAngle < 0.0F
+        ? static_cast<float>(existing) * 2.0F * kPi / static_cast<float>(desired)
+        : lastAngle + 2.0F * kPi / static_cast<float>(desired);
+    const float bx = pt.x + std::cos(angle) * w.orbitRadius;
+    const float by = pt.y + std::sin(angle) * w.orbitRadius;
+    const auto blade = registry_.create();
+    registry_.emplace<Transform>(blade, bx, by, bx, by);
+    registry_.emplace<Velocity>(blade);
+    registry_.emplace<Radius>(blade, 0.18F);
+    Sprite s{};
+    s.color = w.color;
+    s.circle = false;
+    registry_.emplace<Sprite>(blade, s);
+    OrbitBlade ob{};
+    ob.damage = w.damage;
+    ob.radius = w.orbitRadius;
+    ob.speed = w.orbitSpeed;
+    ob.angle = angle;
+    ob.pierce = w.pierce;
+    ob.color = w.color;
+    ob.weaponIndex = slot;
+    registry_.emplace<OrbitBlade>(blade, ob);
+    lastAngle = angle;
+    ++existing;
   }
 }
 
@@ -2081,6 +2168,9 @@ void Game::applyWeaponEffect(int slotIndex, std::string_view effect, float value
     w.damage += value;
   } else if (effect == "w_proj_add") {
     w.projectiles += static_cast<int>(value);
+    if (w.attackType == AttackType::Orbit) {
+      syncOrbitBlades(slotIndex);
+    }
   } else if (effect == "w_pierce_add") {
     w.pierce += static_cast<int>(value);
   } else if (effect == "w_cd_mul") {
@@ -2186,35 +2276,96 @@ void Game::grantXp(float amount) {
   }
 }
 
+void Game::testClearWeapons() {
+  weaponCount_ = 0;
+  for (auto e : registry_.view<OrbitBlade>()) {
+    registry_.destroy(e);
+  }
+}
 
-// Greedy word-wrap: renders str in lines that fit maxWidth pixels.
-static void renderWrappedText(core::render::Batcher& b, float x, float y,
-                              float scale, core::render::Color c,
-                              std::string_view str, float maxWidth,
-                              float lineHeight) {
+void Game::testSpawnEnemyAt(float x, float y) {
+  const auto e = registry_.create();
+  registry_.emplace<Transform>(e, x, y, x, y);
+  registry_.emplace<Velocity>(e);
+  registry_.emplace<Radius>(e, 0.3F);
+  registry_.emplace<Health>(e, 100000.0F, 100000.0F);
+  Enemy en{};
+  en.speed = 0.0F; // stationary target for deterministic assertions
+  en.touch = 0.0F; // no contact damage
+  registry_.emplace<Enemy>(e, en);
+  Sprite s{};
+  s.color = {1.0F, 0.25F, 0.25F, 1.0F};
+  s.circle = true;
+  registry_.emplace<Sprite>(e, s);
+  registry_.emplace<Xp>(e, 1.0F);
+}
+
+Game::DebugCounts Game::debugCounts() const {
+  DebugCounts c;
+  c.projectiles = registry_.view<Projectile>().size();
+  c.orbitBlades = registry_.view<OrbitBlade>().size();
+  c.bombs = registry_.view<BombProjectile>().size();
+  c.boomerangs = registry_.view<BoomerangProjectile>().size();
+  c.bounces = registry_.view<BounceProjectile>().size();
+  c.beams = registry_.view<BeamEffect>().size();
+  c.sweeps = registry_.view<SweepEffect>().size();
+  c.zones = registry_.view<ZoneEffect>().size();
+  c.chains = registry_.view<ChainLightning>().size();
+  c.novas = registry_.view<NovaRing>().size();
+  return c;
+}
+
+float Game::testFirstEnemyHp() const {
+  auto view = registry_.view<Health, Enemy>();
+  for (const auto e : view) {
+    return view.get<Health>(e).hp;
+  }
+  return -1.0F;
+}
+
+std::size_t Game::debugEnemyCount() const {
+  return registry_.view<Enemy>().size();
+}
+
+
+std::vector<std::string> wrapWords(std::string_view str, std::size_t maxChars) {
+  std::vector<std::string> lines;
+  if (maxChars == 0) maxChars = 1;
   std::string current;
-  auto flush = [&]() {
-    if (!current.empty()) {
-      b.text(x, y, scale, c, current);
-      y += lineHeight;
-      current.clear();
-    }
-  };
-  // Manual word split to avoid <sstream>/<random> overload ambiguity.
   std::string_view rest(str);
   while (!rest.empty()) {
     const std::size_t space = rest.find(' ');
     const std::string_view word = rest.substr(0, space);
     if (space != std::string_view::npos) rest.remove_prefix(space + 1);
     else rest = std::string_view();
-    const std::string trial = current.empty()
-        ? std::string(word) : current + " " + std::string(word);
-    if (b.textWidth(scale, trial) > maxWidth && !current.empty()) {
-      flush();
+    if (current.empty()) {
+      current = std::string(word);
+    } else if (current.size() + 1 + word.size() > maxChars) {
+      lines.push_back(current);
+      current = std::string(word);
+    } else {
+      current += ' ';
+      current.append(word);
     }
-    current = trial;
   }
-  flush();
+  if (!current.empty()) lines.push_back(current);
+  return lines;
+}
+
+// Greedy word-wrap: renders str in lines that fit maxWidth pixels.
+static void renderWrappedText(core::render::Batcher& b, float x, float y,
+                              float scale, core::render::Color c,
+                              std::string_view str, float maxWidth,
+                              float lineHeight) {
+  // The 5x7 bitmap font advances 6*scale pixels per character, so the pixel
+  // limit maps 1:1 onto a character limit (textWidth() is size()*6*scale).
+  const std::size_t maxChars =
+      maxWidth > 0.0F ? static_cast<std::size_t>(maxWidth / (6.0F * scale))
+                      : str.size();
+  for (const auto& line : wrapWords(str, maxChars)) {
+    b.text(x, y, scale, c, line);
+    y += lineHeight;
+  }
 }
 
 void Game::spawnParticles(float x, float y, core::render::Color c, int count, float speed) {
@@ -2361,6 +2512,178 @@ void Game::render(core::render::Batcher& b, float alpha) {
       const float y = t.py + (t.y - t.py) * lerp;
       if (s.circle) b.circle(x, y, r.r, s.color);
       else b.rect(x, y, r.r * 2.0F, r.r * 2.0F, s.color);
+    }
+  }
+
+  // Orbit blades (daggers): streak + bright core.
+  {
+    auto view = registry_.view<Transform, OrbitBlade>();
+    for (const auto e : view) {
+      const auto& t = view.get<Transform>(e);
+      const auto& ob = view.get<OrbitBlade>(e);
+      const float x = t.px + (t.x - t.px) * lerp;
+      const float y = t.py + (t.y - t.py) * lerp;
+      b.rect(x, y, 0.36F, 0.10F, ob.color);
+      b.circle(x, y, 0.11F, ob.color);
+    }
+  }
+
+  // Bombs (hammer): body + faint shadow beneath to sell the arc.
+  {
+    auto view = registry_.view<Transform, BombProjectile, Radius>();
+    for (const auto e : view) {
+      const auto& t = view.get<Transform>(e);
+      const auto& bp = view.get<BombProjectile>(e);
+      const float x = t.px + (t.x - t.px) * lerp;
+      const float y = t.py + (t.y - t.py) * lerp;
+      Color shadow = bp.color;
+      shadow.r *= 0.35F;
+      shadow.g *= 0.35F;
+      shadow.b *= 0.35F;
+      shadow.a = 0.45F;
+      b.circle(x, y - 0.30F, 0.14F, shadow);
+      b.circle(x, y, 0.17F, bp.color);
+    }
+  }
+
+  // Boomerangs (shuriken): rectangular blades.
+  {
+    auto view = registry_.view<Transform, BoomerangProjectile, Radius>();
+    for (const auto e : view) {
+      const auto& t = view.get<Transform>(e);
+      const auto& bp = view.get<BoomerangProjectile>(e);
+      const float x = t.px + (t.x - t.px) * lerp;
+      const float y = t.py + (t.y - t.py) * lerp;
+      b.rect(x, y, 0.34F, 0.14F, bp.color);
+      b.circle(x, y, 0.07F, bp.color);
+    }
+  }
+
+  // Bouncing orbs.
+  {
+    auto view = registry_.view<Transform, BounceProjectile, Radius>();
+    for (const auto e : view) {
+      const auto& t = view.get<Transform>(e);
+      const auto& bp = view.get<BounceProjectile>(e);
+      const float x = t.px + (t.x - t.px) * lerp;
+      const float y = t.py + (t.y - t.py) * lerp;
+      b.circle(x, y, 0.18F, bp.color);
+      b.circle(x, y, 0.09F, Color{1.0F, 1.0F, 1.0F, 0.85F});
+    }
+  }
+
+  // Beams: glow + bright core sampled along start->end.
+  {
+    auto view = registry_.view<BeamEffect>();
+    for (const auto e : view) {
+      const auto& be = view.get<BeamEffect>(e);
+      const float fade = be.duration > 0.001F ? be.timer / be.duration : 0.0F;
+      Color glow = be.color;
+      glow.a = 0.30F * fade;
+      Color core = be.color;
+      core.a = 0.90F * fade;
+      const float dx = be.endX - be.startX;
+      const float dy = be.endY - be.startY;
+      const float len = std::sqrt(dx * dx + dy * dy);
+      if (len < 0.001F) continue;
+      const int steps = std::max(1, static_cast<int>(len / std::max(0.08F, be.width * 0.35F)));
+      for (int s = 0; s <= steps; ++s) {
+        const float fr = static_cast<float>(s) / static_cast<float>(steps);
+        const float sx = be.startX + dx * fr;
+        const float sy = be.startY + dy * fr;
+        b.circle(sx, sy, be.width * 0.60F, glow);
+        b.circle(sx, sy, be.width * 0.30F, core);
+      }
+    }
+  }
+
+  // Sweep arcs (scythe): fading wedge + bright swept edge.
+  {
+    auto view = registry_.view<Transform, SweepEffect, Radius>();
+    for (const auto e : view) {
+      const auto& t = view.get<Transform>(e);
+      const auto& se = view.get<SweepEffect>(e);
+      const float fade = se.duration > 0.001F ? se.timer / se.duration : 0.0F;
+      Color fill = se.color;
+      fill.a = 0.14F * fade;
+      Color edge = se.color;
+      edge.a = 0.70F * fade;
+      const float span = se.endAngle - se.startAngle;
+
+      const int spokes = 10;
+      for (int k = 0; k <= spokes; ++k) {
+        const float a = se.startAngle + span * static_cast<float>(k) / static_cast<float>(spokes);
+        const float ex = t.x + std::cos(a) * se.radius;
+        const float ey = t.y + std::sin(a) * se.radius;
+        const int steps = std::max(1, static_cast<int>(se.radius / 0.12F));
+        for (int s = 0; s <= steps; ++s) {
+          const float fr = static_cast<float>(s) / static_cast<float>(steps);
+          b.circle(t.x + (ex - t.x) * fr, t.y + (ey - t.y) * fr, 0.07F, fill);
+        }
+      }
+
+      const int arcSteps = std::max(1, static_cast<int>(std::abs(span) * se.radius / 0.10F));
+      for (int k = 0; k <= arcSteps; ++k) {
+        const float a = se.startAngle + span * static_cast<float>(k) / static_cast<float>(arcSteps);
+        b.circle(t.x + std::cos(a) * se.radius, t.y + std::sin(a) * se.radius, 0.08F, edge);
+      }
+    }
+  }
+
+  // Zones: pulsing disc + circumference highlight (lifelong AoE pools).
+  {
+    auto view = registry_.view<Transform, ZoneEffect>();
+    for (const auto e : view) {
+      const auto& t = view.get<Transform>(e);
+      const auto& ze = view.get<ZoneEffect>(e);
+      const float fade = ze.duration > 0.001F ? (ze.duration - ze.timer) / ze.duration : 0.0F;
+      const float pulse = 1.0F + 0.05F * std::sin(simTime_ * 8.0F);
+      Color disc = ze.color;
+      disc.a = 0.18F * fade;
+      b.circle(t.x, t.y, ze.radius * pulse, disc);
+      Color rim = ze.color;
+      rim.a = 0.55F * fade;
+      const int n = 24;
+      for (int k = 0; k < n; ++k) {
+        const float a = 2.0F * kPi * static_cast<float>(k) / static_cast<float>(n);
+        b.circle(t.x + std::cos(a) * ze.radius * pulse,
+                 t.y + std::sin(a) * ze.radius * pulse, 0.07F, rim);
+      }
+    }
+  }
+
+  // Chain lightning: halo + core at the current jump position.
+  {
+    auto view = registry_.view<Transform, ChainLightning>();
+    for (const auto e : view) {
+      const auto& t = view.get<Transform>(e);
+      const auto& cl = view.get<ChainLightning>(e);
+      const float x = t.px + (t.x - t.px) * lerp;
+      const float y = t.py + (t.y - t.py) * lerp;
+      b.circle(x, y, 0.22F, Color{cl.color.r, cl.color.g, cl.color.b, 0.40F});
+      b.circle(x, y, 0.11F, cl.color);
+    }
+  }
+
+  // Nova rings: expanding dotted circumference over a faint wash.
+  {
+    auto view = registry_.view<Transform, NovaRing>();
+    for (const auto e : view) {
+      const auto& t = view.get<Transform>(e);
+      const auto& nr = view.get<NovaRing>(e);
+      const float x = t.px + (t.x - t.px) * lerp;
+      const float y = t.py + (t.y - t.py) * lerp;
+      if (nr.radius <= 0.0F) continue;
+      Color wash = nr.color;
+      wash.a = 0.10F;
+      b.circle(x, y, nr.radius, wash);
+      Color edge = nr.color;
+      edge.a = 0.85F;
+      const int n = std::max(16, static_cast<int>(nr.radius * 12.0F));
+      for (int k = 0; k < n; ++k) {
+        const float a = 2.0F * kPi * static_cast<float>(k) / static_cast<float>(n);
+        b.circle(x + std::cos(a) * nr.radius, y + std::sin(a) * nr.radius, 0.09F, edge);
+      }
     }
   }
 

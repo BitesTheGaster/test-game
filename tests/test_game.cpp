@@ -7,6 +7,7 @@
 #include "core/sim/fixed_timestep.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <vector>
 
 // --- Content loading ---------------------------------------------------------
@@ -637,4 +638,157 @@ TEST_CASE("Damage multiplier applies to all attack types") {
   }
   
   REQUIRE(g.stats().damageMul == Catch::Approx(1.5F));
+}
+
+// --- Repair regression tests: text wrap, weapon visibility, damage scaling ---
+
+TEST_CASE("wrapWords wraps words without accumulating overflow") {
+  // Regression: the old renderer re-accumulated the previous line after
+  // flushing, so "a b c" wrapped as "a / ab / abc".
+  const auto three = game::wrapWords("a b c", 1);
+  REQUIRE(three.size() == 3);
+  REQUIRE(three[0] == "a");
+  REQUIRE(three[1] == "b");
+  REQUIRE(three[2] == "c");
+
+  const auto lines = game::wrapWords("one two three four", 8);
+  REQUIRE(lines.size() == 3);
+  REQUIRE(lines[0] == "one two");
+  REQUIRE(lines[1] == "three");
+  REQUIRE(lines[2] == "four");
+
+  REQUIRE(game::wrapWords("", 5).empty());
+
+  // A word longer than the limit still gets its own line (no crash).
+  const auto longWord = game::wrapWords("antidisestablishmentarianism x", 5);
+  REQUIRE(longWord.size() == 2);
+  REQUIRE(longWord[0] == "antidisestablishmentarianism");
+  REQUIRE(longWord[1] == "x");
+}
+
+TEST_CASE("Every weapon creates its attack-type entities") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  const auto idx = [&content](const char* id) {
+    for (std::size_t i = 0; i < content.weapons.size(); ++i) {
+      if (content.weapons[i].id == id) return static_cast<int>(i);
+    }
+    return -1;
+  };
+
+  {
+    // Orbit blades are persistent and created at addWeapon time.
+    game::Game g{content, 10};
+    g.testDisableWaves();
+    g.testClearWeapons();
+    REQUIRE(idx("dagger") >= 0);
+    g.testAddWeapon(idx("dagger"));
+    game::FrameInput in{};
+    g.advance(1.0F / 60.0F, in);
+    REQUIRE(g.debugCounts().orbitBlades == 3);
+  }
+
+  struct Case {
+    const char* id;
+    std::size_t game::Game::DebugCounts::*field;
+  };
+  const Case cases[] = {
+      {"wand", &game::Game::DebugCounts::projectiles},
+      {"hammer", &game::Game::DebugCounts::bombs},
+      {"shuriken", &game::Game::DebugCounts::boomerangs},
+      {"orb", &game::Game::DebugCounts::bounces},
+      {"beam", &game::Game::DebugCounts::beams},
+      {"scythe", &game::Game::DebugCounts::sweeps},
+      {"storm", &game::Game::DebugCounts::chains},
+      {"nova", &game::Game::DebugCounts::novas},
+  };
+  for (const auto& c : cases) {
+    CAPTURE(c.id);
+    const int wi = idx(c.id);
+    REQUIRE(wi >= 0);
+    game::Game g{content, 77};
+    g.testDisableWaves();
+    g.testClearWeapons();
+    g.stats().cooldownMul = 0.01F; // every weapon fires immediately
+    g.testSpawnEnemyAt(3.0F, 0.0F);
+    g.testAddWeapon(wi);
+    game::FrameInput in{};
+    g.advance(1.0F / 60.0F, in); // create the effect entity
+    g.advance(1.0F / 60.0F, in); // keep it alive one more frame
+    REQUIRE((g.debugCounts().*c.field) > 0);
+  }
+}
+
+TEST_CASE("Damage multiplier scales exactly once per attack type") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  const auto idx = [&content](const char* id) {
+    for (std::size_t i = 0; i < content.weapons.size(); ++i) {
+      if (content.weapons[i].id == id) return static_cast<int>(i);
+    }
+    return -1;
+  };
+
+  const char* ids[] = {"wand", "flame", "hammer", "shuriken",
+                       "orb", "beam", "scythe", "storm", "nova"};
+  for (const char* id : ids) {
+    CAPTURE(id);
+    const int wi = idx(id);
+    REQUIRE(wi >= 0);
+    const auto& def = content.weapons[static_cast<std::size_t>(wi)];
+
+    auto run = [&](float mul) {
+      game::Game g{content, 1337};
+      g.testDisableWaves();
+      g.testClearWeapons();
+      g.stats().damageMul = mul;
+      // Bombs only land where their fixed arc falls: put the enemy at the
+      // deterministic landing spot (t = 2*vy/g, x = speed*t).
+      const float gAcc = 30.0F;
+      const float vy = std::sqrt(2.0F * gAcc * def.bombArcHeight);
+      const float sx = (def.attackType == game::AttackType::Bomb)
+                           ? def.projSpeed * (2.0F * vy / gAcc)
+                           : 1.5F;
+      g.testSpawnEnemyAt(sx, 0.0F);
+      g.testAddWeapon(wi);
+      game::FrameInput in{};
+      for (int i = 0; i < 200; ++i) g.advance(1.0F / 60.0F, in);
+      const float hp = g.testFirstEnemyHp();
+      return hp < 0.0F ? -1.0F : 100000.0F - hp;
+    };
+
+    const float lost1 = run(1.0F);
+    const float lost3 = run(3.0F);
+    REQUIRE(lost1 > 0.0F);         // the weapon actually damaged the enemy
+    REQUIRE(lost3 > 2.6F * lost1); // scales up with the multiplier
+    REQUIRE(lost3 < 3.4F * lost1); // ...but exactly once, not twice (~9x)
+  }
+}
+
+TEST_CASE("Orbit blades track projectile-count and damage upgrades") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  int dagger = -1;
+  for (std::size_t i = 0; i < content.weapons.size(); ++i) {
+    if (content.weapons[i].id == "dagger") {
+      dagger = static_cast<int>(i);
+      break;
+    }
+  }
+  REQUIRE(dagger >= 0);
+
+  game::Game g{content, 42};
+  g.testDisableWaves();
+  g.testClearWeapons();
+  g.testAddWeapon(dagger);
+  REQUIRE(g.debugCounts().orbitBlades == 3);
+
+  // "+1 projectile" (the Dagger Volley card effect) adds a blade.
+  g.testAddWeaponUpgrade(0, "w_proj_add", 1.0F);
+  REQUIRE(g.debugCounts().orbitBlades == 4);
+
+  // Damage is re-derived from the weapon slot every tick, so a +25 damage
+  // upgrade applies to existing blades (5 base + 25 up = 30 per hit).
+  g.testAddWeaponUpgrade(0, "w_damage_add", 25.0F);
+  g.testSpawnEnemyAt(1.3F, 0.0F); // blade #1 spawns at angle 0: exactly on top
+  game::FrameInput in{};
+  g.advance(1.0F / 60.0F, in);
+  REQUIRE(g.testFirstEnemyHp() == Catch::Approx(99970.0F)); // 100000 - 30
 }
