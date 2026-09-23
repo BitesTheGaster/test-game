@@ -682,7 +682,7 @@ void Game::fireWeapons() {
           bp.damage = damage;
           bp.pierce = pierce;
           bp.life = w.life;
-          bp.maxBounces = w.bounceCount;
+          bp.maxBounces = w.bounceCount + stats_.pierceAdd;
           bp.bounceRange = w.bounceRange;
           bp.damageMul = w.bounceDamageMul;
           bp.bounceCount = 0;
@@ -722,7 +722,8 @@ void Game::fireWeapons() {
       case AttackType::Sweep: {
         // Sweep is centered on player, instant damage in arc
         const float sweepAngle = w.sweepAngle;
-        const float sweepRadius = w.sweepRadius;
+        // More projectiles = a wider/reaching scythe arc.
+        const float sweepRadius = w.sweepRadius * (1.0F + stats_.projAdd * 0.15F);
         const float halfAngle = sweepAngle * 0.5F;
         auto view = registry_.view<Transform, Health, Radius, Enemy>();
         for (const auto e : view) {
@@ -786,7 +787,7 @@ void Game::fireWeapons() {
           registry_.emplace<Sprite>(chain, s);
           ChainLightning cl{};
           cl.damage = w.damage; // base; updateChainLightning scales by damageMul
-          cl.maxJumps = w.chainMaxJumps;
+          cl.maxJumps = w.chainMaxJumps + stats_.pierceAdd;
           cl.jumpRange = w.chainJumpRange;
           cl.damageMul = w.chainDamageMul;
           cl.jumpsDone = 0;
@@ -801,14 +802,14 @@ void Game::fireWeapons() {
         // Nova - expanding ring from player
         const auto nova = registry_.create();
         registry_.emplace<Transform>(nova, pt.x, pt.y, pt.x, pt.y);
-        registry_.emplace<Radius>(nova, w.novaMaxRadius);
+        registry_.emplace<Radius>(nova, w.novaMaxRadius * (1.0F + stats_.projAdd * 0.1F));
         Sprite s{};
         s.color = w.color;
         s.circle = true;
         registry_.emplace<Sprite>(nova, s);
         NovaRing nr{};
         nr.damagePerTick = w.novaDamagePerTick;
-        nr.maxRadius = w.novaMaxRadius;
+        nr.maxRadius = w.novaMaxRadius * (1.0F + stats_.projAdd * 0.1F);
         nr.expandSpeed = w.novaExpandSpeed;
         nr.tickRate = w.novaTickRate;
         nr.radius = 0.0F;
@@ -1116,7 +1117,8 @@ void Game::updateOrbitBlades() {
     t.px = t.x;
     t.py = t.y;
 
-    ob.angle += ob.speed / 60.0F;
+    // Dagger spin scales with attack speed: faster fire rate = faster spin.
+    ob.angle += (ob.speed / std::max(0.25F, stats_.cooldownMul)) / 60.0F;
     t.x = pt.x + std::cos(ob.angle) * ob.radius;
     t.y = pt.y + std::sin(ob.angle) * ob.radius;
 
@@ -1218,9 +1220,6 @@ void Game::explodeBomb(entt::entity, const BombProjectile& bp, float x, float y)
 }
 
 void Game::updateBoomerangProjectiles() {
-  if (player_ == entt::null || !registry_.valid(player_)) return;
-  const auto& pt = registry_.get<Transform>(player_);
-
   auto view = registry_.view<Transform, Velocity, BoomerangProjectile, Radius>();
   for (const auto e : view) {
     auto& t = view.get<Transform>(e);
@@ -1248,9 +1247,10 @@ void Game::updateBoomerangProjectiles() {
     }
 
     if (bp.returning) {
-      // Return to player
-      const float dx = pt.x - t.x;
-      const float dy = pt.y - t.y;
+      // Return to the launch point, not the player's current position —
+      // the start is stored in the projectile, so no per-frame look-up.
+      const float dx = bp.startX - t.x;
+      const float dy = bp.startY - t.y;
       const float dist = std::sqrt(dx * dx + dy * dy);
       if (dist > 0.001F) {
         v.x = (dx / dist) * bp.returnSpeed;

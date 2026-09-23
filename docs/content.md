@@ -68,7 +68,7 @@ python3 tools/gendocs.py
 | Name | ID | Effect | Value | Max stacks | Weapon | Level | Description |
 |---|---|---|---|---|---|---|---|
 | Sharpened Bolts | damage | damage_mul | 0.15 | 6 |  |  | +15% damage |
-| Battle Haste | haste | cooldown_mul | -0.1 | 5 |  |  | -10% attack cooldown |
+| Battle Haste | haste | cooldown_mul | -0.08 | 5 |  |  | -8% attack cooldown |
 | Split Shot | multi | proj_add | 1 | 4 |  |  | +1 projectile |
 | Swift Boots | boots | speed_mul | 0.12 | 4 |  |  | +12% move speed |
 | Vigor | vigor | max_hp_add | 20 | 6 |  |  | +20 max HP and heal 20 |
@@ -77,7 +77,7 @@ python3 tools/gendocs.py
 | Life Leech | leech | heal | 25 | 3 |  |  | Heal 25 HP |
 | Regeneration | regen | regen_add | 1 | 4 |  |  | +1 HP per second |
 | Might | might | damage_mul | 0.25 | 4 |  |  | +25% damage |
-| Quickdraw | quickdraw | cooldown_mul | -0.15 | 3 |  |  | -15% attack cooldown |
+| Quickdraw | quickdraw | cooldown_mul | -0.12 | 3 |  |  | -12% attack cooldown |
 | Twin Cast | twin_shot | proj_add | 1 | 2 |  |  | +1 projectile |
 | Windrunner | windrunner | speed_mul | 0.08 | 6 |  |  | +8% move speed |
 | Dark Feast | feast | heal | 40 | 2 |  |  | Heal 40 HP |
@@ -87,21 +87,21 @@ python3 tools/gendocs.py
 | Treasure Sense | treasure | pickup_mul | 1 | 2 |  |  | +100% pickup range |
 | Harvester | harvester | pickup_mul | 0.8 | 2 |  |  | +80% pickup range |
 | Garrote Bolts | garrote | pierce_add | 2 | 1 |  |  | +2 pierce |
-| Battle Echoes | echoes | cooldown_mul | -0.2 | 2 |  |  | -20% attack cooldown |
+| Battle Echoes | echoes | cooldown_mul | -0.16 | 2 |  |  | -16% attack cooldown |
 | Barrage | barrage | proj_add | 2 | 1 |  |  | +2 projectiles |
 | Rejuvenation | rejuvenation | heal | 60 | 1 |  |  | Heal 60 HP |
 | Fervor | fervor | damage_mul | 0.35 | 2 |  |  | +35% damage |
 | Gale Steps | gale | speed_mul | 0.15 | 2 |  |  | +15% move speed |
 | Heartwood | heartwood | max_hp_add | 70 | 1 |  |  | +70 max HP and heal 70 |
-| Surge | surge | cooldown_mul | -0.25 | 1 |  |  | -25% attack cooldown |
+| Surge | surge | cooldown_mul | -0.2 | 1 |  |  | -20% attack cooldown |
 | Stony Pledge | pledge | defense_add | 10 | 4 |  |  | +10 defense |
 | Iron Conviction | conviction | defense_add | 25 | 2 |  |  | +25 defense |
 | Minor Ward | ward_small | shield_add | 15 | 3 |  |  | +15 regenerating shield |
 | Runic Ward | ward_great | shield_add | 30 | 2 |  |  | +30 regenerating shield |
-| Gilded Fangs | leech_gold | lifesteal_add | 10 | 3 |  |  | +10% lifesteal |
-| Soulfeed | leech_soul | lifesteal_add | 15 | 2 |  |  | +15% lifesteal |
+| Gilded Fangs | leech_gold | lifesteal_add | 8 | 3 |  |  | +8% lifesteal |
+| Soulfeed | leech_soul | lifesteal_add | 12 | 2 |  |  | +12% lifesteal |
 | Wand Focus | w_wand_power | w_damage_add | 8 | 3 | wand |  | Arcane Wand: +8 damage |
-| Wand Channeling | w_wand_speed | w_cd_mul | -0.18 | 2 | wand |  | Arcane Wand: -18% cooldown |
+| Wand Channeling | w_wand_speed | w_cd_mul | -0.14 | 2 | wand |  | Arcane Wand: -14% cooldown |
 | Dagger Honing | w_dagger_power | w_damage_add | 5 | 3 | dagger |  | Throwing Dagger: +5 damage each |
 | Dagger Volley | w_dagger_volley | w_proj_add | 1 | 2 | dagger |  | Throwing Dagger: +1 projectile |
 | Crossbow Wit | w_crossbow_power | w_damage_add | 12 | 2 | crossbow |  | Heavy Crossbow: +12 damage |
@@ -111,7 +111,7 @@ python3 tools/gendocs.py
 | Hammer Rune | w_hammer_power | w_damage_add | 20 | 2 | hammer |  | Runic Hammer: +20 damage |
 | Hammer Wrath | w_hammer_pierce | w_pierce_add | 3 | 2 | hammer |  | Runic Hammer: +3 pierce |
 | Shuriken Storm | w_shuriken_power | w_damage_add | 5 | 3 | shuriken |  | Storm Shuriken: +5 damage |
-| Shuriken Cyclone | w_shuriken_speed | w_cd_mul | -0.2 | 2 | shuriken |  | Storm Shuriken: -20% cooldown |
+| Shuriken Cyclone | w_shuriken_speed | w_cd_mul | -0.16 | 2 | shuriken |  | Storm Shuriken: -16% cooldown |
 
 ### Unique items (one-time, rule-changing)
 
@@ -133,19 +133,19 @@ python3 tools/gendocs.py
 | Name | ID | Effect | Value | Max stacks | Weapon | Level | Description |
 |---|---|---|---|---|---|---|---|
 | Aegis | m5_aegis | shield_add | 45 | 1 |  | 5 | MILESTONE: +45 regenerating shield |
-| Blood Pact | m5_pact | lifesteal_add | 15 | 1 |  | 5 | MILESTONE: +15% lifesteal |
+| Blood Pact | m5_pact | lifesteal_add | 12 | 1 |  | 5 | MILESTONE: +12% lifesteal |
 | Tempest | m5_tempest | proj_add | 2 | 1 |  | 5 | MILESTONE: +2 projectiles to every weapon |
 | Stone Mantle | m10_mantle | defense_add | 60 | 1 |  | 10 | MILESTONE: +60 defense |
-| Frenzy | m10_frenzy | cooldown_mul | -0.3 | 1 |  | 10 | MILESTONE: -30% attack cooldown |
+| Frenzy | m10_frenzy | cooldown_mul | -0.24 | 1 |  | 10 | MILESTONE: -24% attack cooldown |
 | Reaper's Grasp | m10_grasp | pierce_add | 3 | 1 |  | 10 | MILESTONE: +3 pierce to every weapon |
-| Crimson Crown | m15_crown | lifesteal_add | 20 | 1 |  | 15 | MILESTONE: +20% lifesteal |
+| Crimson Crown | m15_crown | lifesteal_add | 16 | 1 |  | 15 | MILESTONE: +16% lifesteal |
 | Titan Heart | m15_titan | max_hp_add | 120 | 1 |  | 15 | MILESTONE: +120 max HP and heal 120 |
 | Overload | m15_overload | damage_mul | 0.6 | 1 |  | 15 | MILESTONE: +60% damage |
 | Void Symbiosis | m20_void | damage_mul | 0.9 | 1 |  | 20 | MILESTONE: +90% damage |
 | Bulwark of Ages | m20_bulwark | defense_add | 120 | 1 |  | 20 | MILESTONE: +120 defense |
 | Hailstorm | m20_hail | proj_add | 4 | 1 |  | 20 | MILESTONE: +4 projectiles to every weapon |
 | Immortal | m25_immortal | max_hp_add | 300 | 1 |  | 25 | MILESTONE: +300 max HP and heal 300 |
-| Perfection | m25_perfect | cooldown_mul | -0.35 | 1 |  | 25 | MILESTONE: -35% attack cooldown |
+| Perfection | m25_perfect | cooldown_mul | -0.28 | 1 |  | 25 | MILESTONE: -28% attack cooldown |
 | Vanquisher | m25_vanquish | damage_mul | 1.5 | 1 |  | 25 | MILESTONE: +150% damage |
 | Ascendant Skin | m30_ascend | defense_add | 200 | 1 |  | 30 | MILESTONE: +200 defense |
 | Starlight Ward | m30_starlight | shield_add | 500 | 1 |  | 30 | MILESTONE: +500 regenerating shield |

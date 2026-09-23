@@ -36,6 +36,14 @@ curves. Tables of all content are generated into
 | Damage / cooldown | Global multipliers applying to every weapon |
 | Projectiles / pierce | Additive buffs applied to every weapon |
 
+**Cross-weapon couplings** — stats are not siloed per weapon:
+
+| Stat | Also affects |
+|------|--------------|
+| Cooldown / attack speed | **Dagger orbit spin** — faster fire rate makes blades rotate faster (`orbitSpeed / cooldownMul`) |
+| Projectiles | **Scythe arc radius** (+15% per extra projectile), **Nova ring radius** (+10%) |
+| Pierce | **Bounce bounces** and **Chain jumps** (one more each) |
+
 ### Defense
 
 Damage mitigation is a single curve with two stacked components:
