@@ -52,8 +52,8 @@ UpgradeEffectResult applyUpgrade(PlayerStats& stats, std::string_view effect, fl
     stats.damageMul += value;
     return {true, 0.0F, 0.0F};
   }
-  if (effect == "cooldown_mul") {
-    stats.cooldownMul += value;
+  if (effect == "fire_rate") {
+    stats.fireRateBonus += value;
     return {true, 0.0F, 0.0F};
   }
   if (effect == "speed_mul") {
@@ -109,9 +109,10 @@ UpgradeEffectResult applyUpgrade(PlayerStats& stats, std::string_view effect, fl
     return {true, 0.0F, 0.0F};
   }
   if (effect == "fan") {
-    // Top-tier spread: double the volley angle and (roughly) double fire rate.
+    // Top-tier spread: double the volley angle and add +100% fire rate
+    // (which halves the delay under the 1/(1+bonus) formula).
     stats.spreadMul += value * 2.0F;
-    stats.cooldownMul *= (1.0F / (1.0F + value));
+    stats.fireRateBonus += value;
     return {true, 0.0F, 0.0F};
   }
   if (effect == "thorns") {
@@ -193,6 +194,13 @@ void Game::reset() {
   adrenalineCd_ = 0.0F;
   adrenalineActive_ = false;
 
+  // Weapon test mode is a session-level sandbox; a fresh run starts clean.
+  testMode_ = false;
+  testBoosted_ = false;
+  testWeaponIdx_ = 0;
+  savedWeaponCount_ = 0;
+  savedStats_ = PlayerStats{};
+
   player_ = registry_.create();
   registry_.emplace<Transform>(player_, 0.0F, 0.0F, 0.0F, 0.0F);
   registry_.emplace<Velocity>(player_);
@@ -238,6 +246,21 @@ void Game::advance(float frameDt, const FrameInput& input) {
   if (state_ == RunState::GameOver && input.restart) {
     reset();
     return;
+  }
+  // Weapon test mode: T opens/closes it, then 1-5 drive the sandbox.
+  if (state_ == RunState::Playing && input.testModeToggle) {
+    if (testMode_) {
+      exitTestMode();
+    } else {
+      enterTestMode();
+    }
+  }
+  if (state_ == RunState::Playing && testMode_) {
+    if (input.choose1) setTestWeapon(testWeaponIdx_ - 1);
+    else if (input.choose2) setTestWeapon(testWeaponIdx_ + 1);
+    else if (input.choose3) toggleTestBoost();
+    else if (input.choose4) wavesEnabled_ = !wavesEnabled_;
+    else if (input.choose5) exitTestMode();
   }
   if (state_ == RunState::LevelUp) {
     const std::size_t n = choices_.size();
@@ -321,8 +344,8 @@ void Game::fixedUpdate() {
     p.vy *= 0.92F;
   }
 
-  // Level-up check.
-  if (state_ == RunState::Playing && xp_ >= xpNext_) {
+  // Level-up check (suspended while the weapon test sandbox is open).
+  if (state_ == RunState::Playing && !testMode_ && xp_ >= xpNext_) {
     enterLevelUp();
   }
 }
@@ -524,7 +547,7 @@ void Game::fireWeapons() {
       auto& w = weapons_[i];
       w.timer -= dt;
       if (w.timer <= 0.0F) {
-        w.timer = w.cooldown * stats_.cooldownMul;
+        w.timer = attackCooldown(w.cooldown, stats_.fireRateBonus + w.cdBonus);
       }
     }
     return;
@@ -537,7 +560,7 @@ void Game::fireWeapons() {
     w.timer -= 1.0F / 60.0F;
     if (w.timer > 0.0F) continue;
 
-    const float cooldown = w.cooldown * stats_.cooldownMul;
+    const float cooldown = attackCooldown(w.cooldown, stats_.fireRateBonus + w.cdBonus);
     const float damage = w.damage * stats_.damageMul;
     const int count = std::max(1, w.projectiles + stats_.projAdd);
     const int pierce = w.pierce + stats_.pierceAdd;
@@ -591,6 +614,20 @@ void Game::fireWeapons() {
               spawnParticles(et.x, et.y, {1.0F, 0.5F, 0.1F, 1.0F}, 4, 3.0F);
             }
           }
+          // Visible flame fan along the aim direction so the cone reads on
+          // screen (reuses the fading-wedge renderer).
+          const auto se = registry_.create();
+          registry_.emplace<Transform>(se, pt.x, pt.y, pt.x, pt.y);
+          registry_.emplace<Radius>(se, coneRange);
+          SweepEffect sw{};
+          sw.radius = coneRange;
+          sw.angle = coneAngle;
+          sw.duration = 0.22F;
+          sw.timer = 0.22F;
+          sw.startAngle = baseAngle - halfAngle;
+          sw.endAngle = baseAngle + halfAngle;
+          sw.color = {1.0F, 0.55F, 0.10F, 1.0F};
+          registry_.emplace<SweepEffect>(se, sw);
         }
         w.timer = cooldown;
         break;
@@ -612,9 +649,9 @@ void Game::fireWeapons() {
           // Vertical velocity to achieve bombArcHeight at midpoint
           // Using: H = vy^2 / (2*g) => vy = sqrt(2*g*H)
           const float gravity = 30.0F; // matches updateBombProjectiles
-          // More projectiles = a taller arc; more pierce = harder knockback.
+          // More projectiles = a taller arc; more pierce = a bigger blast.
           const float arcHeight = w.bombArcHeight * (1.0F + stats_.projAdd * 0.25F);
-          const float vy = std::sqrt(2.0F * gravity * w.bombArcHeight);
+          const float vy = std::sqrt(2.0F * gravity * arcHeight);
           registry_.emplace<Velocity>(bomb, vx, vy);
           registry_.emplace<Radius>(bomb, 0.2F);
           Sprite s{};
@@ -623,8 +660,10 @@ void Game::fireWeapons() {
           registry_.emplace<Sprite>(bomb, s);
           BombProjectile bp{};
           bp.damage = damage;
-          bp.explodeRadius = w.bombExplodeRadius;
-          bp.knockback = w.bombKnockback + stats_.pierceAdd * 0.5F;
+          // Pierce no longer extends bomb life: it scales the explosion
+          // radius (+15% per point) so the weapon stays "one boom, gone".
+          bp.explodeRadius = w.bombExplodeRadius * (1.0F + stats_.pierceAdd * 0.15F);
+          bp.knockback = w.bombKnockback;
           bp.life = w.life;
           bp.initialLife = w.life;
           bp.arcHeight = arcHeight;
@@ -663,6 +702,7 @@ void Game::fireWeapons() {
           bp.targetY = pt.y + std::sin(angle) * w.boomerangRange;
           bp.returning = false;
           bp.bounceCount = 0;
+          bp.blastRadius = w.area;
           bp.color = w.color;
           registry_.emplace<BoomerangProjectile>(boom, bp);
         }
@@ -689,6 +729,7 @@ void Game::fireWeapons() {
           bp.bounceRange = w.bounceRange;
           bp.damageMul = w.bounceDamageMul;
           bp.bounceCount = 0;
+          bp.splashRadius = w.area;
           bp.color = w.color;
           registry_.emplace<BounceProjectile>(proj, bp);
         }
@@ -697,55 +738,75 @@ void Game::fireWeapons() {
       }
       case AttackType::Beam: {
         if (found) {
-          // More projectiles = a wider beam.
-          const float beamWidth = w.beamWidth * (1.0F + stats_.projAdd * 0.15F);
-          const float endX = pt.x + std::cos(baseAngle) * w.beamRange;
-          const float endY = pt.y + std::sin(baseAngle) * w.beamRange;
-          const auto beam = registry_.create();
-          registry_.emplace<Transform>(beam, pt.x, pt.y, pt.x, pt.y);
-          registry_.emplace<Radius>(beam, beamWidth * 0.5F);
-          Sprite s{};
-          s.color = w.color;
-          s.circle = false;
-          registry_.emplace<Sprite>(beam, s);
-          BeamEffect be{};
-          be.damage = w.damage; // base; updateBeamEffects scales by damageMul
-          be.range = w.beamRange;
-          be.width = beamWidth;
-          be.duration = w.beamDuration;
-          be.timer = w.beamDuration;
-          be.startX = pt.x;
-          be.startY = pt.y;
-          be.endX = endX;
-          be.endY = endY;
-          be.color = w.color;
-          registry_.emplace<BeamEffect>(beam, be);
+          // Projectiles now mean PARALLEL BEAMS (very visible), and the beam
+          // unique ("Prism Lance") multiplies that count. Beam width still
+          // grows a little per projectile too.
+          const int split = w.beamSplit > 0 ? w.beamSplit : 1;
+          const int beamCount = std::min(6, count * split);
+          const float beamWidth = w.beamWidth * (1.0F + stats_.projAdd * 0.05F);
+          const float gap = 0.05F * stats_.spreadMul; // radians between beams
+          for (int p = 0; p < beamCount; ++p) {
+            const float offset =
+                (static_cast<float>(p) - static_cast<float>(beamCount - 1) * 0.5F) * gap;
+            const float bAngle = baseAngle + offset;
+            const float endX = pt.x + std::cos(bAngle) * w.beamRange;
+            const float endY = pt.y + std::sin(bAngle) * w.beamRange;
+            const auto beam = registry_.create();
+            registry_.emplace<Transform>(beam, pt.x, pt.y, pt.x, pt.y);
+            registry_.emplace<Radius>(beam, beamWidth * 0.5F);
+            Sprite s{};
+            s.color = w.color;
+            s.circle = false;
+            registry_.emplace<Sprite>(beam, s);
+            BeamEffect be{};
+            be.damage = w.damage; // base; updateBeamEffects scales by damageMul
+            be.range = w.beamRange;
+            be.width = beamWidth;
+            be.duration = w.beamDuration;
+            be.timer = w.beamDuration;
+            be.startX = pt.x;
+            be.startY = pt.y;
+            be.endX = endX;
+            be.endY = endY;
+            be.color = w.color;
+            registry_.emplace<BeamEffect>(beam, be);
+          }
         }
         w.timer = cooldown;
         break;
       }
       case AttackType::Sweep: {
-        // Sweep is centered on player, instant damage in arc
+        // The scythe is a heavy DIRECTIONAL swing: the arc is centered a
+        // distance `sweepLead` in front of the player along the aim line, so
+        // it reaches far ahead instead of only hugging the player (distinct
+        // from the dagger's protective close ring).
         const float sweepAngle = w.sweepAngle;
-        // More projectiles = a wider/reaching scythe arc.
         const float sweepRadius = w.sweepRadius * (1.0F + stats_.projAdd * 0.15F);
         const float halfAngle = sweepAngle * 0.5F;
+        const float sx = pt.x + std::cos(baseAngle) * w.sweepLead;
+        const float sy = pt.y + std::sin(baseAngle) * w.sweepLead;
         auto view = registry_.view<Transform, Health, Radius, Enemy>();
         for (const auto e : view) {
           const auto& et = view.get<Transform>(e);
-          const float dx = et.x - pt.x;
-          const float dy = et.y - pt.y;
+          const float dx = et.x - sx;
+          const float dy = et.y - sy;
           const float dist2 = dx * dx + dy * dy;
           if (dist2 > sweepRadius * sweepRadius) continue;
           const float angleToEnemy = std::atan2(dy, dx);
-          // For sweep, we sweep from -halfAngle to +halfAngle around baseAngle
-          // Actually sweep is 360 or 180 around player, so check if in arc
           float diff = angleToEnemy - baseAngle;
           while (diff > kPi) diff -= 2.0F * kPi;
           while (diff < -kPi) diff += 2.0F * kPi;
           if (std::abs(diff) <= halfAngle) {
             applyEnemyDamage(e, damage);
-            // Knockback
+            // "Reaper's Harvest" unique: scythe kills restore HP.
+            if (w.uniqueHeal > 0.0F) {
+              auto* eh = registry_.try_get<Health>(e);
+              if (eh != nullptr && eh->hp <= 0.0F && registry_.valid(player_)) {
+                auto& php = registry_.get<Health>(player_);
+                php.hp = std::min(php.max, php.hp + w.uniqueHeal);
+              }
+            }
+            // Knockback away from the swing center.
             auto* ev = registry_.try_get<Velocity>(e);
             if (ev) {
               const float pushAngle = angleToEnemy;
@@ -755,9 +816,10 @@ void Game::fireWeapons() {
             spawnParticles(et.x, et.y, {0.7F, 1.0F, 0.8F, 1.0F}, 6, 4.0F);
           }
         }
-        // Visual: a fading arc wedge along the strike direction.
+        // Visual: a fading arc wedge along the strike direction, centered at
+        // the shifted swing point.
         const auto se = registry_.create();
-        registry_.emplace<Transform>(se, pt.x, pt.y, pt.x, pt.y);
+        registry_.emplace<Transform>(se, sx, sy, sx, sy);
         registry_.emplace<Radius>(se, sweepRadius);
         SweepEffect sw{};
         sw.damage = w.damage; // instant damage stays in fireWeapons
@@ -1111,23 +1173,25 @@ void Game::updateOrbitBlades() {
     auto& t = view.get<Transform>(e);
     auto& ob = view.get<OrbitBlade>(e);
 
-    // Derive damage/pierce from the owning weapon slot each tick so upgrades
-    // taken after the dagger was acquired still apply to existing blades.
-    const float damage = (ob.weaponIndex >= 0 && ob.weaponIndex < weaponCount_)
-                             ? weapons_[ob.weaponIndex].damage * stats_.damageMul
-                             : ob.damage * stats_.damageMul;
-    const int pierce = (ob.weaponIndex >= 0 && ob.weaponIndex < weaponCount_)
-                           ? weapons_[ob.weaponIndex].pierce + stats_.pierceAdd
-                           : ob.pierce + stats_.pierceAdd;
+    // Derive damage/pierce/speed/radius from the owning weapon slot each tick
+    // so upgrades (incl. the "Blade Vortex" unique) apply to existing blades.
+    const bool owned = ob.weaponIndex >= 0 && ob.weaponIndex < weaponCount_;
+    const float damage = owned ? weapons_[ob.weaponIndex].damage * stats_.damageMul
+                               : ob.damage * stats_.damageMul;
+    const int pierce =
+        owned ? weapons_[ob.weaponIndex].pierce + stats_.pierceAdd
+              : ob.pierce + stats_.pierceAdd;
     (void)pierce;
+    const float speed = owned ? weapons_[ob.weaponIndex].orbitSpeed : ob.speed;
+    const float radius = owned ? weapons_[ob.weaponIndex].orbitRadius : ob.radius;
 
     t.px = t.x;
     t.py = t.y;
 
     // Dagger spin scales with attack speed: faster fire rate = faster spin.
-    ob.angle += (ob.speed / std::max(0.25F, stats_.cooldownMul)) / 60.0F;
-    t.x = pt.x + std::cos(ob.angle) * ob.radius;
-    t.y = pt.y + std::sin(ob.angle) * ob.radius;
+    ob.angle += (speed * std::max(0.5F, 1.0F + stats_.fireRateBonus)) / 60.0F;
+    t.x = pt.x + std::cos(ob.angle) * radius;
+    t.y = pt.y + std::sin(ob.angle) * radius;
 
     // Check collision with enemies
     auto enemyView = registry_.view<Transform, Health, Radius, Enemy>();
@@ -1194,9 +1258,22 @@ void Game::updateBombProjectiles() {
       if (dx * dx + dy * dy > hitR * hitR) return;
 
       hit = true;
-      explodeBomb(e, bp, et.x, et.y);
-      destroyQueue_.push_back(e);
     });
+    if (hit) {
+      // Explode where the bomb is — it has just moved into the enemy, so the
+      // blast lands on the target (and the bomb entity is always removed).
+      explodeBomb(e, bp, t.x, t.y);
+      destroyQueue_.push_back(e);
+      continue;
+    }
+
+    // Landing: once past the apex the bomb drops back to launch height —
+    // that's where it detonates, so it never tunnels below the ground and
+    // vanishes. The boom is always visible and always removes the bomb.
+    if (v.y < 0.0F && t.y <= bp.startY) {
+      explodeBomb(e, bp, t.x, t.y);
+      destroyQueue_.push_back(e);
+    }
   }
 }
 
@@ -1265,6 +1342,19 @@ void Game::updateBoomerangProjectiles() {
       }
       // Check if reached player
       if (dist < 0.5F) {
+        // "Return Tempest" unique: detonate a burst at the return point.
+        if (bp.blastRadius > 0.0F) {
+          auto blastView = registry_.view<Transform, Health, Radius, Enemy>();
+          for (const auto be : blastView) {
+            const auto& bt = blastView.get<Transform>(be);
+            const float bdx = bt.x - t.x;
+            const float bdy = bt.y - t.y;
+            if (bdx * bdx + bdy * bdy < bp.blastRadius * bp.blastRadius) {
+              applyEnemyDamage(be, bp.damage * 2.0F);
+            }
+          }
+          spawnParticles(t.x, t.y, {0.6F, 0.9F, 1.0F, 1.0F}, 16, 5.0F);
+        }
         destroyQueue_.push_back(e);
         continue;
       }
@@ -1351,6 +1441,21 @@ void Game::updateBounceProjectiles() {
       applyEnemyDamage(enemy, scaledDamage);
       const float dealt = hpBefore - eh->hp;
       if (dealt > 0.0F) tryLifesteal();
+
+      // "Echo Detonation" unique: every bounce splashes area damage.
+      if (bp.splashRadius > 0.0F) {
+        auto splashView = registry_.view<Transform, Health, Radius, Enemy>();
+        for (const auto se : splashView) {
+          if (se == enemy) continue;
+          const auto& st = splashView.get<Transform>(se);
+          const float sdx = st.x - et.x;
+          const float sdy = st.y - et.y;
+          if (sdx * sdx + sdy * sdy < bp.splashRadius * bp.splashRadius) {
+            applyEnemyDamage(se, scaledDamage * 0.5F);
+          }
+        }
+        spawnParticles(et.x, et.y, {0.75F, 0.45F, 1.0F, 1.0F}, 10, 4.0F);
+      }
 
       // Find next bounce target
       bp.bounceCount++;
@@ -1906,7 +2011,8 @@ void Game::buildChoices() {
   choices_.clear();
   std::uniform_real_distribution<float> unit(0.0F, 1.0F);
 
-  const bool milestone = (level_ % 5 == 0);
+  // Milestones arrive on every power-of-two level from 4 on (4, 8, 16, 32, ...).
+  const bool milestone = level_ >= 4 && (level_ & (level_ - 1)) == 0;
   if (milestone) {
     std::vector<int> pool;
     pool.reserve(content_.upgrades.size());
@@ -1949,9 +2055,10 @@ void Game::buildChoices() {
     std::vector<int> uniques;
     for (std::size_t i = 0; i < content_.upgrades.size(); ++i) {
       const auto& u = content_.upgrades[i];
-      if (u.kind == "unique" && stacks_[i] < u.maxStacks) {
-        uniques.push_back(static_cast<int>(i));
-      }
+      if (u.kind != "unique" || stacks_[i] >= u.maxStacks) continue;
+      // A weapon's unique item only makes sense if that weapon is equipped.
+      if (!u.weapon.empty() && findWeaponSlot(u.weapon) < 0) continue;
+      uniques.push_back(static_cast<int>(i));
     }
     if (!uniques.empty() && unit(rng_) < 0.45F) {
       std::shuffle(uniques.begin(), uniques.end(), rng_);
@@ -2130,6 +2237,12 @@ void Game::addWeapon(int defIndex) {
   w.homing = def.homing;
   w.bounces = 0;
 
+  // Round-3 additions.
+  w.cdBonus = 0.0F;
+  w.sweepLead = def.sweepLead;
+  w.uniqueHeal = 0.0F;
+  w.beamSplit = 0;
+
   // Create orbit blades if this is an orbit weapon. The blade count tracks
   // w.projectiles + stats_.projAdd so "+1 projectile" upgrades add blades.
   if (w.attackType == AttackType::Orbit && player_ != entt::null && registry_.valid(player_)) {
@@ -2218,8 +2331,37 @@ void Game::applyWeaponEffect(int slotIndex, std::string_view effect, float value
     }
   } else if (effect == "w_pierce_add") {
     w.pierce += static_cast<int>(value);
-  } else if (effect == "w_cd_mul") {
-    w.cooldown *= (1.0F + value);
+  } else if (effect == "w_fire_rate") {
+    w.cdBonus += value;
+  } else if (effect == "w_unique_homing") {
+    w.homing = true;
+  } else if (effect == "w_unique_area") {
+    w.area = value;
+  } else if (effect == "w_unique_vortex") {
+    w.orbitSpeed *= 2.0F;
+    w.orbitRadius *= 1.25F;
+  } else if (effect == "w_unique_hearthfire") {
+    w.coneRange *= 1.5F;
+    w.coneAngle *= 1.4F;
+  } else if (effect == "w_unique_cataclysm") {
+    w.bombExplodeRadius *= 1.6F;
+    w.bombKnockback *= 1.5F;
+  } else if (effect == "w_unique_prism") {
+    w.beamSplit += static_cast<int>(value);
+  } else if (effect == "w_unique_molten") {
+    w.zoneDps *= 1.8F;
+    w.zoneDuration += 2.0F;
+    w.zoneRadius *= 1.25F;
+  } else if (effect == "w_unique_thunderlord") {
+    w.chainMaxJumps += static_cast<int>(value);
+    w.chainDamageMul = 1.0F;
+  } else if (effect == "w_unique_supernova") {
+    w.novaExpandSpeed *= 1.8F;
+    w.novaMaxRadius *= 1.4F;
+    w.novaDamagePerTick *= 1.6F;
+    w.novaTickRate *= 0.7F;
+  } else if (effect == "w_unique_harvest") {
+    w.uniqueHeal += value;
   }
 }
 
@@ -2328,6 +2470,86 @@ void Game::testClearWeapons() {
   }
 }
 
+void Game::enterTestMode() {
+  if (state_ != RunState::Playing) return;
+  savedWeaponCount_ = weaponCount_;
+  for (int i = 0; i < savedWeaponCount_; ++i) savedWeapons_[i] = weapons_[i];
+  savedStats_ = stats_;
+  testBoosted_ = false;
+  testMode_ = true;
+  setTestWeapon(0); // starts on the first weapon (wand)
+}
+
+void Game::exitTestMode() {
+  if (!testMode_) return;
+  testClearWeapons(); // drop the sandbox weapon + its orbit blades
+  weaponCount_ = savedWeaponCount_;
+  for (int i = 0; i < weaponCount_; ++i) weapons_[i] = savedWeapons_[i];
+  stats_ = savedStats_;
+  testMode_ = false;
+  testBoosted_ = false;
+  // Rebuild persistent orbit blades for the restored arsenal.
+  for (int s = 0; s < weaponCount_; ++s) {
+    if (weapons_[s].attackType == AttackType::Orbit) {
+      syncOrbitBlades(s);
+    }
+  }
+}
+
+void Game::setTestWeapon(int defIndex) {
+  const int n = static_cast<int>(content_.weapons.size());
+  if (n <= 0) return;
+  testWeaponIdx_ = ((defIndex % n) + n) % n;
+  testClearWeapons();
+  addWeapon(testWeaponIdx_);
+  spawnTestFodder(); // fresh targets so every weapon has something to hit
+}
+
+void Game::toggleTestBoost() {
+  if (!testMode_) return;
+  if (!testBoosted_) {
+    // A buffed build that makes every stat coupling obvious at a glance.
+    testBoosted_ = true;
+    stats_.damageMul += 1.0F;
+    stats_.projAdd += 4;
+    stats_.pierceAdd += 3;
+    stats_.fireRateBonus += 0.8F;
+  } else {
+    testBoosted_ = false;
+    stats_ = savedStats_;
+  }
+  for (int s = 0; s < weaponCount_; ++s) {
+    if (weapons_[s].attackType == AttackType::Orbit) {
+      syncOrbitBlades(s);
+    }
+  }
+}
+
+void Game::spawnTestFodder() {
+  if (content_.enemies.empty()) return;
+  if (player_ == entt::null || !registry_.valid(player_)) return;
+  const auto& pt = registry_.get<Transform>(player_);
+  std::uniform_real_distribution<float> unit(0.0F, 1.0F);
+  constexpr int kHerd = 10;
+  for (int m = 0; m < kHerd; ++m) {
+    const float angle =
+        (static_cast<float>(m) / static_cast<float>(kHerd)) * 2.0F * kPi +
+        (unit(rng_) - 0.5F) * 0.5F;
+    PendingSpawn pending{};
+    pending.x = pt.x + std::cos(angle) * 6.5F;
+    pending.y = pt.y + std::sin(angle) * 6.5F;
+    pending.t = 0.4F; // short telegraph so the herd rushes in fast
+    pending.def = 0;  // cheapest fodder enemy
+    pending.hpMul = 1.0F;
+    pending.touchMul = 1.0F;
+    pending.speedMul = 1.0F;
+    pending.xpMul = 1.0F;
+    pending.traits = TraitNone;
+    pending.tier = 0;
+    pending_.push_back(pending);
+  }
+}
+
 void Game::testSpawnEnemyAt(float x, float y) {
   const auto e = registry_.create();
   registry_.emplace<Transform>(e, x, y, x, y);
@@ -2381,6 +2603,31 @@ std::vector<float> Game::testEnemySpeeds() const {
     out.push_back(std::sqrt(v.x * v.x + v.y * v.y));
   }
   return out;
+}
+
+std::vector<std::string> Game::armedWeaponIds() const {
+  std::vector<std::string> out;
+  out.reserve(static_cast<std::size_t>(weaponCount_));
+  for (int i = 0; i < weaponCount_; ++i) {
+    out.push_back(content_.weapons[static_cast<std::size_t>(weapons_[i].def)].id);
+  }
+  return out;
+}
+
+std::vector<float> Game::testEnemyHps() const {
+  std::vector<float> out;
+  auto view = registry_.view<Health, Enemy>();
+  for (const auto e : view) {
+    out.push_back(view.get<Health>(e).hp);
+  }
+  return out;
+}
+
+float Game::testOrbitBladeAngle() const {
+  for (const auto e : registry_.view<OrbitBlade>()) {
+    return registry_.get<OrbitBlade>(e).angle;
+  }
+  return -1.0F;
 }
 
 std::vector<float> Game::testOrbitBladeGaps(int slot) const {
@@ -2490,8 +2737,8 @@ void Game::renderPlayerStats(core::render::Batcher& b, float px, float py) {
   rows.push_back("SHIELD " + std::to_string(static_cast<int>(shield_)) + "/" +
                  std::to_string(static_cast<int>(stats_.shieldMax)) + "  DEFENSE " +
                  std::to_string(static_cast<int>(stats_.defense)));
-  rows.push_back("DAMAGE X" + fit1(stats_.damageMul) + "    COOLDOWN X" +
-                 fit1(stats_.cooldownMul));
+  rows.push_back("DAMAGE X" + fit1(stats_.damageMul) + "    FIRE RATE +" +
+                 std::to_string(static_cast<int>(stats_.fireRateBonus * 100.0F)) + "%");
   std::string speedRow = "SPEED X" + fit1(stats_.speedMul) + "     PICKUP X" +
                          fit1(stats_.pickupMul);
   if (stats_.lifesteal > 0.0F) {
@@ -3047,6 +3294,33 @@ void Game::render(core::render::Batcher& b, float alpha) {
     b.text(px * 0.5F - b.textWidth(3.0F, stats) * 0.5F, py * 0.48F, 3.0F, white, stats);
     const std::string restart = "PRESS R TO RESTART";
     b.text(px * 0.5F - b.textWidth(3.0F, restart) * 0.5F, py * 0.60F, 3.0F, gold, restart);
+  }
+
+  // Weapon test mode overlay: shows the armed weapon and the sandbox controls.
+  if (testMode_) {
+    b.rectTopLeft(0.0F, 0.0F, px, py, Color{0.0F, 0.0F, 0.0F, 0.18F});
+    std::string wname = "NO WEAPON";
+    std::string wtag = "";
+    if (weaponCount_ >= 1) {
+      const auto& def = content_.weapons[static_cast<std::size_t>(weapons_[0].def)];
+      wname = def.name;
+      wtag = def.prereqs.empty() ? "" : " (EVO)";
+    }
+    const std::string title =
+        "WEAPON TEST " + std::to_string(testWeaponIdx_ + 1) + "/" +
+        std::to_string(content_.weapons.size()) + " - " + wname + wtag;
+    b.text(px * 0.5F - b.textWidth(3.0F, title) * 0.5F, py * 0.78F, 3.0F, gold, title);
+    const std::string boost = testBoosted_ ? "BOOST ON" : "BOOST OFF";
+    const std::string waves = wavesEnabled_ ? "WAVES ON" : "WAVES OFF";
+    const std::string status = boost + "   " + waves;
+    b.text(px * 0.5F - b.textWidth(2.0F, status) * 0.5F, py * 0.82F, 2.0F,
+           Color{0.75F, 0.85F, 1.0F, 1.0F}, status);
+    const std::string hint = "[1] PREV   [2] NEXT   [3] MAX BUILD   [4] WAVES   [5] CLOSE";
+    b.text(px * 0.5F - b.textWidth(1.8F, hint) * 0.5F, py * 0.86F, 1.8F,
+           Color{0.8F, 0.8F, 0.85F, 1.0F}, hint);
+    const std::string note = "KILLS FEED XP - LEVEL UPS RESUME AFTER CLOSING";
+    b.text(px * 0.5F - b.textWidth(1.4F, note) * 0.5F, py * 0.89F, 1.4F,
+           Color{0.6F, 0.6F, 0.7F, 1.0F}, note);
   }
 
   b.flush();

@@ -28,6 +28,7 @@ game::FrameInput pollInput(bool& quit) {
         case SDLK_4: in.choose4 = true; break;
         case SDLK_5: in.choose5 = true; break;
         case SDLK_R: in.restart = true; break;
+        case SDLK_T: in.testModeToggle = true; break;
         default: break;
       }
     }

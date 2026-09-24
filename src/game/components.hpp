@@ -112,6 +112,7 @@ struct BoomerangProjectile {
   float targetY = 0.0F;
   bool returning = false;
   int bounceCount = 0;
+  float blastRadius = 0.0F;  // >0: explode on return (shuriken unique)
   core::render::Color color{1.0F, 1.0F, 1.0F, 1.0F};
 };
 
@@ -126,6 +127,7 @@ struct BounceProjectile {
   int bounceCount = 0;
   float lastHitX = 0.0F;
   float lastHitY = 0.0F;
+  float splashRadius = 0.0F; // >0: splash damage on each bounce (orb unique)
   core::render::Color color{1.0F, 1.0F, 1.0F, 1.0F};
 };
 

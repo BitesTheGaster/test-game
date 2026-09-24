@@ -40,9 +40,9 @@ TEST_CASE("applyUpgrade mutates stats and reports validity") {
   REQUIRE(dmg.valid);
   REQUIRE(s.damageMul == Catch::Approx(1.15F));
 
-  const auto cd = game::applyUpgrade(s, "cooldown_mul", -0.10F);
-  REQUIRE(cd.valid);
-  REQUIRE(s.cooldownMul == Catch::Approx(0.90F));
+  const auto fr = game::applyUpgrade(s, "fire_rate", 0.10F);
+  REQUIRE(fr.valid);
+  REQUIRE(s.fireRateBonus == Catch::Approx(0.10F));
 
   const auto proj = game::applyUpgrade(s, "proj_add", 1.0F);
   REQUIRE(proj.valid);
@@ -92,7 +92,9 @@ TEST_CASE("applyUpgrade supports unique-item effects") {
   const auto fan = game::applyUpgrade(s, "fan", 1.0F);
   REQUIRE(fan.valid);
   REQUIRE(s.spreadMul == Catch::Approx(3.0F));
-  REQUIRE(s.cooldownMul == Catch::Approx(0.5F));
+  // The new attack-speed model is ADDITIVE: the fan adds +100% fire rate,
+  // which halves the delay (delay = base / (1 + bonus)).
+  REQUIRE(s.fireRateBonus == Catch::Approx(1.0F));
 
   REQUIRE(game::applyUpgrade(s, "extra_choice", 1.0F).valid);
   REQUIRE(s.extraChoice == 1);
@@ -106,6 +108,22 @@ TEST_CASE("applyUpgrade supports unique-item effects") {
   REQUIRE(s.chain == 1);
   REQUIRE(game::applyUpgrade(s, "lifesteal_heal", 2.0F).valid);
   REQUIRE(s.lifestealHeal == 2);
+}
+
+TEST_CASE("attackCooldown: delay = base / (1 + additive fire-rate bonus)") {
+  // No bonus: delay equals the weapon's base cooldown.
+  REQUIRE(game::attackCooldown(0.50F, 0.0F) == Catch::Approx(0.50F));
+  // +100% fire rate halves the delay; +300% quarters it.
+  REQUIRE(game::attackCooldown(0.50F, 1.0F) == Catch::Approx(0.25F));
+  REQUIRE(game::attackCooldown(0.50F, 3.0F) == Catch::Approx(0.125F));
+  // Bonuses stack additively (+, not *), so +50% + +50% = +100%.
+  REQUIRE(game::attackCooldown(1.0F, 0.5F + 0.5F) ==
+          game::attackCooldown(1.0F, 1.0F));
+  // The formula is asymptotic: stacking can never reach zero delay.
+  REQUIRE(game::attackCooldown(0.5F, 100.0F) > 0.0F);
+  REQUIRE(game::attackCooldown(0.5F, 100000.0F) > 0.0F);
+  // And order of magnitude matches: a huge bonus ~ base / bonus.
+  REQUIRE(game::attackCooldown(1.0F, 9.0F) == Catch::Approx(0.10F));
 }
 
 TEST_CASE("xpForLevel grows monotonically") {
@@ -213,25 +231,36 @@ TEST_CASE("grantXp triggers level-up state") {
   REQUIRE(g.level() == 2);
 }
 
-TEST_CASE("Level 5 offers milestone cards") {
+TEST_CASE("Milestones fire on power-of-two levels (4, 8, ...) not 5") {
   const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
   game::Game g{content, 11};
 
-  // Reach level 5 with exactly one level-up per pick (queue four level-ups).
-  g.grantXp(game::xpForLevel(1) + game::xpForLevel(2) + game::xpForLevel(3) + game::xpForLevel(4));
+  // Reach level 4 with exactly one level-up per pick.
+  g.grantXp(game::xpForLevel(1) + game::xpForLevel(2) + game::xpForLevel(3));
   REQUIRE(g.state() == game::RunState::LevelUp);
-  for (int i = 0; i < 4; ++i) {
+  for (int i = 0; i < 3; ++i) {
     game::FrameInput in{};
     in.choose1 = true;
     g.advance(1.0F / 60.0F, in);
   }
-  REQUIRE(g.level() == 5);
+  REQUIRE(g.level() == 4);
   REQUIRE(g.state() == game::RunState::Playing);
 
-  g.grantXp(game::xpForLevel(5));
+  // Level 4 is a milestone level: pick-of-2 from the milestone pool.
+  g.grantXp(game::xpForLevel(4));
   REQUIRE(g.state() == game::RunState::LevelUp);
   REQUIRE(g.milestoneOffer());
   REQUIRE(g.upgradeChoices().size() == 2);
+
+  // A non-power-of-two level (5) behaves like a normal level-up.
+  game::FrameInput in{};
+  in.choose1 = true;
+  g.advance(1.0F / 60.0F, in);
+  REQUIRE(g.level() == 5);
+  g.grantXp(game::xpForLevel(5));
+  REQUIRE(g.state() == game::RunState::LevelUp);
+  REQUIRE_FALSE(g.milestoneOffer());
+  REQUIRE(g.upgradeChoices().size() == 3);
 }
 
 TEST_CASE("Reroll refreshes the offered choices once per level-up") {
@@ -494,6 +523,280 @@ TEST_CASE("Bomb weapon creates arcing projectile") {
   }
   
   REQUIRE(g.simTime() > 4.0F);
+}
+
+TEST_CASE("Bomb explodes on landing and is always removed") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  int hammerIdx = -1;
+  for (std::size_t i = 0; i < content.weapons.size(); ++i) {
+    if (content.weapons[i].id == "hammer") {
+      hammerIdx = static_cast<int>(i);
+      break;
+    }
+  }
+  REQUIRE(hammerIdx >= 0);
+
+  game::Game g{content, 456};
+  g.testDisableWaves();
+  g.testClearWeapons();
+  // One enemy far away: the bomb aims along +x but its fixed arc lands ~6.5
+  // units out, so it detonates by the LANDING rule (no contact impact).
+  g.testSpawnEnemyAt(30.0F, 0.0F);
+  g.testAddWeapon(hammerIdx);
+
+  game::FrameInput in{};
+  // Flight time is t = 2*sqrt(2*30*2.5)/30 ~= 0.82s => ~49 ticks.
+  for (int i = 0; i < 25; ++i) {
+    g.advance(1.0F / 60.0F, in);
+  }
+  REQUIRE(g.debugCounts().bombs == 1); // airborne mid-arc
+
+  for (int i = 0; i < 50; ++i) {
+    g.advance(1.0F / 60.0F, in);
+  }
+  // Bomb landed, exploded, and was destroyed — it never lingers invisible.
+  REQUIRE(g.debugCounts().bombs == 0);
+  // The far-away enemy took nothing: the explosion happened at the landing
+  // spot, not teleported onto the enemy.
+  REQUIRE(g.testFirstEnemyHp() == Catch::Approx(100000.0F));
+}
+
+TEST_CASE("Hammer pierce scales the explosion radius, not bomb life") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  int hammerIdx = -1;
+  for (std::size_t i = 0; i < content.weapons.size(); ++i) {
+    if (content.weapons[i].id == "hammer") {
+      hammerIdx = static_cast<int>(i);
+      break;
+    }
+  }
+  REQUIRE(hammerIdx >= 0);
+
+  auto run = [&](int pierceAdd) {
+    game::Game g{content, 331};
+    g.testDisableWaves();
+    g.testClearWeapons();
+    g.stats().pierceAdd = pierceAdd;
+    // Landing spot is x = speed * flightTime = 8 * 0.8165 ~= 6.53. Park the
+    // enemy 2.1 units past it: inside the boosted blast (2.0 * 1.3 = 2.6 for
+    // +2 pierce) but outside the base 2.0.
+    g.testSpawnEnemyAt(8.63F, 0.0F);
+    g.testAddWeapon(hammerIdx);
+    game::FrameInput in{};
+    for (int i = 0; i < 75; ++i) {
+      g.advance(1.0F / 60.0F, in);
+    }
+    return g;
+  };
+
+  {
+    const auto base = run(0);
+    REQUIRE(base.testFirstEnemyHp() == Catch::Approx(100000.0F)); // out of blast
+  }
+  {
+    const auto boosted = run(2);
+    REQUIRE(boosted.testFirstEnemyHp() == Catch::Approx(100000.0F - 45.0F));
+    REQUIRE(boosted.debugCounts().bombs == 0); // still "one boom, gone"
+  }
+}
+
+TEST_CASE("Beam projectile count spawns parallel beams") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  int beamIdx = -1;
+  for (std::size_t i = 0; i < content.weapons.size(); ++i) {
+    if (content.weapons[i].id == "beam") {
+      beamIdx = static_cast<int>(i);
+      break;
+    }
+  }
+  REQUIRE(beamIdx >= 0);
+
+  auto countBeams = [&](int projAdd) {
+    game::Game g{content, 222};
+    g.testDisableWaves();
+    g.testClearWeapons();
+    g.stats().projAdd = projAdd;
+    g.testSpawnEnemyAt(3.0F, 0.0F);
+    g.testAddWeapon(beamIdx);
+    game::FrameInput in{};
+    g.advance(1.0F / 60.0F, in);
+    g.advance(1.0F / 60.0F, in);
+    return static_cast<int>(g.debugCounts().beams);
+  };
+
+  // The 1-vs-2 "nothing changed" complaint: each projectile is now a beam.
+  REQUIRE(countBeams(0) == 1);
+  REQUIRE(countBeams(1) == 2);
+}
+
+TEST_CASE("Prism Lance unique triples the parallel beams") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  int beamIdx = -1;
+  for (std::size_t i = 0; i < content.weapons.size(); ++i) {
+    if (content.weapons[i].id == "beam") {
+      beamIdx = static_cast<int>(i);
+      break;
+    }
+  }
+  REQUIRE(beamIdx >= 0);
+
+  game::Game g{content, 223};
+  g.testDisableWaves();
+  g.testClearWeapons();
+  g.testSpawnEnemyAt(3.0F, 0.0F);
+  g.testAddWeapon(beamIdx);
+  g.testAddWeaponUpgrade(0, "w_unique_prism", 3.0F);
+  game::FrameInput in{};
+  g.advance(1.0F / 60.0F, in);
+  g.advance(1.0F / 60.0F, in);
+  REQUIRE(g.debugCounts().beams == 3);
+}
+
+TEST_CASE("Cone weapon renders a visible flame fan and deals instant damage") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  int flameIdx = -1;
+  for (std::size_t i = 0; i < content.weapons.size(); ++i) {
+    if (content.weapons[i].id == "flame") {
+      flameIdx = static_cast<int>(i);
+      break;
+    }
+  }
+  REQUIRE(flameIdx >= 0);
+
+  game::Game g{content, 444};
+  g.testDisableWaves();
+  g.testClearWeapons();
+  g.testSpawnEnemyAt(2.0F, 0.0F);
+  g.testAddWeapon(flameIdx);
+  game::FrameInput in{};
+  g.advance(1.0F / 60.0F, in);
+  g.advance(1.0F / 60.0F, in);
+  // The cone now spawns a visible flame-fan wedge (sweep renderer), so the
+  // flamethrower actually shows itself instead of being an invisible zap.
+  REQUIRE(g.debugCounts().sweeps == 1);
+  // And it still deals its instant cone damage.
+  REQUIRE(g.testFirstEnemyHp() == Catch::Approx(100000.0F - 4.0F));
+}
+
+TEST_CASE("Dagger Vortex unique doubles the orbit spin") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  int daggerIdx = -1;
+  for (std::size_t i = 0; i < content.weapons.size(); ++i) {
+    if (content.weapons[i].id == "dagger") {
+      daggerIdx = static_cast<int>(i);
+      break;
+    }
+  }
+  REQUIRE(daggerIdx >= 0);
+
+  game::Game g{content, 555};
+  g.testDisableWaves();
+  g.testClearWeapons();
+  g.testAddWeapon(daggerIdx);
+
+  game::FrameInput in{};
+  const float a0 = g.testOrbitBladeAngle();
+  for (int i = 0; i < 60; ++i) {
+    g.advance(1.0F / 60.0F, in); // 1 second of spin at 2 rad/s
+  }
+  const float a1 = g.testOrbitBladeAngle();
+  const float deltaBase = a1 - a0;
+
+  g.testAddWeaponUpgrade(0, "w_unique_vortex", 1.0F); // orbitSpeed x2
+  const float a2 = g.testOrbitBladeAngle();
+  for (int i = 0; i < 60; ++i) {
+    g.advance(1.0F / 60.0F, in);
+  }
+  const float a3 = g.testOrbitBladeAngle();
+  const float deltaVortex = a3 - a2;
+
+  REQUIRE(deltaVortex == Catch::Approx(2.0F * deltaBase).margin(0.4F));
+}
+
+TEST_CASE("Orb Echo unique splashes extra damage in clusters") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  int orbIdx = -1;
+  for (std::size_t i = 0; i < content.weapons.size(); ++i) {
+    if (content.weapons[i].id == "orb") {
+      orbIdx = static_cast<int>(i);
+      break;
+    }
+  }
+  REQUIRE(orbIdx >= 0);
+
+  auto totalLost = [](const game::Game& g) {
+    float lost = 0.0F;
+    for (const float hp : g.testEnemyHps()) {
+      lost += 100000.0F - hp;
+    }
+    return lost;
+  };
+  auto run = [&](bool echo) {
+    game::Game g{content, 1357};
+    g.testDisableWaves();
+    g.testClearWeapons();
+    g.testAddWeapon(orbIdx);
+    if (echo) g.testAddWeaponUpgrade(0, "w_unique_area", 1.5F);
+    // Tight cluster: every bounce splashes the neighbours (0.5x each).
+    g.testSpawnEnemyAt(4.0F, 0.0F);
+    g.testSpawnEnemyAt(4.8F, 0.0F);
+    g.testSpawnEnemyAt(4.0F, 0.8F);
+    game::FrameInput in{};
+    for (int i = 0; i < 240; ++i) {
+      g.advance(1.0F / 60.0F, in);
+    }
+    return totalLost(g);
+  };
+
+  const float plain = run(false);
+  const float echoed = run(true);
+  REQUIRE(echoed > plain); // the unique's splash is strictly extra damage
+}
+
+TEST_CASE("Weapon test mode cycles weapons, boosts stats, and restores the run") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 5};
+  g.testDisableWaves();
+  g.testClearWeapons();
+  int beamIdx = -1, orbIdx = -1;
+  for (std::size_t i = 0; i < content.weapons.size(); ++i) {
+    if (content.weapons[i].id == "beam") beamIdx = static_cast<int>(i);
+    if (content.weapons[i].id == "orb") orbIdx = static_cast<int>(i);
+  }
+  REQUIRE(beamIdx >= 0);
+  REQUIRE(orbIdx >= 0);
+  g.testAddWeapon(beamIdx);
+  g.testAddWeapon(orbIdx);
+  REQUIRE(g.armedWeaponIds() == std::vector<std::string>{"beam", "orb"});
+
+  // T opens the sandbox with the first weapon (wand) replacing the run.
+  game::FrameInput open{};
+  open.testModeToggle = true;
+  g.advance(1.0F / 60.0F, open);
+  REQUIRE(g.testMode());
+  REQUIRE(g.armedWeaponIds() == std::vector<std::string>{"wand"});
+
+  // [2] cycles to the next weapon (dagger).
+  game::FrameInput next{};
+  next.choose2 = true;
+  g.advance(1.0F / 60.0F, next);
+  REQUIRE(g.armedWeaponIds() == std::vector<std::string>{"dagger"});
+
+  // [3] applies the max-build boost.
+  game::FrameInput boost{};
+  boost.choose3 = true;
+  g.advance(1.0F / 60.0F, boost);
+  REQUIRE(g.stats().projAdd == 4);
+  REQUIRE(g.stats().pierceAdd == 3);
+  REQUIRE(g.stats().fireRateBonus == Catch::Approx(0.8F));
+  REQUIRE(g.stats().damageMul == Catch::Approx(2.0F));
+
+  // [5] closes the sandbox and restores the exact pre-test run.
+  game::FrameInput close{};
+  close.choose5 = true;
+  g.advance(1.0F / 60.0F, close);
+  REQUIRE_FALSE(g.testMode());
+  REQUIRE(g.armedWeaponIds() == std::vector<std::string>{"beam", "orb"});
 }
 
 TEST_CASE("Boomerang weapon fires and returns") {
@@ -779,7 +1082,7 @@ TEST_CASE("Every weapon creates its attack-type entities") {
     game::Game g{content, 77};
     g.testDisableWaves();
     g.testClearWeapons();
-    g.stats().cooldownMul = 0.01F; // every weapon fires immediately
+    g.stats().fireRateBonus = 100.0F; // attacks fire on (almost) every tick
     g.testSpawnEnemyAt(3.0F, 0.0F);
     g.testAddWeapon(wi);
     game::FrameInput in{};

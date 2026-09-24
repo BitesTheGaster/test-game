@@ -90,7 +90,7 @@ def upgrades_md() -> str:
     us = load("upgrades.toml")
     kinds = [("normal", "### Normal pool"),
              ("unique", "### Unique items (one-time, rule-changing)"),
-             ("milestone", "### Milestones (every 5th level)")]
+             ("milestone", "### Milestones (every power-of-two level from 4 on)")]
     parts = []
     for kind, heading in kinds:
         rows = []
@@ -157,7 +157,7 @@ python3 tools/gendocs.py
 |------------|-----------------------------------------------------------|
 | normal     | Any level-up, subject to `max_stacks`                     |
 | unique     | ~45% chance per level-up, one-time, violet card           |
-| milestone  | Only on levels divisible by 5; separate 3-card pick of 2  |
+| milestone  | Only on power-of-two levels (4, 8, 16, ...); separate 3-card pick of 2  |
 | weapon     | Only while the named weapon is owned; buffs that slot     |
 """
     OUT.parent.mkdir(exist_ok=True)

@@ -172,6 +172,7 @@ Content loadContent(const std::filesystem::path& dir) {
       def.sweepAngle = (*t)["sweep_angle"].value_or(3.14F);
       def.sweepRadius = (*t)["sweep_radius"].value_or(2.0F);
       def.sweepKnockback = (*t)["sweep_knockback"].value_or(2.0F);
+      def.sweepLead = (*t)["sweep_lead"].value_or(0.0F);
 
       // Zone
       def.zoneRadius = (*t)["zone_radius"].value_or(1.2F);

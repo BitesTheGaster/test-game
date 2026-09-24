@@ -5,9 +5,14 @@
 # kind:
 #   normal    - everyday pool
 #   unique    - rare treasure card offered at ~45% per level-up, one-time
-#   milestone - offered only on level-up levels divisible by 5 (def.level gate)
+#   milestone - offered on every power-of-two level from 4 on (4, 8, 16, 32,
+#               64, 128, ...); def.level gates which level it belongs to.
 # weapon: non-empty => the card only appears while that weapon is owned, and
 #   applies to that weapon slot instead of the player.
+#
+# Attack speed uses the ADDITIVE fire-rate model: the final delay between
+# shots is `base / (1 + totalBonus)` (see attackCooldown in game.hpp). All
+# `fire_rate` values are positive percentages (0.1 = +10% fire rate).
 
 # --- Basic stat ups ----------------------------------------------------------
 
@@ -22,9 +27,9 @@ max_stacks = 6
 [[upgrade]]
 id = "haste"
 name = "Battle Haste"
-desc = "-8% attack cooldown"
-effect = "cooldown_mul"
-value = -0.08
+desc = "+9% fire rate"
+effect = "fire_rate"
+value = 0.09
 max_stacks = 5
 
 [[upgrade]]
@@ -94,9 +99,9 @@ max_stacks = 4
 [[upgrade]]
 id = "quickdraw"
 name = "Quickdraw"
-desc = "-12% attack cooldown"
-effect = "cooldown_mul"
-value = -0.12
+desc = "+13% fire rate"
+effect = "fire_rate"
+value = 0.13
 max_stacks = 3
 
 [[upgrade]]
@@ -174,9 +179,9 @@ max_stacks = 1
 [[upgrade]]
 id = "echoes"
 name = "Battle Echoes"
-desc = "-16% attack cooldown"
-effect = "cooldown_mul"
-value = -0.16
+desc = "+19% fire rate"
+effect = "fire_rate"
+value = 0.19
 max_stacks = 2
 
 [[upgrade]]
@@ -222,9 +227,9 @@ max_stacks = 1
 [[upgrade]]
 id = "surge"
 name = "Surge"
-desc = "-20% attack cooldown"
-effect = "cooldown_mul"
-value = -0.20
+desc = "+25% fire rate"
+effect = "fire_rate"
+value = 0.25
 max_stacks = 1
 
 # --- Defense / shield / lifesteal tree ---------------------------------------
@@ -291,9 +296,9 @@ weapon = "wand"
 [[upgrade]]
 id = "w_wand_speed"
 name = "Wand Channeling"
-desc = "Arcane Wand: -14% cooldown"
-effect = "w_cd_mul"
-value = -0.14
+desc = "Arcane Wand: +16% fire rate"
+effect = "w_fire_rate"
+value = 0.16
 max_stacks = 2
 weapon = "wand"
 
@@ -381,9 +386,9 @@ weapon = "shuriken"
 [[upgrade]]
 id = "w_shuriken_speed"
 name = "Shuriken Cyclone"
-desc = "Storm Shuriken: -16% cooldown"
-effect = "w_cd_mul"
-value = -0.16
+desc = "Storm Shuriken: +19% fire rate"
+effect = "w_fire_rate"
+value = 0.19
 max_stacks = 2
 weapon = "shuriken"
 
@@ -479,245 +484,296 @@ value = 2
 max_stacks = 1
 kind = "unique"
 
-# --- Milestones (levels 5, 10, 15, ...) --------------------------------------
+# --- Weapon uniques (one per weapon; only offered while that weapon is held) ---
 
 [[upgrade]]
-id = "m5_aegis"
+id = "uw_wand_seeking"
+name = "Seeking Missiles"
+desc = "Arcane Wand: bolts home onto the nearest enemy"
+effect = "w_unique_homing"
+value = 1
+max_stacks = 1
+kind = "unique"
+weapon = "wand"
+
+[[upgrade]]
+id = "uw_dagger_vortex"
+name = "Blade Vortex"
+desc = "Throwing Dagger: blades spin 2x faster in a 25% wider orbit"
+effect = "w_unique_vortex"
+value = 1
+max_stacks = 1
+kind = "unique"
+weapon = "dagger"
+
+[[upgrade]]
+id = "uw_crossbow_fragment"
+name = "Fragmenting Bolt"
+desc = "Heavy Crossbow: bolts explode on impact for area damage"
+effect = "w_unique_area"
+value = 1.2
+max_stacks = 1
+kind = "unique"
+weapon = "crossbow"
+
+[[upgrade]]
+id = "uw_flame_hearthfire"
+name = "Hearthfire"
+desc = "Ember Sprayer: cone is 50% wider and 40% longer"
+effect = "w_unique_hearthfire"
+value = 1
+max_stacks = 1
+kind = "unique"
+weapon = "flame"
+
+[[upgrade]]
+id = "uw_hammer_cataclysm"
+name = "Cataclysm"
+desc = "Runic Hammer: explosions 60% larger with heavier knockback"
+effect = "w_unique_cataclysm"
+value = 1
+max_stacks = 1
+kind = "unique"
+weapon = "hammer"
+
+[[upgrade]]
+id = "uw_shuriken_tempest"
+name = "Return Tempest"
+desc = "Storm Shuriken: returning blades detonate a 2.5-area burst"
+effect = "w_unique_area"
+value = 2.5
+max_stacks = 1
+kind = "unique"
+weapon = "shuriken"
+
+[[upgrade]]
+id = "uw_orb_echo"
+name = "Echo Detonation"
+desc = "Void Orb: every bounce splashes half damage around the hit"
+effect = "w_unique_area"
+value = 1.5
+max_stacks = 1
+kind = "unique"
+weapon = "orb"
+
+[[upgrade]]
+id = "uw_scythe_harvest"
+name = "Reaper's Harvest"
+desc = "Soul Scythe: sweeps restore 3 HP per kill"
+effect = "w_unique_harvest"
+value = 3
+max_stacks = 1
+kind = "unique"
+weapon = "scythe"
+
+[[upgrade]]
+id = "uw_beam_prism"
+name = "Prism Lance"
+desc = "Solar Lance: fires 3 parallel beams at once"
+effect = "w_unique_prism"
+value = 3
+max_stacks = 1
+kind = "unique"
+weapon = "beam"
+
+[[upgrade]]
+id = "uw_storm_thunderlord"
+name = "Thunderlord"
+desc = "Storm Caller: +4 chain jumps and no damage decay"
+effect = "w_unique_thunderlord"
+value = 4
+max_stacks = 1
+kind = "unique"
+weapon = "storm"
+
+[[upgrade]]
+id = "uw_nova_supernova"
+name = "Supernova"
+desc = "Void Nova: ring expands faster, wider, and hits harder"
+effect = "w_unique_supernova"
+value = 1
+max_stacks = 1
+kind = "unique"
+weapon = "nova"
+
+# --- Milestones (every power-of-two level from 4 on) -------------------------
+
+[[upgrade]]
+id = "m4_aegis"
 name = "Aegis"
 desc = "MILESTONE: +45 regenerating shield"
 effect = "shield_add"
 value = 45
 max_stacks = 1
 kind = "milestone"
-level = 5
+level = 4
 
 [[upgrade]]
-id = "m5_pact"
+id = "m4_pact"
 name = "Blood Pact"
 desc = "MILESTONE: +12% lifesteal"
 effect = "lifesteal_add"
 value = 12
 max_stacks = 1
 kind = "milestone"
-level = 5
+level = 4
 
 [[upgrade]]
-id = "m5_tempest"
+id = "m4_tempest"
 name = "Tempest"
 desc = "MILESTONE: +2 projectiles to every weapon"
 effect = "proj_add"
 value = 2
 max_stacks = 1
 kind = "milestone"
-level = 5
+level = 4
 
 [[upgrade]]
-id = "m10_mantle"
+id = "m8_mantle"
 name = "Stone Mantle"
 desc = "MILESTONE: +60 defense"
 effect = "defense_add"
 value = 60
 max_stacks = 1
 kind = "milestone"
-level = 10
+level = 8
 
 [[upgrade]]
-id = "m10_frenzy"
+id = "m8_frenzy"
 name = "Frenzy"
-desc = "MILESTONE: -24% attack cooldown"
-effect = "cooldown_mul"
-value = -0.24
+desc = "MILESTONE: +50% fire rate to every weapon"
+effect = "fire_rate"
+value = 0.50
 max_stacks = 1
 kind = "milestone"
-level = 10
+level = 8
 
 [[upgrade]]
-id = "m10_grasp"
+id = "m8_grasp"
 name = "Reaper's Grasp"
 desc = "MILESTONE: +3 pierce to every weapon"
 effect = "pierce_add"
 value = 3
 max_stacks = 1
 kind = "milestone"
-level = 10
+level = 8
 
 [[upgrade]]
-id = "m15_crown"
+id = "m16_crown"
 name = "Crimson Crown"
 desc = "MILESTONE: +16% lifesteal"
 effect = "lifesteal_add"
 value = 16
 max_stacks = 1
 kind = "milestone"
-level = 15
+level = 16
 
 [[upgrade]]
-id = "m15_titan"
+id = "m16_titan"
 name = "Titan Heart"
 desc = "MILESTONE: +120 max HP and heal 120"
 effect = "max_hp_add"
 value = 120
 max_stacks = 1
 kind = "milestone"
-level = 15
+level = 16
 
 [[upgrade]]
-id = "m15_overload"
+id = "m16_overload"
 name = "Overload"
 desc = "MILESTONE: +60% damage"
 effect = "damage_mul"
 value = 0.60
 max_stacks = 1
 kind = "milestone"
-level = 15
+level = 16
 
 [[upgrade]]
-id = "m20_void"
+id = "m32_void"
 name = "Void Symbiosis"
 desc = "MILESTONE: +90% damage"
 effect = "damage_mul"
 value = 0.90
 max_stacks = 1
 kind = "milestone"
-level = 20
+level = 32
 
 [[upgrade]]
-id = "m20_bulwark"
+id = "m32_bulwark"
 name = "Bulwark of Ages"
 desc = "MILESTONE: +120 defense"
 effect = "defense_add"
 value = 120
 max_stacks = 1
 kind = "milestone"
-level = 20
+level = 32
 
 [[upgrade]]
-id = "m20_hail"
+id = "m32_hail"
 name = "Hailstorm"
 desc = "MILESTONE: +4 projectiles to every weapon"
 effect = "proj_add"
 value = 4
 max_stacks = 1
 kind = "milestone"
-level = 20
+level = 32
 
 [[upgrade]]
-id = "m25_immortal"
+id = "m64_immortal"
 name = "Immortal"
 desc = "MILESTONE: +300 max HP and heal 300"
 effect = "max_hp_add"
 value = 300
 max_stacks = 1
 kind = "milestone"
-level = 25
+level = 64
 
 [[upgrade]]
-id = "m25_perfect"
+id = "m64_perfect"
 name = "Perfection"
-desc = "MILESTONE: -28% attack cooldown"
-effect = "cooldown_mul"
-value = -0.28
+desc = "MILESTONE: +100% fire rate to every weapon"
+effect = "fire_rate"
+value = 1.0
 max_stacks = 1
 kind = "milestone"
-level = 25
+level = 64
 
 [[upgrade]]
-id = "m25_vanquish"
+id = "m64_vanquish"
 name = "Vanquisher"
 desc = "MILESTONE: +150% damage"
 effect = "damage_mul"
 value = 1.5
 max_stacks = 1
 kind = "milestone"
-level = 25
+level = 64
 
 [[upgrade]]
-id = "m30_ascend"
+id = "m128_ascend"
 name = "Ascendant Skin"
 desc = "MILESTONE: +200 defense"
 effect = "defense_add"
 value = 200
 max_stacks = 1
 kind = "milestone"
-level = 30
+level = 128
 
 [[upgrade]]
-id = "m30_starlight"
+id = "m128_starlight"
 name = "Starlight Ward"
 desc = "MILESTONE: +500 regenerating shield"
 effect = "shield_add"
 value = 500
 max_stacks = 1
 kind = "milestone"
-level = 30
+level = 128
 
 [[upgrade]]
-id = "m30_overdrive"
+id = "m128_overdrive"
 name = "Overdrive"
 desc = "MILESTONE: +200% damage"
 effect = "damage_mul"
 value = 2.0
 max_stacks = 1
 kind = "milestone"
-level = 30
-# --- Extended milestones (35+) ---------------------------------------------
-
-[[upgrade]]
-id = "m35_fury"
-name = "Blood Fury"
-desc = "MILESTONE: +180% damage"
-effect = "damage_mul"
-value = 1.8
-max_stacks = 1
-kind = "milestone"
-level = 35
-
-[[upgrade]]
-id = "m35_ward"
-name = "Eternal Ward"
-desc = "MILESTONE: +350 regenerating shield"
-effect = "shield_add"
-value = 350
-max_stacks = 1
-kind = "milestone"
-level = 35
-
-[[upgrade]]
-id = "m40_annihilate"
-name = "Annihilate"
-desc = "MILESTONE: +250% damage"
-effect = "damage_mul"
-value = 2.5
-max_stacks = 1
-kind = "milestone"
-level = 40
-
-[[upgrade]]
-id = "m40_fortify"
-name = "Fortify"
-desc = "MILESTONE: +450 defense"
-effect = "defense_add"
-value = 450
-max_stacks = 1
-kind = "milestone"
-level = 40
-
-[[upgrade]]
-id = "m45_transcend"
-name = "Transcend"
-desc = "MILESTONE: +350% damage"
-effect = "damage_mul"
-value = 3.5
-max_stacks = 1
-kind = "milestone"
-level = 45
-
-[[upgrade]]
-id = "m45_impervious"
-name = "Impervious"
-desc = "MILESTONE: +600 regenerating shield"
-effect = "shield_add"
-value = 600
-max_stacks = 1
-kind = "milestone"
-level = 45
+level = 128

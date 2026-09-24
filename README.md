@@ -57,6 +57,11 @@ Run: `./build/debug/test-game`.
 | R           | Reroll the level-up choice (1 free per level, more with Second Chance) |
 | Esc         | Pause / resume — overlays your character sheet |
 | R (after death) | Restart                              |
+| T           | Toggle **weapon test mode** (live run only) |
+| 1 / 2       | In test mode: previous / next weapon (all 11 incl. evolutions) |
+| 3           | In test mode: apply a maxed-out build boost (damage/projectiles/pierce/fire rate) |
+| 4           | In test mode: toggle enemy waves |
+| 5           | In test mode: exit back to the run |
 
 ## Assets: where to put textures
 
@@ -96,12 +101,16 @@ Balance lives in `assets/data/*.toml`, loaded at startup — no rebuild needed:
 - `upgrades.toml` — level-up cards: `kind` (`normal` / `unique` / `milestone`),
   `effect` id + `value`, `max_stacks`, optional `weapon` tag and milestone `level`
 
-Effects understood by the game: `damage_mul`, `cooldown_mul`, `speed_mul`,
-`pickup_mul`, `max_hp_add`, `regen_add`, `proj_add`, `pierce_add`, `heal`,
-`defense_add`, `lifesteal_add`, `shield_add`, plus the unique-item effects
-(`fan`, `thorns`, `extra_choice`, `reroll_add`, `adrenaline`, `black_hole`,
-`chain`, `blood_price`, `ice_blood`) and per-weapon effects (`w_damage_add`,
-`w_proj_add`, `w_pierce_add`, `w_cd_mul`).
+Effects understood by the game: `damage_mul`, `fire_rate` (additive: final
+delay = base / (1 + bonus)), `speed_mul`, `pickup_mul`, `max_hp_add`,
+`regen_add`, `proj_add`, `pierce_add`, `heal`, `defense_add`,
+`lifesteal_add`, `shield_add`, plus the unique-item effects (`fan`, `thorns`,
+`extra_choice`, `reroll_add`, `adrenaline`, `black_hole`, `chain`,
+`blood_price`, `ice_blood`), per-weapon effects (`w_damage_add`, `w_proj_add`,
+`w_pierce_add`, `w_fire_rate`), and the one-per-weapon unique effects
+(`w_unique_homing`, `w_unique_area`, `w_unique_vortex`,
+`w_unique_hearthfire`, `w_unique_cataclysm`, `w_unique_harvest`,
+`w_unique_prism`, `w_unique_thunderlord`, `w_unique_supernova`).
 
 Regenerate the content reference docs after touching the TOML:
 

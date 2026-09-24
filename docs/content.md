@@ -24,7 +24,7 @@ python3 tools/gendocs.py
 | Runic Hammer | hammer | 45 | 1.8 | 1 | 8 | 0 | 0 |  |  | Arcing bomb with massive explosion and knockback. |
 | Storm Shuriken | shuriken | 8 | 0.6 | 2 | 16 | 1 | 0.2 |  |  | Boomerang blades — hit going out AND coming back. |
 | Void Orb | orb | 35 | 1.5 | 1 | 7 | 5 | 0 |  |  | Slow bouncing orb that detonates on each impact. |
-| Soul Scythe | scythe | 55 | 1.3 | 1 | 0 | 0 | 0 |  |  | Devastating 360° sweep around you. |
+| Soul Scythe | scythe | 55 | 1.3 | 1 | 0 | 0 | 0 |  |  | Devastating arc — swings far ahead of you. |
 | Solar Lance | beam | 90 | 2.5 | 1 | 0 | 0 | 0 |  |  | Instant hitscan beam — deletes a line. |
 
 ### Evolutions (A + B = C)
@@ -68,7 +68,7 @@ python3 tools/gendocs.py
 | Name | ID | Effect | Value | Max stacks | Weapon | Level | Description |
 |---|---|---|---|---|---|---|---|
 | Sharpened Bolts | damage | damage_mul | 0.15 | 6 |  |  | +15% damage |
-| Battle Haste | haste | cooldown_mul | -0.08 | 5 |  |  | -8% attack cooldown |
+| Battle Haste | haste | fire_rate | 0.09 | 5 |  |  | +9% fire rate |
 | Split Shot | multi | proj_add | 1 | 4 |  |  | +1 projectile |
 | Swift Boots | boots | speed_mul | 0.12 | 4 |  |  | +12% move speed |
 | Vigor | vigor | max_hp_add | 20 | 6 |  |  | +20 max HP and heal 20 |
@@ -77,7 +77,7 @@ python3 tools/gendocs.py
 | Life Leech | leech | heal | 25 | 3 |  |  | Heal 25 HP |
 | Regeneration | regen | regen_add | 1 | 4 |  |  | +1 HP per second |
 | Might | might | damage_mul | 0.25 | 4 |  |  | +25% damage |
-| Quickdraw | quickdraw | cooldown_mul | -0.12 | 3 |  |  | -12% attack cooldown |
+| Quickdraw | quickdraw | fire_rate | 0.13 | 3 |  |  | +13% fire rate |
 | Twin Cast | twin_shot | proj_add | 1 | 2 |  |  | +1 projectile |
 | Windrunner | windrunner | speed_mul | 0.08 | 6 |  |  | +8% move speed |
 | Dark Feast | feast | heal | 40 | 2 |  |  | Heal 40 HP |
@@ -87,13 +87,13 @@ python3 tools/gendocs.py
 | Treasure Sense | treasure | pickup_mul | 1 | 2 |  |  | +100% pickup range |
 | Harvester | harvester | pickup_mul | 0.8 | 2 |  |  | +80% pickup range |
 | Garrote Bolts | garrote | pierce_add | 2 | 1 |  |  | +2 pierce |
-| Battle Echoes | echoes | cooldown_mul | -0.16 | 2 |  |  | -16% attack cooldown |
+| Battle Echoes | echoes | fire_rate | 0.19 | 2 |  |  | +19% fire rate |
 | Barrage | barrage | proj_add | 2 | 1 |  |  | +2 projectiles |
 | Rejuvenation | rejuvenation | heal | 60 | 1 |  |  | Heal 60 HP |
 | Fervor | fervor | damage_mul | 0.35 | 2 |  |  | +35% damage |
 | Gale Steps | gale | speed_mul | 0.15 | 2 |  |  | +15% move speed |
 | Heartwood | heartwood | max_hp_add | 70 | 1 |  |  | +70 max HP and heal 70 |
-| Surge | surge | cooldown_mul | -0.2 | 1 |  |  | -20% attack cooldown |
+| Surge | surge | fire_rate | 0.25 | 1 |  |  | +25% fire rate |
 | Stony Pledge | pledge | defense_add | 10 | 4 |  |  | +10 defense |
 | Iron Conviction | conviction | defense_add | 25 | 2 |  |  | +25 defense |
 | Minor Ward | ward_small | shield_add | 15 | 3 |  |  | +15 regenerating shield |
@@ -101,7 +101,7 @@ python3 tools/gendocs.py
 | Gilded Fangs | leech_gold | lifesteal_add | 8 | 3 |  |  | +8% lifesteal |
 | Soulfeed | leech_soul | lifesteal_add | 12 | 2 |  |  | +12% lifesteal |
 | Wand Focus | w_wand_power | w_damage_add | 8 | 3 | wand |  | Arcane Wand: +8 damage |
-| Wand Channeling | w_wand_speed | w_cd_mul | -0.14 | 2 | wand |  | Arcane Wand: -14% cooldown |
+| Wand Channeling | w_wand_speed | w_fire_rate | 0.16 | 2 | wand |  | Arcane Wand: +16% fire rate |
 | Dagger Honing | w_dagger_power | w_damage_add | 5 | 3 | dagger |  | Throwing Dagger: +5 damage each |
 | Dagger Volley | w_dagger_volley | w_proj_add | 1 | 2 | dagger |  | Throwing Dagger: +1 projectile |
 | Crossbow Wit | w_crossbow_power | w_damage_add | 12 | 2 | crossbow |  | Heavy Crossbow: +12 damage |
@@ -111,7 +111,7 @@ python3 tools/gendocs.py
 | Hammer Rune | w_hammer_power | w_damage_add | 20 | 2 | hammer |  | Runic Hammer: +20 damage |
 | Hammer Wrath | w_hammer_pierce | w_pierce_add | 3 | 2 | hammer |  | Runic Hammer: +3 pierce |
 | Shuriken Storm | w_shuriken_power | w_damage_add | 5 | 3 | shuriken |  | Storm Shuriken: +5 damage |
-| Shuriken Cyclone | w_shuriken_speed | w_cd_mul | -0.16 | 2 | shuriken |  | Storm Shuriken: -16% cooldown |
+| Shuriken Cyclone | w_shuriken_speed | w_fire_rate | 0.19 | 2 | shuriken |  | Storm Shuriken: +19% fire rate |
 
 ### Unique items (one-time, rule-changing)
 
@@ -127,37 +127,42 @@ python3 tools/gendocs.py
 | Blood Price | u_blood_price | blood_price | 1 | 1 |  |  | Every 20 kills detonates a burst around you |
 | Cold Blood | u_ice_blood | ice_blood | 1 | 1 |  |  | Enemies that hit you are slowed for 2s |
 | Vampiric Heart | u_vampiric_heart | lifesteal_heal | 2 | 1 |  |  | Lifesteal heals 2 HP per proc instead of 1 |
+| Seeking Missiles | uw_wand_seeking | w_unique_homing | 1 | 1 | wand |  | Arcane Wand: bolts home onto the nearest enemy |
+| Blade Vortex | uw_dagger_vortex | w_unique_vortex | 1 | 1 | dagger |  | Throwing Dagger: blades spin 2x faster in a 25% wider orbit |
+| Fragmenting Bolt | uw_crossbow_fragment | w_unique_area | 1.2 | 1 | crossbow |  | Heavy Crossbow: bolts explode on impact for area damage |
+| Hearthfire | uw_flame_hearthfire | w_unique_hearthfire | 1 | 1 | flame |  | Ember Sprayer: cone is 50% wider and 40% longer |
+| Cataclysm | uw_hammer_cataclysm | w_unique_cataclysm | 1 | 1 | hammer |  | Runic Hammer: explosions 60% larger with heavier knockback |
+| Return Tempest | uw_shuriken_tempest | w_unique_area | 2.5 | 1 | shuriken |  | Storm Shuriken: returning blades detonate a 2.5-area burst |
+| Echo Detonation | uw_orb_echo | w_unique_area | 1.5 | 1 | orb |  | Void Orb: every bounce splashes half damage around the hit |
+| Reaper's Harvest | uw_scythe_harvest | w_unique_harvest | 3 | 1 | scythe |  | Soul Scythe: sweeps restore 3 HP per kill |
+| Prism Lance | uw_beam_prism | w_unique_prism | 3 | 1 | beam |  | Solar Lance: fires 3 parallel beams at once |
+| Thunderlord | uw_storm_thunderlord | w_unique_thunderlord | 4 | 1 | storm |  | Storm Caller: +4 chain jumps and no damage decay |
+| Supernova | uw_nova_supernova | w_unique_supernova | 1 | 1 | nova |  | Void Nova: ring expands faster, wider, and hits harder |
 
-### Milestones (every 5th level)
+### Milestones (every power-of-two level from 4 on)
 
 | Name | ID | Effect | Value | Max stacks | Weapon | Level | Description |
 |---|---|---|---|---|---|---|---|
-| Aegis | m5_aegis | shield_add | 45 | 1 |  | 5 | MILESTONE: +45 regenerating shield |
-| Blood Pact | m5_pact | lifesteal_add | 12 | 1 |  | 5 | MILESTONE: +12% lifesteal |
-| Tempest | m5_tempest | proj_add | 2 | 1 |  | 5 | MILESTONE: +2 projectiles to every weapon |
-| Stone Mantle | m10_mantle | defense_add | 60 | 1 |  | 10 | MILESTONE: +60 defense |
-| Frenzy | m10_frenzy | cooldown_mul | -0.24 | 1 |  | 10 | MILESTONE: -24% attack cooldown |
-| Reaper's Grasp | m10_grasp | pierce_add | 3 | 1 |  | 10 | MILESTONE: +3 pierce to every weapon |
-| Crimson Crown | m15_crown | lifesteal_add | 16 | 1 |  | 15 | MILESTONE: +16% lifesteal |
-| Titan Heart | m15_titan | max_hp_add | 120 | 1 |  | 15 | MILESTONE: +120 max HP and heal 120 |
-| Overload | m15_overload | damage_mul | 0.6 | 1 |  | 15 | MILESTONE: +60% damage |
-| Void Symbiosis | m20_void | damage_mul | 0.9 | 1 |  | 20 | MILESTONE: +90% damage |
-| Bulwark of Ages | m20_bulwark | defense_add | 120 | 1 |  | 20 | MILESTONE: +120 defense |
-| Hailstorm | m20_hail | proj_add | 4 | 1 |  | 20 | MILESTONE: +4 projectiles to every weapon |
-| Immortal | m25_immortal | max_hp_add | 300 | 1 |  | 25 | MILESTONE: +300 max HP and heal 300 |
-| Perfection | m25_perfect | cooldown_mul | -0.28 | 1 |  | 25 | MILESTONE: -28% attack cooldown |
-| Vanquisher | m25_vanquish | damage_mul | 1.5 | 1 |  | 25 | MILESTONE: +150% damage |
-| Ascendant Skin | m30_ascend | defense_add | 200 | 1 |  | 30 | MILESTONE: +200 defense |
-| Starlight Ward | m30_starlight | shield_add | 500 | 1 |  | 30 | MILESTONE: +500 regenerating shield |
-| Overdrive | m30_overdrive | damage_mul | 2 | 1 |  | 30 | MILESTONE: +200% damage |
-| Blood Fury | m35_fury | damage_mul | 1.8 | 1 |  | 35 | MILESTONE: +180% damage |
-| Eternal Ward | m35_ward | shield_add | 350 | 1 |  | 35 | MILESTONE: +350 regenerating shield |
-| Annihilate | m40_annihilate | damage_mul | 2.5 | 1 |  | 40 | MILESTONE: +250% damage |
-| Fortify | m40_fortify | defense_add | 450 | 1 |  | 40 | MILESTONE: +450 defense |
-| Transcend | m45_transcend | damage_mul | 3.5 | 1 |  | 45 | MILESTONE: +350% damage |
-| Impervious | m45_impervious | shield_add | 600 | 1 |  | 45 | MILESTONE: +600 regenerating shield |
+| Aegis | m4_aegis | shield_add | 45 | 1 |  | 4 | MILESTONE: +45 regenerating shield |
+| Blood Pact | m4_pact | lifesteal_add | 12 | 1 |  | 4 | MILESTONE: +12% lifesteal |
+| Tempest | m4_tempest | proj_add | 2 | 1 |  | 4 | MILESTONE: +2 projectiles to every weapon |
+| Stone Mantle | m8_mantle | defense_add | 60 | 1 |  | 8 | MILESTONE: +60 defense |
+| Frenzy | m8_frenzy | fire_rate | 0.5 | 1 |  | 8 | MILESTONE: +50% fire rate to every weapon |
+| Reaper's Grasp | m8_grasp | pierce_add | 3 | 1 |  | 8 | MILESTONE: +3 pierce to every weapon |
+| Crimson Crown | m16_crown | lifesteal_add | 16 | 1 |  | 16 | MILESTONE: +16% lifesteal |
+| Titan Heart | m16_titan | max_hp_add | 120 | 1 |  | 16 | MILESTONE: +120 max HP and heal 120 |
+| Overload | m16_overload | damage_mul | 0.6 | 1 |  | 16 | MILESTONE: +60% damage |
+| Void Symbiosis | m32_void | damage_mul | 0.9 | 1 |  | 32 | MILESTONE: +90% damage |
+| Bulwark of Ages | m32_bulwark | defense_add | 120 | 1 |  | 32 | MILESTONE: +120 defense |
+| Hailstorm | m32_hail | proj_add | 4 | 1 |  | 32 | MILESTONE: +4 projectiles to every weapon |
+| Immortal | m64_immortal | max_hp_add | 300 | 1 |  | 64 | MILESTONE: +300 max HP and heal 300 |
+| Perfection | m64_perfect | fire_rate | 1 | 1 |  | 64 | MILESTONE: +100% fire rate to every weapon |
+| Vanquisher | m64_vanquish | damage_mul | 1.5 | 1 |  | 64 | MILESTONE: +150% damage |
+| Ascendant Skin | m128_ascend | defense_add | 200 | 1 |  | 128 | MILESTONE: +200 defense |
+| Starlight Ward | m128_starlight | shield_add | 500 | 1 |  | 128 | MILESTONE: +500 regenerating shield |
+| Overdrive | m128_overdrive | damage_mul | 2 | 1 |  | 128 | MILESTONE: +200% damage |
 
-**Totals:** 79 upgrades (45 normal, 10 unique, 24 milestones).
+**Totals:** 84 upgrades (45 normal, 21 unique, 18 milestones).
 
 
 ---
@@ -168,5 +173,5 @@ python3 tools/gendocs.py
 |------------|-----------------------------------------------------------|
 | normal     | Any level-up, subject to `max_stacks`                     |
 | unique     | ~45% chance per level-up, one-time, violet card           |
-| milestone  | Only on levels divisible by 5; separate 3-card pick of 2  |
+| milestone  | Only on power-of-two levels (4, 8, 16, ...); separate 3-card pick of 2  |
 | weapon     | Only while the named weapon is owned; buffs that slot     |

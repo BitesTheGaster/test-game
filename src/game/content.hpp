@@ -77,6 +77,7 @@ struct WeaponDef {
   float sweepAngle = 3.14F;     // radians (PI = 180°, 2PI = 360°)
   float sweepRadius = 2.0F;     // reach
   float sweepKnockback = 2.0F;
+  float sweepLead = 0.0F;       // arc center distance in front of the player
 
   // Zone
   float zoneRadius = 1.2F;

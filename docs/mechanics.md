@@ -40,9 +40,26 @@ curves. Tables of all content are generated into
 
 | Stat | Also affects |
 |------|--------------|
-| Cooldown / attack speed | **Dagger orbit spin** — faster fire rate makes blades rotate faster (`orbitSpeed / cooldownMul`) |
-| Projectiles | **Cone range** (+25%/proj), **Bomb arc height** (+25%), **Beam width** (+15%), **Scythe arc** (+15%), **Nova radius** (+10%), **Zone radius** (+20%) |
-| Pierce | **Bounce bounces**, **Chain jumps** (one more each), **Bomb knockback** (+0.5), **Zone DPS** (+2) |
+| Fire rate | **Dagger orbit spin** — blades rotate at `orbitSpeed · max(0.5, 1 + fireRateBonus)` |
+| Projectiles | **Cone range** (+25%/proj), **Bomb arc height** (+25%), **Beam count & width** (each projectile is a parallel beam; width +5%/proj), **Scythe arc radius** (+15%), **Nova radius** (+10%), **Zone radius** (+20%) |
+| Pierce | **Bomb blast radius** (+15%), **Bounce bounces**, **Chain jumps** (one more each), **Zone DPS** (+2) |
+
+### Fire rate (additive, never zero)
+
+Attack speed is an **additive bonus**, not a multiplier on the cooldown:
+every `fire_rate` upgrade adds a positive percentage and the final delay
+between shots is
+
+```text
+final delay = weapon delay / (1 + total fire-rate bonus)   # floor 0.05 s
+```
+
+So stacking can approach but never reach zero cooldown: +25% fire rate fires
+20% more often (`1/1.25`), +100% fires twice as often (`1/2.0`). Global
+`fire_rate` (player level-ups, Frenzy/Perfection milestones) and per-weapon
+`w_fire_rate` (Wand Channeling, Shuriken Cyclone) bonuses all add into the
+same `1 + bonus` denominator. The Spreadshot unique doubles its bonus the same
+way (+100% fire rate).
 
 ### Defense
 
@@ -89,10 +106,17 @@ large hits.
   spread never wraps around backward.
 - A weapon is never offered twice; owned weapons are removed from the grant
   pool.
-- Each weapon has a distinct **role**: some are rapid spray (flame, ember),
-  some are piercing snipers (crossbow, scythe), some are area-splash (hammer,
-  nova), some bounce (orb), and some home toward the target (crossbow, shuriken,
-  nova). Check `content.md` for the per-weapon traits column.
+- Each weapon has a distinct **role**: some are rapid spray (**Ember Sprayer**
+  rakes a visible flame fan in an arc, dealing its damage instantly), some are
+  piercing snipers (crossbow, **Soul Scythe**), some are area-splash
+  (**Runic Hammer** lobs an arcing bomb that detonates where it lands,
+  destroying itself), some bounce (orb), and some home toward the target
+  (crossbow, shuriken, nova). The **Solar Lance** fires a wide beam across the
+  whole arena and splits into one parallel beam per projectile. Check
+  `content.md` for the per-weapon traits column.
+- The Soul Scythe does **not** swing a full 360° ring — it sweeps a wedge
+  centered `sweep_lead` units **ahead of the player** along the aim line, so
+  it hits the threat in front of you rather than everything around you.
 - Weapon fields `area` (splash radius), `strength` (knockback), `homing` and
   `bounces` are honored: area deals half-damage in a radius on hit, strength
   pushes the struck enemy, homing steers the projectile toward the nearest
@@ -163,14 +187,49 @@ once. See [`content.md`](content.md) for the exact list; the rules they bend:
 | Cold Blood | Enemies that hit you are slowed for 2s (45% speed) |
 | Vampiric Heart | Lifesteal procs heal 2 HP instead of 1 |
 
+**Weapon uniques** — each of the 11 weapons has one exclusive treasure card.
+They are only offered while that weapon is equipped (the card carries
+`weapon = "<id>"`), so the pool stays relevant to your loadout:
+
+| Weapon | Unique | Effect |
+|--------|--------|--------|
+| Arcane Wand | Seeking Missiles | Bolts home onto the nearest enemy |
+| Throwing Dagger | Blade Vortex | Blades spin 2× faster in a 25% wider orbit |
+| Heavy Crossbow | Fragmenting Bolt | Bolts explode on impact for area damage |
+| Ember Sprayer | Hearthfire | Cone is 50% wider and 40% longer |
+| Runic Hammer | Cataclysm | Explosions 60% larger with heavier knockback |
+| Storm Shuriken | Return Tempest | Returning blades detonate a burst |
+| Void Orb | Echo Detonation | Every bounce splashes half damage around the hit |
+| Soul Scythe | Reaper's Harvest | Sweeps restore 3 HP per kill |
+| Solar Lance | Prism Lance | Fires 3 parallel beams at once |
+| Storm Caller | Thunderlord | +4 chain jumps and no damage decay |
+| Void Nova | Supernova | Ring expands faster, wider, and hits harder |
+
 ### Milestones
 
-Every level divisible by 5 (5, 10, 15, 20, 25, 30 — currently) replaces the
-normal choice with a **violet milestone screen**: the pool contains only the
-3 milestone cards for that exact level and you pick **2 of 3**. All
+Every **power-of-two level from 4 on** (4, 8, 16, 32, 64, 128, …) replaces
+the normal choice with a **violet milestone screen**: the pool contains only
+the 3 milestone cards for that exact level and you pick **2 of 3**. All
 milestones are strong and live **outside** the normal pool (they can never
-appear as ordinary card offers). With no milestone content for that level the
-card UI behaves like a normal level-up.
+appear as ordinary card offers). Reaching a milestone level with no milestone
+content for it behaves like a normal level-up.
+
+### Weapon test mode
+
+Press **T** during a live run to open the weapon sandbox (your run's weapons
+and stats are snapshotted and restored when you leave):
+
+| Key | Action |
+|-----|--------|
+| `T` | Toggle test mode on/off |
+| `1` / `2` | Previous / next weapon — **all 11 including evolutions** (`storm`, `nova`) |
+| `3` | Apply a **max build** boost: +100% damage, +4 projectiles, +3 pierce, +80% fire rate |
+| `4` | Toggle enemy waves (fodder bats spawn so every weapon has a target) |
+| `5` | Exit back to the untouched run |
+
+While active, each weapon switch spawns a handful of weak test bats and the
+overlay shows the current weapon, whether it is an evolution, and the boost /
+waves state. Level-ups are suppressed so the sandbox never interrupts a run.
 
 ## Enemies
 

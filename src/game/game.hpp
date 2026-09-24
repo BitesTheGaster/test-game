@@ -8,6 +8,7 @@
 
 #include <entt/entity/registry.hpp>
 
+#include <algorithm>
 #include <cstdint>
 #include <random>
 #include <string>
@@ -32,12 +33,28 @@ struct FrameInput {
   bool choose5 = false; // picks a 5th card (from +1 choice items)
   bool restart = false;
   bool togglePause = false;
+  bool testModeToggle = false; // T: open/close the weapon test mode
 };
+
+// Attack-speed formula: the final delay between shots is
+//
+//     delay = baseCooldown / (1 + totalFireRateBonus)
+//
+// where the bonus is the additive sum of every fire-rate source (global
+// upgrades + per-weapon cards). Being additive in the denominator means
+// stacking can never drive the delay to zero — it approaches 0 asymptotically
+// (+100% halves the delay, +300% quarters it, ...).
+inline float attackCooldown(float baseCooldown, float fireRateBonus) {
+  return baseCooldown / std::max(0.05F, 1.0F + fireRateBonus);
+}
 
 // Mutable per-run player modifiers; upgraded through UpgradeDef::effect.
 struct PlayerStats {
   float damageMul = 1.0F;
-  float cooldownMul = 1.0F;
+  // Additive fire-rate bonus. The final per-shot delay is
+  // `base / (1 + fireRateBonus)` (see attackCooldown) — additive so stacking
+  // can never reach infinite attack speed.
+  float fireRateBonus = 0.0F;
   float speedMul = 1.0F;
   float pickupMul = 1.0F;
   float speed = 5.2F;
@@ -124,6 +141,8 @@ public:
   [[nodiscard]] int upgradeStacks(std::size_t upgradeIndex) const;
   [[nodiscard]] int rerollsUsed() const { return rerollsUsed_; }
   [[nodiscard]] bool milestoneOffer() const { return milestoneOffer_; }
+  // True while the weapon test mode is open (T). Exposed for tests.
+  [[nodiscard]] bool testMode() const { return testMode_; }
 
   // Test/debug hooks.
   void grantXp(float amount);
@@ -143,6 +162,15 @@ public:
   [[nodiscard]] float testFirstEnemyHp() const;
   // Test helper: current speed (velocity magnitude) of every live Enemy.
   [[nodiscard]] std::vector<float> testEnemySpeeds() const;
+  // Test helper: current HP of every live Enemy (order unspecified — use for
+  // sums / range checks, not positional assertions).
+  [[nodiscard]] std::vector<float> testEnemyHps() const;
+  // Test helper: the equipped weapon ids, oldest first (e.g. for test-mode
+  // snapshot/restore assertions). Empty when no weapons are equipped.
+  [[nodiscard]] std::vector<std::string> armedWeaponIds() const;
+  // Test helper: angular position (radians) of the first orbit blade, so a
+  // test can measure how fast the dagger spins. -1 if no blades exist.
+  [[nodiscard]] float testOrbitBladeAngle() const;
   // Test helper: circular angular gaps (radians) between a slot's orbit
   // blades, sorted. All gaps equal 2*pi/count when blades are evenly spaced.
   [[nodiscard]] std::vector<float> testOrbitBladeGaps(int slot) const;
@@ -240,6 +268,14 @@ private:
     float strength = 0.0F;
     bool homing = false;
     int bounces = 0;
+
+    // Per-weapon fire-rate bonus (additive; see attackCooldown()).
+    float cdBonus = 0.0F;
+    // Sweep: the arc is centered this far in front of the player (scythe).
+    float sweepLead = 0.0F;
+    // Weapon-unique modifiers.
+    float uniqueHeal = 0.0F; // scythe "Reaper's Harvest": heal HP per kill
+    int beamSplit = 0;       // beam "Prism Lance": beam count multiplier
   };
   static constexpr int kMaxWeapons = 4;
 
@@ -310,9 +346,23 @@ private:
   void hurtPlayer(float amount);
   void spawnParticles(float x, float y, core::render::Color c, int count, float speed);
   void renderPlayerStats(core::render::Batcher& b, float px, float py);
+  // Weapon test mode (T): cycle every weapon incl. evolutions, apply a boosted
+  // build to see stat couplings, toggle waves, close to restore the run.
+  void enterTestMode();
+  void exitTestMode();
+  void setTestWeapon(int defIndex);
+  void toggleTestBoost();
+  void spawnTestFodder();
 
   WeaponSlot weapons_[kMaxWeapons];
   int weaponCount_ = 0;
+  // Weapon test mode state: snapshot of the real run while testing.
+  bool testMode_ = false;
+  bool testBoosted_ = false;
+  int testWeaponIdx_ = 0;
+  int savedWeaponCount_ = 0;
+  WeaponSlot savedWeapons_[kMaxWeapons];
+  PlayerStats savedStats_;
   std::vector<PendingSpawn> pending_;
   std::vector<NameLabel> labels_;
 

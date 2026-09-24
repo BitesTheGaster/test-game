@@ -92,11 +92,14 @@ rolls, trait picks, card choices and rerolls all flow through this stream.
 `enterLevelUp()` → `buildChoices()` (weapon card → unique card → normal fill,
 see `docs/mechanics.md`):
 
-- **Milestone** levels (`level % 5 == 0`): pool = milestone upgrades whose
-  `level ==` current level; shuffle, take 2; violet screen.
+- **Milestone** levels (`level >= 4 && (level & (level-1)) == 0`, i.e. powers
+  of two): pool = milestone upgrades whose `level ==` current level; shuffle,
+  take 2; violet screen.
 - **Weapon grant**: `pickWeaponGrant()` first checks **evolutions whose
   `prereqs` are all owned**, then the untouched normal weapons, shuffled.
-- **Unique**: 45% roll from unpicked `kind = "unique"` cards.
+- **Unique**: 45% roll from unpicked `kind = "unique"` cards; cards tagged
+  `weapon = "<id>"` (the 11 weapon uniques) are only eligible while that
+  weapon is equipped.
 - `reroll()` just re-runs `buildChoices()`; consumed counts live in
   `rerollsUsed_` vs `1 + stats_.rerollCharges`.
 
@@ -104,8 +107,8 @@ Upgrades apply through two stateless functions: `applyUpgrade(stats, effect,
 value)` for player-wide effects (including the fan/thorns/adrenaline/black-
 hole/chain/blood-price/ice-blood uniques) and `applyWeaponEffect(slot, ...)`
 for `weapon`-tagged cards (`w_damage_add`, `w_proj_add`, `w_pierce_add`,
-`w_cd_mul`). `stacks_[i]` counts each upgrade's stacks and enforces
-`max_stacks`.
+`w_fire_rate`, plus the `w_unique_*` weapon uniques). `stacks_[i]` counts each
+upgrade's stacks and enforces `max_stacks`.
 
 ## Content pipeline
 
