@@ -596,6 +596,26 @@ max_stacks = 1
 kind = "unique"
 weapon = "nova"
 
+[[upgrade]]
+id = "uw_inferno_everflame"
+name = "Everflame"
+desc = "Inferno: wider reap, burning ground lasts longer and burns harder"
+effect = "w_unique_everflame"
+value = 1
+max_stacks = 1
+kind = "unique"
+weapon = "inferno"
+
+[[upgrade]]
+id = "uw_pulsar_arcsaw"
+name = "Arc Saw"
+desc = "Pulsar: the laser trail is 80% wider and deals 35% more damage"
+effect = "w_unique_arcsaw"
+value = 1
+max_stacks = 1
+kind = "unique"
+weapon = "pulsar"
+
 # --- Milestones (every power-of-two level from 4 on) -------------------------
 
 [[upgrade]]

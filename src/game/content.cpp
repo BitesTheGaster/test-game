@@ -62,6 +62,8 @@ AttackType parseAttackType(const toml::table& t, const std::string& where) {
   if (s == "zone") return AttackType::Zone;
   if (s == "chain") return AttackType::Chain;
   if (s == "nova") return AttackType::Nova;
+  if (s == "inferno") return AttackType::Inferno;
+  if (s == "pulsar") return AttackType::Pulsar;
   throw std::runtime_error(where + ": unknown attack_type \"" + s + "\"");
 }
 
@@ -162,6 +164,7 @@ Content loadContent(const std::filesystem::path& dir) {
       def.bounceCount = static_cast<int>((*t)["bounce_count"].value_or(3));
       def.bounceRange = (*t)["bounce_range"].value_or(2.5F);
       def.bounceDamageMul = (*t)["bounce_damage_mul"].value_or(0.7F);
+      def.bounceInfinite = (*t)["bounce_infinite"].value_or(false);
 
       // Beam
       def.beamRange = (*t)["beam_range"].value_or(8.0F);

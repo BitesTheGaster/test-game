@@ -10,8 +10,8 @@ Regenerate with:
 python3 tools/gendocs.py
 ```
 
-**Totals:** 11 weapons (9 base +
-2 evolutions), 18 enemies.
+**Totals:** 13 weapons (9 base +
+4 evolutions), 18 enemies.
 
 ### Base weapons
 
@@ -19,20 +19,22 @@ python3 tools/gendocs.py
 |---|---|---|---|---|---|---|---|---|---|---|
 | Arcane Wand | wand | 8 | 0.5 | 1 | 14 | 0 | 0.1 | yes |  | Reliable magic bolts. The balanced baseline. |
 | Throwing Dagger | dagger | 5 | 0.4 | 3 | 0 | 0 | 0 | yes |  | Orbiting knives that carve up anything close. |
-| Heavy Crossbow | crossbow | 20 | 1.2 | 1 | 22 | 4 | 0.08 | yes | homing | Slow, homing piercing bolt that punches through crowds. |
+| Heavy Crossbow | crossbow | 20 | 1.2 | 1 | 22 | 4 | 0.18 | yes | homing | Slow, homing piercing bolt that punches through crowds. |
 | Ember Sprayer | flame | 4 | 0.35 | 1 | 0 | 0 | 0 |  |  | Cone of fire — instant damage in a wide arc. |
-| Runic Hammer | hammer | 45 | 1.8 | 1 | 8 | 0 | 0 |  |  | Arcing bomb with massive explosion and knockback. |
+| Runic Hammer | hammer | 45 | 1.8 | 1 | 8 | 0 | 0.3 |  |  | Arcing bomb with massive explosion and knockback. |
 | Storm Shuriken | shuriken | 8 | 0.6 | 2 | 16 | 1 | 0.2 |  |  | Boomerang blades — hit going out AND coming back. |
-| Void Orb | orb | 35 | 1.5 | 1 | 7 | 5 | 0 |  |  | Slow bouncing orb that detonates on each impact. |
-| Soul Scythe | scythe | 55 | 1.3 | 1 | 0 | 0 | 0 |  |  | Devastating arc — swings far ahead of you. |
+| Void Orb | orb | 35 | 1.5 | 1 | 7 | 5 | 0 |  |  | One eternal orb that hunts forever. Projectiles grow it, not multiply. |
+| Soul Scythe | scythe | 55 | 1.3 | 1 | 0 | 0 | 0 |  |  | Reaps a full circle of death around its nearest prey. |
 | Solar Lance | beam | 90 | 2.5 | 1 | 0 | 0 | 0 |  |  | Instant hitscan beam — deletes a line. |
 
 ### Evolutions (A + B = C)
 
 | Name | ID | Requires | Damage | Cooldown (s) | Projectiles | Pierce | Area | Description |
 |---|---|---|---|---|---|---|---|---|
-| Storm Caller | storm | wand + crossbow | 15 | 0.45 | 1 | 0 | Wand + Crossbow. Lightning chains between enemies. |
-| Void Nova | nova | orb + hammer | 40 | 1.8 | 1 | 0 | Orb + Hammer. Expanding ring of destruction. |
+| Storm Caller | storm | wand + crossbow | 15 | 0.45 | 1 | 0 | 0 | Wand + Crossbow. Lightning chains between enemies. |
+| Void Nova | nova | orb + hammer | 40 | 1.8 | 1 | 0 | 0 | Orb + Hammer. Expanding ring of destruction. |
+| Inferno | inferno | flame + scythe | 60 | 1.6 | 1 | 0 | 0 | Sprayer + Scythe. Reaps a circle and leaves burning ground. |
+| Pulsar | pulsar | beam + shuriken | 12 | 0.9 | 1 | 2 | 0 | Shuriken + Lance. Light-chakram dragging a burning laser trail. |
 
 ---
 
@@ -138,6 +140,8 @@ python3 tools/gendocs.py
 | Prism Lance | uw_beam_prism | w_unique_prism | 3 | 1 | beam |  | Solar Lance: fires 3 parallel beams at once |
 | Thunderlord | uw_storm_thunderlord | w_unique_thunderlord | 4 | 1 | storm |  | Storm Caller: +4 chain jumps and no damage decay |
 | Supernova | uw_nova_supernova | w_unique_supernova | 1 | 1 | nova |  | Void Nova: ring expands faster, wider, and hits harder |
+| Everflame | uw_inferno_everflame | w_unique_everflame | 1 | 1 | inferno |  | Inferno: wider reap, burning ground lasts longer and burns harder |
+| Arc Saw | uw_pulsar_arcsaw | w_unique_arcsaw | 1 | 1 | pulsar |  | Pulsar: the laser trail is 80% wider and deals 35% more damage |
 
 ### Milestones (every power-of-two level from 4 on)
 
@@ -162,7 +166,7 @@ python3 tools/gendocs.py
 | Starlight Ward | m128_starlight | shield_add | 500 | 1 |  | 128 | MILESTONE: +500 regenerating shield |
 | Overdrive | m128_overdrive | damage_mul | 2 | 1 |  | 128 | MILESTONE: +200% damage |
 
-**Totals:** 84 upgrades (45 normal, 21 unique, 18 milestones).
+**Totals:** 86 upgrades (45 normal, 23 unique, 18 milestones).
 
 
 ---

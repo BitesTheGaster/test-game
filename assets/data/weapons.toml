@@ -6,12 +6,14 @@
 #   cone        - instant AoE cone in aim direction
 #   bomb        - slow arcing projectile with gravity, explodes on impact
 #   boomerang   - projectile goes out to max range, returns to player
-#   bounce      - projectile bounces between enemies
+#   bounce      - one eternal projectile that bounces between enemies
 #   beam        - instant hitscan line
-#   sweep       - melee arc around player
+#   sweep       - circle area reaped around the nearest enemy
 #   zone        - creates persistent damage zone on ground
 #   chain       - lightning jumps between enemies (evolution)
 #   nova        - expanding ring from player (evolution)
+#   inferno     - circle reap + burning ground (evolution)
+#   pulsar      - boomerang that drags a damage trail (evolution)
 #
 # - starter = true: one of these is rolled as the run-start weapon.
 # - requires = [a, b]: evolution weapon, offered as a level-up grant once you
@@ -61,7 +63,7 @@ projectiles = 1
 proj_speed = 22.0
 proj_life = 2.0
 pierce = 4
-spread = 0.08
+spread = 0.18
 proj_color = [0.95, 0.8, 0.5, 1.0]
 starter = true
 homing = true
@@ -94,7 +96,7 @@ projectiles = 1
 proj_speed = 8.0
 proj_life = 2.5
 pierce = 0
-spread = 0.0
+spread = 0.30
 proj_color = [0.75, 0.7, 0.95, 1.0]
 bomb_arc_height = 2.5
 bomb_explode_radius = 2.0
@@ -120,7 +122,7 @@ boomerang_return_speed = 1.8
 [[weapon]]
 id = "orb"
 name = "Void Orb"
-desc = "Slow bouncing orb that detonates on each impact."
+desc = "One eternal orb that hunts forever. Projectiles grow it, not multiply."
 attack_type = "bounce"
 damage = 35.0
 cooldown = 1.50
@@ -132,12 +134,13 @@ spread = 0.0
 proj_color = [0.75, 0.45, 1.0, 1.0]
 bounce_count = 4
 bounce_range = 3.0
-bounce_damage_mul = 0.75
+bounce_damage_mul = 1.0
+bounce_infinite = true
 
 [[weapon]]
 id = "scythe"
 name = "Soul Scythe"
-desc = "Devastating arc — swings far ahead of you."
+desc = "Reaps a full circle of death around its nearest prey."
 attack_type = "sweep"
 damage = 55.0
 cooldown = 1.30
@@ -147,10 +150,9 @@ proj_life = 0.0
 pierce = 0
 spread = 0.0
 proj_color = [0.7, 1.0, 0.8, 1.0]
-sweep_angle = 2.1
+sweep_angle = 6.2832
 sweep_radius = 4.6
 sweep_knockback = 3.0
-sweep_lead = 1.3
 
 [[weapon]]
 id = "beam"
@@ -207,3 +209,42 @@ nova_max_radius = 5.0
 nova_expand_speed = 4.0
 nova_damage_per_tick = 35.0
 nova_tick_rate = 0.12
+
+[[weapon]]
+id = "inferno"
+name = "Inferno"
+desc = "Sprayer + Scythe. Reaps a circle and leaves burning ground."
+attack_type = "inferno"
+damage = 60.0
+cooldown = 1.60
+projectiles = 1
+proj_speed = 0.0
+proj_life = 0.0
+pierce = 0
+spread = 0.0
+proj_color = [1.0, 0.45, 0.1, 1.0]
+requires = ["flame", "scythe"]
+sweep_angle = 6.2832
+sweep_radius = 4.2
+sweep_knockback = 4.0
+zone_radius = 2.0
+zone_dps = 30.0
+zone_duration = 2.5
+
+[[weapon]]
+id = "pulsar"
+name = "Pulsar"
+desc = "Shuriken + Lance. Light-chakram dragging a burning laser trail."
+attack_type = "pulsar"
+damage = 12.0
+cooldown = 0.90
+projectiles = 1
+proj_speed = 20.0
+proj_life = 2.0
+pierce = 2
+spread = 0.12
+proj_color = [0.55, 1.0, 1.0, 1.0]
+requires = ["beam", "shuriken"]
+boomerang_range = 6.5
+boomerang_return_speed = 2.4
+beam_width = 0.5

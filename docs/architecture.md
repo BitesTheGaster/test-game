@@ -98,7 +98,7 @@ see `docs/mechanics.md`):
 - **Weapon grant**: `pickWeaponGrant()` first checks **evolutions whose
   `prereqs` are all owned**, then the untouched normal weapons, shuffled.
 - **Unique**: 45% roll from unpicked `kind = "unique"` cards; cards tagged
-  `weapon = "<id>"` (the 11 weapon uniques) are only eligible while that
+  `weapon = "<id>"` (the 13 weapon uniques) are only eligible while that
   weapon is equipped.
 - `reroll()` just re-runs `buildChoices()`; consumed counts live in
   `rerollsUsed_` vs `1 + stats_.rerollCharges`.

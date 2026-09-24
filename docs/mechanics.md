@@ -108,15 +108,22 @@ large hits.
   pool.
 - Each weapon has a distinct **role**: some are rapid spray (**Ember Sprayer**
   rakes a visible flame fan in an arc, dealing its damage instantly), some are
-  piercing snipers (crossbow, **Soul Scythe**), some are area-splash
+  piercing snipers (**Heavy Crossbow** bolts home and punch through crowds,
+  and the **Solar Lance** is an instant hitscan line), some are area-splash
   (**Runic Hammer** lobs an arcing bomb that detonates where it lands,
   destroying itself), some bounce (orb), and some home toward the target
   (crossbow, shuriken, nova). The **Solar Lance** fires a wide beam across the
   whole arena and splits into one parallel beam per projectile. Check
   `content.md` for the per-weapon traits column.
-- The Soul Scythe does **not** swing a full 360° ring — it sweeps a wedge
-  centered `sweep_lead` units **ahead of the player** along the aim line, so
-  it hits the threat in front of you rather than everything around you.
+- The **Soul Scythe** reaps a **full 360° circle around its nearest enemy**:
+  the swing is centered on the target itself, so everything around that
+  target takes the hit. A target-centered ring — visually and mechanically a
+  world apart from the flame's forward-pointing cone.
+- The **Void Orb** is **one eternal projectile**: it never expires and hunts
+  forever, steering between enemies (or back to you when the arena is empty).
+  Projectile upgrades do **not** spawn more orbs — they make the single orb
+  **grow** (bigger contact radius). With no damage decay per bounce, every
+  hit deals full damage.
 - Weapon fields `area` (splash radius), `strength` (knockback), `homing` and
   `bounces` are honored: area deals half-damage in a radius on hit, strength
   pushes the struck enemy, homing steers the projectile toward the nearest
@@ -124,9 +131,10 @@ large hits.
 
 ### Evolutions (A + B = C)
 
-Two weapons are **evolutions**: `storm` (Arcane Wand + Spark Spitter) and
-`nova` (Void Orb + Soul Scythe). They are defined as ordinary weapons with a
-`requires = [a, b]` list:
+Four weapons are **evolutions**: `storm` (Arcane Wand + Heavy Crossbow),
+`nova` (Void Orb + Runic Hammer), `inferno` (Ember Sprayer + Soul Scythe) and
+`pulsar` (Solar Lance + Storm Shuriken). They are defined as ordinary weapons
+with a `requires = [a, b]` list:
 
 - While you own **both** prerequisites, the evolution becomes the **highest
   priority** weapon offer, replacing the random weapon grant.
@@ -187,7 +195,7 @@ once. See [`content.md`](content.md) for the exact list; the rules they bend:
 | Cold Blood | Enemies that hit you are slowed for 2s (45% speed) |
 | Vampiric Heart | Lifesteal procs heal 2 HP instead of 1 |
 
-**Weapon uniques** — each of the 11 weapons has one exclusive treasure card.
+**Weapon uniques** — each of the 13 weapons has one exclusive treasure card.
 They are only offered while that weapon is equipped (the card carries
 `weapon = "<id>"`), so the pool stays relevant to your loadout:
 
@@ -204,6 +212,8 @@ They are only offered while that weapon is equipped (the card carries
 | Solar Lance | Prism Lance | Fires 3 parallel beams at once |
 | Storm Caller | Thunderlord | +4 chain jumps and no damage decay |
 | Void Nova | Supernova | Ring expands faster, wider, and hits harder |
+| Inferno | Everflame | Wider reap; burning ground lasts longer and burns harder |
+| Pulsar | Arc Saw | The laser trail is 80% wider and deals 35% more damage |
 
 ### Milestones
 
@@ -222,7 +232,7 @@ and stats are snapshotted and restored when you leave):
 | Key | Action |
 |-----|--------|
 | `T` | Toggle test mode on/off |
-| `1` / `2` | Previous / next weapon — **all 11 including evolutions** (`storm`, `nova`) |
+| `1` / `2` | Previous / next weapon — **all 13 including evolutions** (`storm`, `nova`, `inferno`, `pulsar`) |
 | `3` | Apply a **max build** boost: +100% damage, +4 projectiles, +3 pierce, +80% fire rate |
 | `4` | Toggle enemy waves (fodder bats spawn so every weapon has a target) |
 | `5` | Exit back to the untouched run |

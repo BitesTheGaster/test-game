@@ -113,6 +113,12 @@ struct BoomerangProjectile {
   bool returning = false;
   int bounceCount = 0;
   float blastRadius = 0.0F;  // >0: explode on return (shuriken unique)
+  // "Pulsar" evolution: while flying, the blade drags a damage trail along
+  // the segment it swept this frame (width > 0 enables it).
+  float trailWidth = 0.0F;   // >0: burning laser trail (pulsar)
+  float trailDamage = 0.0F;  // damage per trail tick
+  float trailTick = 0.15F;   // seconds between trail damage ticks
+  float trailTimer = 0.0F;
   core::render::Color color{1.0F, 1.0F, 1.0F, 1.0F};
 };
 
@@ -128,6 +134,7 @@ struct BounceProjectile {
   float lastHitX = 0.0F;
   float lastHitY = 0.0F;
   float splashRadius = 0.0F; // >0: splash damage on each bounce (orb unique)
+  bool infinite = false;     // never expires: the eternal Void Orb (bounce_infinite)
   core::render::Color color{1.0F, 1.0F, 1.0F, 1.0F};
 };
 

@@ -58,7 +58,7 @@ Run: `./build/debug/test-game`.
 | Esc         | Pause / resume — overlays your character sheet |
 | R (after death) | Restart                              |
 | T           | Toggle **weapon test mode** (live run only) |
-| 1 / 2       | In test mode: previous / next weapon (all 11 incl. evolutions) |
+| 1 / 2       | In test mode: previous / next weapon (all 13 incl. evolutions, incl. the two new Inferno & Pulsar) |
 | 3           | In test mode: apply a maxed-out build boost (damage/projectiles/pierce/fire rate) |
 | 4           | In test mode: toggle enemy waves |
 | 5           | In test mode: exit back to the run |

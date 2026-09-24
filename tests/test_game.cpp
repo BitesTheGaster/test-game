@@ -402,8 +402,9 @@ TEST_CASE("Weapon attack types are loaded correctly") {
   REQUIRE(orb->attackType == game::AttackType::Bounce);
   REQUIRE(orb->bounceCount > 0);
   REQUIRE(orb->bounceRange > 0.0F);
-  REQUIRE(orb->bounceDamageMul > 0.0F);
-  REQUIRE(orb->bounceDamageMul < 1.0F);
+  // Eternal orb: no damage decay — every bounce hits at full strength.
+  REQUIRE(orb->bounceDamageMul >= 1.0F);
+  REQUIRE(orb->bounceInfinite);
   
   const auto* scythe = content.weapon("scythe");
   REQUIRE(scythe != nullptr);
@@ -437,6 +438,21 @@ TEST_CASE("Weapon attack types are loaded correctly") {
   REQUIRE(nova->novaDamagePerTick > 0.0F);
   REQUIRE(nova->novaTickRate > 0.0F);
   REQUIRE(nova->prereqs.size() == 2);
+
+  const auto* inferno = content.weapon("inferno");
+  REQUIRE(inferno != nullptr);
+  REQUIRE(inferno->attackType == game::AttackType::Inferno);
+  REQUIRE(inferno->sweepRadius > 0.0F);
+  REQUIRE(inferno->zoneDps > 0.0F);
+  REQUIRE(inferno->zoneDuration > 0.0F);
+  REQUIRE(inferno->prereqs.size() == 2);
+
+  const auto* pulsar = content.weapon("pulsar");
+  REQUIRE(pulsar != nullptr);
+  REQUIRE(pulsar->attackType == game::AttackType::Pulsar);
+  REQUIRE(pulsar->boomerangRange > 0.0F);
+  REQUIRE(pulsar->beamWidth > 0.0F);
+  REQUIRE(pulsar->prereqs.size() == 2);
 }
 
 TEST_CASE("Orbit weapon creates blades on acquisition") {
@@ -899,6 +915,124 @@ TEST_CASE("Sweep weapon deals AoE around player") {
   REQUIRE(g.simTime() > 4.0F);
 }
 
+TEST_CASE("Scythe reaps a circle around its nearest enemy") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 223};
+  g.testDisableWaves();
+  g.testClearWeapons();
+  int scytheIdx = -1;
+  for (std::size_t i = 0; i < content.weapons.size(); ++i) {
+    if (content.weapons[i].id == "scythe") {
+      scytheIdx = static_cast<int>(i);
+      break;
+    }
+  }
+  REQUIRE(scytheIdx >= 0);
+  g.testAddWeapon(scytheIdx);
+  // Target at (4, 0); a second enemy sits a full 90 degrees below the aim
+  // line but still inside the reap circle around the target.
+  g.testSpawnEnemyAt(4.0F, 0.0F);
+  g.testSpawnEnemyAt(4.0F, -3.0F);
+  game::FrameInput in{};
+  g.advance(1.0F / 60.0F, in); // first sweep fires immediately
+  REQUIRE(g.debugCounts().sweeps == 1);
+  const auto hps = g.testEnemyHps();
+  REQUIRE(hps.size() == 2);
+  for (const float hp : hps) {
+    REQUIRE(hp < 100000.0F); // both damaged by the target-centered ring
+  }
+}
+
+TEST_CASE("Void Orb: one eternal projectile that grows with count") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  int orbIdx = -1;
+  for (std::size_t i = 0; i < content.weapons.size(); ++i) {
+    if (content.weapons[i].id == "orb") {
+      orbIdx = static_cast<int>(i);
+      break;
+    }
+  }
+  REQUIRE(orbIdx >= 0);
+
+  auto run = [&](int projAdd) {
+    game::Game g{content, 55};
+    g.testDisableWaves();
+    g.testClearWeapons();
+    if (projAdd > 0) g.stats().projAdd = projAdd;
+    g.testAddWeapon(orbIdx);
+    g.testSpawnEnemyAt(1.5F, 0.0F);
+    game::FrameInput in{};
+    g.advance(1.0F / 60.0F, in);
+    g.advance(1.0F / 60.0F, in);
+    // Projectile count never spawns extra orbs — exactly one is in flight.
+    REQUIRE(g.debugCounts().bounces == 1);
+    // The eternal orb never expires: 5+ seconds later it is still the same
+    // single orb (a finite orb would have timed out after 3.0s of life).
+    for (int i = 0; i < 360; ++i) g.advance(1.0F / 60.0F, in);
+    REQUIRE(g.debugCounts().bounces == 1);
+    const auto radii = g.testBounceRadii();
+    REQUIRE(radii.size() == 1);
+    return radii[0];
+  };
+
+  const float baseR = run(0);
+  const float bigR = run(5);
+  REQUIRE(bigR > baseR * 1.5F); // more projectiles = a bigger orb
+}
+
+TEST_CASE("Inferno evolves flame + scythe into a reap plus burning ground") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 66};
+  g.testDisableWaves();
+  g.testClearWeapons();
+  int infernoIdx = -1;
+  for (std::size_t i = 0; i < content.weapons.size(); ++i) {
+    if (content.weapons[i].id == "inferno") {
+      infernoIdx = static_cast<int>(i);
+      break;
+    }
+  }
+  REQUIRE(infernoIdx >= 0);
+  g.testAddWeapon(infernoIdx);
+  g.testSpawnEnemyAt(3.0F, 0.0F);
+  game::FrameInput in{};
+  g.advance(1.0F / 60.0F, in); // reap ring + burning zone spawn at once
+  REQUIRE(g.debugCounts().sweeps == 1);
+  REQUIRE(g.debugCounts().zones == 1);
+  REQUIRE(g.testFirstEnemyHp() < 100000.0F); // instant reap damage
+  for (int i = 0; i < 120; ++i) g.advance(1.0F / 60.0F, in);
+  REQUIRE(g.testFirstEnemyHp() < 99900.0F); // burning ground keeps ticking
+}
+
+TEST_CASE("Pulsar evolves beam + shuriken into a slicing laser trail") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 77};
+  g.testDisableWaves();
+  g.testClearWeapons();
+  int pulsarIdx = -1;
+  for (std::size_t i = 0; i < content.weapons.size(); ++i) {
+    if (content.weapons[i].id == "pulsar") {
+      pulsarIdx = static_cast<int>(i);
+      break;
+    }
+  }
+  REQUIRE(pulsarIdx >= 0);
+  g.testAddWeapon(pulsarIdx);
+  // On the flight line (contact + trail) and just off it (trail only: the
+  // blade's contact radius is 0.46, the laser trail reaches 0.55).
+  g.testSpawnEnemyAt(3.0F, 0.0F);
+  g.testSpawnEnemyAt(3.2F, 0.5F);
+  game::FrameInput in{};
+  g.advance(1.0F / 60.0F, in);
+  REQUIRE(g.debugCounts().boomerangs == 1);
+  for (int i = 0; i < 120; ++i) g.advance(1.0F / 60.0F, in);
+  const auto hps = g.testEnemyHps();
+  REQUIRE(hps.size() == 2);
+  for (const float hp : hps) {
+    REQUIRE(hp < 100000.0F); // both burned by the trail
+  }
+}
+
 TEST_CASE("Cone weapon deals instant cone damage") {
   const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
   game::Game g{content, 333};
@@ -1074,6 +1208,8 @@ TEST_CASE("Every weapon creates its attack-type entities") {
       {"scythe", &game::Game::DebugCounts::sweeps},
       {"storm", &game::Game::DebugCounts::chains},
       {"nova", &game::Game::DebugCounts::novas},
+      {"inferno", &game::Game::DebugCounts::sweeps},
+      {"pulsar", &game::Game::DebugCounts::boomerangs},
   };
   for (const auto& c : cases) {
     CAPTURE(c.id);
@@ -1102,7 +1238,8 @@ TEST_CASE("Damage multiplier scales exactly once per attack type") {
   };
 
   const char* ids[] = {"wand", "flame", "hammer", "shuriken",
-                       "orb", "beam", "scythe", "storm", "nova"};
+                       "orb", "beam", "scythe", "storm", "nova",
+                       "inferno", "pulsar"};
   for (const char* id : ids) {
     CAPTURE(id);
     const int wi = idx(id);

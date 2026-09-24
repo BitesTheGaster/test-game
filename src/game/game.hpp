@@ -165,6 +165,9 @@ public:
   // Test helper: current HP of every live Enemy (order unspecified — use for
   // sums / range checks, not positional assertions).
   [[nodiscard]] std::vector<float> testEnemyHps() const;
+  // Test helper: contact radius of every live bounce projectile (the eternal
+  // Void Orb grows its size with the projectile stat).
+  [[nodiscard]] std::vector<float> testBounceRadii() const;
   // Test helper: the equipped weapon ids, oldest first (e.g. for test-mode
   // snapshot/restore assertions). Empty when no weapons are equipped.
   [[nodiscard]] std::vector<std::string> armedWeaponIds() const;
@@ -232,6 +235,8 @@ private:
     int bounceCount = 3;
     float bounceRange = 2.5F;
     float bounceDamageMul = 0.7F;
+    bool bounceInfinite = false; // eternal orb: no life/bounce budget
+    entt::entity liveBounce = entt::null; // the one eternal orb (single, grows)
 
     // Beam
     float beamRange = 8.0F;

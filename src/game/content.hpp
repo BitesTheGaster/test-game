@@ -23,7 +23,9 @@ enum class AttackType : std::uint8_t {
   Sweep,        // melee arc around player
   Zone,         // creates persistent damage zone on ground
   Chain,        // lightning jumps between enemies (evolution)
-  Nova          // expanding ring from player (evolution)
+  Nova,         // expanding ring from player (evolution)
+  Inferno,      // target-centered circle reap + burning ground (evolution)
+  Pulsar        // boomerang that drags a damage trail (evolution)
 };
 
 struct WeaponDef {
@@ -67,6 +69,7 @@ struct WeaponDef {
   int bounceCount = 3;          // max bounces
   float bounceRange = 2.5F;     // search radius for next target
   float bounceDamageMul = 0.7F; // damage multiplier per bounce
+  bool bounceInfinite = false;  // never expires: one eternal orb that hunts
 
   // Beam
   float beamRange = 8.0F;       // max range

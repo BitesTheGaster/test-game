@@ -70,7 +70,7 @@ def weapons_md() -> str:
 
     rows = [[w["name"], w["id"], " + ".join(w["requires"]), fmt(w["damage"]),
              fmt(w["cooldown"]), fmt(w["projectiles"]), fmt(w["pierce"]),
-             md_escape(w["desc"])] for w in evo]
+             fmt(w.get("area", 0.0)), md_escape(w["desc"])] for w in evo]
     s += "\n\n### Evolutions (A + B = C)\n\n"
     s += table(["Name", "ID", "Requires", "Damage", "Cooldown (s)",
                 "Projectiles", "Pierce", "Area", "Description"], rows)
