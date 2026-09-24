@@ -75,6 +75,8 @@ python3 tools/gendocs.py
 | Swift Boots | boots | speed_mul | 0.12 | 4 |  |  | +12% move speed |
 | Vigor | vigor | max_hp_add | 20 | 6 |  |  | +20 max HP and heal 20 |
 | Soul Magnet | magnet | pickup_mul | 0.6 | 4 |  |  | +60% pickup range |
+| Scholar | scholar | xp_mul | 0.12 | 5 |  |  | +12% experience gained |
+| Lorekeeper | lorekeeper | xp_mul | 0.3 | 3 |  |  | +30% experience gained |
 | Piercing Shots | pierce | pierce_add | 1 | 3 |  |  | +1 pierce |
 | Regeneration | regen | regen_add | 1 | 4 |  |  | +1 HP per second |
 | Might | might | damage_mul | 0.25 | 4 |  |  | +25% damage |
@@ -116,7 +118,7 @@ python3 tools/gendocs.py
 
 | Name | ID | Effect | Value | Max stacks | Weapon | Level | Description |
 |---|---|---|---|---|---|---|---|
-| Spreadshot | u_spreadshot | fan | 1 | 1 |  |  | Double the volley spread and fire rate (all weapons) |
+| Spreadshot | u_spreadshot | fan | 1 | 1 |  |  | Double volley spread and fire rate, but shots spray +/- 30 degrees |
 | Ignited Carapace | u_thorns | thorns | 3 | 1 |  |  | Getting hit detonates a burst dealing 3x incoming damage |
 | Gambler's Eye | u_extra_choice | extra_choice | 1 | 1 |  |  | +1 card in every future level-up choice |
 | Second Chance | u_reroll | reroll_add | 1 | 1 |  |  | +1 free reroll per level-up (total two) |
@@ -125,6 +127,7 @@ python3 tools/gendocs.py
 | Storm Bolt | u_chain | chain | 1 | 1 |  |  | Every 3rd projectile hit chains lightning to 3 nearby enemies |
 | Blood Price | u_blood_price | blood_price | 1 | 1 |  |  | Every 20 kills detonates a burst around you |
 | Cold Blood | u_ice_blood | ice_blood | 1 | 1 |  |  | Enemies that hit you are slowed for 2s |
+| Last Stand | u_last_stand | last_stand | 1 | 1 |  |  | Taking a hit below 20% HP grants 1s of invulnerability (20s cooldown) |
 | Vampiric Heart | u_vampiric_heart | lifesteal_heal | 2 | 1 |  |  | Lifesteal heals 2 HP per proc instead of 1 |
 | Seeking Missiles | uw_wand_seeking | w_unique_homing | 1 | 1 | wand |  | Arcane Wand: bolts home onto the nearest enemy |
 | Blade Vortex | uw_dagger_vortex | w_unique_vortex | 1 | 1 | dagger |  | Throwing Dagger: blades spin 2x faster in a 25% wider orbit |
@@ -163,7 +166,7 @@ python3 tools/gendocs.py
 | Starlight Ward | m128_starlight | shield_add | 500 | 1 |  | 128 | MILESTONE: +500 regenerating shield |
 | Overdrive | m128_overdrive | damage_mul | 2 | 1 |  | 128 | MILESTONE: +200% damage |
 
-**Totals:** 83 upgrades (42 normal, 23 unique, 18 milestones).
+**Totals:** 86 upgrades (44 normal, 24 unique, 18 milestones).
 
 
 ---

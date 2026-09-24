@@ -9,9 +9,10 @@ curves. Tables of all content are generated into
 
 ## Run flow
 
-- A run starts at level 1 with **one random starter weapon** (one of the
-  `starter = true` entries in `weapons.toml`: Arcane Wand, Throwing Dagger or
-  Heavy Crossbow).
+- A run starts at level 1 with **no weapon equipped**. The first frame opens a
+  **starting-weapon pick** offering 3 cards drawn from the `starter = true`
+  entries in `weapons.toml` (Arcane Wand, Throwing Dagger or Heavy Crossbow).
+  Picking one equips it and starts the run **without** spending a level-up.
 - Enemies spawn off-screen with a **telegraph** (see [Spawning](#spawning)),
   walk toward the player and deal contact damage.
 - Every weapon fires **automatically** at the nearest enemy. All owned weapons
@@ -20,7 +21,10 @@ curves. Tables of all content are generated into
   [Level-ups](#level-ups)).
 - **Esc** pauses the run and overlays a **character sheet**: level/XP, time,
   kills, HP/regen, shield/defense, damage/cooldown, speed/pickup/lifesteal and
-  the full list of owned weapons with their numbers.
+  the full list of owned weapons with their numbers. Press **B** while paused
+  to toggle the **bestiary** — every enemy type you have slain, with its base
+  and current stats, its in-world appearance, its kill count and badges for
+  the elite/champion/overlord variants you have beaten.
 - Dying shows the game-over screen; **R** restarts (deterministic seed 1337).
 
 ## The player
@@ -151,6 +155,12 @@ count is gathered **before** damage is applied so every target in the same
 blast receives the same multiplier. Single-target hits (chain-lightning jumps,
 direct projectile impacts) are unaffected.
 
+**Pierce reduces this falloff.** The multiplier blends toward `1.0` by
+`clamp(pierce / 20, 0, 1)`, so at **20+ pierce** an AoE hit deals full damage
+to every target it catches. Every area source passes its own pierce (weapon
+pierce plus the global pierce buff) — cones, scythe reaps, infernos, bombs,
+zones, novas, beams, boomerang trails/blasts and orb splashes.
+
 ### Evolutions (A + B = C)
 
 Four weapons are **evolutions**: `storm` (Arcane Wand + Heavy Crossbow),
@@ -170,7 +180,8 @@ with a `requires = [a, b]` list:
 
 XP per level: `7 + 5·(level−1) + 0.85·(level−1)·level`. Overflow XP carries into
 the next level; if it purchases another level immediately, another card choice
-queues.
+queues. Picked-up XP is scaled by the **XP multiplier** (`xpMul`): Scholar and
+Lorekeeper cards add `+12%` and `+30%` respectively, stacking additively.
 
 ### Choice generation
 
@@ -210,7 +221,7 @@ once. See [`content.md`](content.md) for the exact list; the rules they bend:
 
 | Unique | Changes the rules |
 |--------|-------------------|
-| Spreadshot | Doubles the volley spread and halves all weapon cooldowns (≈ double fire rate) |
+| Spreadshot | Doubles the volley spread and fire rate, but every shot sprays ±30° off aim |
 | Ignited Carapace | Getting hit detonates a burst dealing **3× incoming damage** to enemies nearby |
 | Gambler's Eye | +1 card in every future level-up |
 | Second Chance | +1 free reroll per level-up (total 2) |
@@ -220,6 +231,7 @@ once. See [`content.md`](content.md) for the exact list; the rules they bend:
 | Blood Price | Every 20 kills detonates a burst around you |
 | Cold Blood | Enemies that hit you are slowed for 2s (45% speed) |
 | Vampiric Heart | Lifesteal procs heal 2 HP instead of 1 |
+| Last Stand | Taking a hit below 20% HP grants 1s of invulnerability (20s cooldown) |
 
 **Weapon uniques** — each of the 13 weapons has one exclusive treasure card.
 They are only offered while that weapon is equipped (the card carries
@@ -381,9 +393,11 @@ knockbackRes = min(0.70, t/900)  + tierBonus + (resistant ? 0.5 : 0)
 ### Contact damage
 
 Hits go through the standard mitigation/shield pipeline, then grant the
-player 0.30 s of contact invulnerability — enemies connect noticeably more
-often, so positioning matters. Tougher enemies survive hits because the ramp
-multiplies their HP — nothing is one-shotted out of its weight class.
+player **0.18 s** of contact invulnerability, extended by **~1% per 5 points
+of defense** (`base × (1 + defense / 500)`). Tougher enemies survive hits
+because the ramp multiplies their HP — nothing is one-shotted out of its
+weight class. The **Last Stand** unique grants a full 1 s of iframes when a
+hit lands while you are below 20% HP (20 s cooldown).
 
 ## Combat helpers
 
@@ -395,4 +409,4 @@ multiplies their HP — nothing is one-shotted out of its weight class.
 ## Death & restart
 
 Death ends the run. `R` restarts with a deterministic seed (1337) so a ruined
-run is reproducible. Restarting re-rolls the starter weapon from the same pool.
+run is reproducible. Restarting re-opens the starting-weapon pick.

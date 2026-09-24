@@ -3,9 +3,11 @@
 Vampire Survivors-like roguelike. C++20, SDL3 + OpenGL 3.3, CMake + vcpkg.
 
 Multi-weapon build-your-arsenal roguelike: 13 weapons (incl. 4 evolutions),
-18 enemy types with elite/champion/overlord traits, 83 upgrades (normal /
-unique / milestone), regenerating shield + defense + lifesteal, an H-key heal,
-AoE damage falloff, and a difficulty ramp that accelerates after 6 minutes.
+18 enemy types with elite/champion/overlord traits, 86 upgrades (normal /
+unique / milestone), an opening **3-weapon pick** instead of a fixed starter,
+regenerating shield + defense + lifesteal, an H-key heal, defense-scaled
+invulnerability frames, pierce that cancels AoE damage falloff, an Esc
+**bestiary**, and a difficulty ramp that accelerates after 6 minutes.
 
 ## Documentation
 
@@ -56,6 +58,7 @@ Run: `./build/debug/test-game`.
 | 1 / 2 / 3 / 4 / 5 | Pick the matching card on level-up   |
 | R           | Reroll the level-up choice (1 free per level, more with Second Chance) |
 | Esc         | Pause / resume — overlays your character sheet |
+| B           | While paused: toggle the **bestiary** (kills, stats, elite+ variants) |
 | R (after death) | Restart                              |
 | T           | Toggle **weapon test mode** (live run only) |
 | 1 / 2       | In test mode: previous / next weapon (all 13 incl. evolutions, incl. the two new Inferno & Pulsar) |
@@ -104,9 +107,10 @@ Balance lives in `assets/data/*.toml`, loaded at startup — no rebuild needed:
 Effects understood by the game: `damage_mul`, `fire_rate` (additive: final
 delay = base / (1 + bonus)), `speed_mul`, `pickup_mul`, `max_hp_add`,
 `regen_add`, `proj_add`, `pierce_add`, `heal`, `defense_add`,
-`lifesteal_add`, `shield_add`, plus the unique-item effects (`fan`, `thorns`,
-`extra_choice`, `reroll_add`, `adrenaline`, `black_hole`, `chain`,
-`blood_price`, `ice_blood`), per-weapon effects (`w_damage_add`, `w_proj_add`,
+`lifesteal_add`, `shield_add`, `xp_mul`, plus the unique-item effects (`fan`,
+`thorns`, `extra_choice`, `reroll_add`, `adrenaline`, `black_hole`, `chain`,
+`blood_price`, `ice_blood`, `last_stand`), per-weapon effects (`w_damage_add`,
+`w_proj_add`,
 `w_pierce_add`, `w_fire_rate`), and the one-per-weapon unique effects
 (`w_unique_homing`, `w_unique_area`, `w_unique_vortex`,
 `w_unique_hearthfire`, `w_unique_cataclysm`, `w_unique_harvest`,

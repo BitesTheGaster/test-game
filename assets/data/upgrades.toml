@@ -65,6 +65,22 @@ value = 0.60
 max_stacks = 4
 
 [[upgrade]]
+id = "scholar"
+name = "Scholar"
+desc = "+12% experience gained"
+effect = "xp_mul"
+value = 0.12
+max_stacks = 5
+
+[[upgrade]]
+id = "lorekeeper"
+name = "Lorekeeper"
+desc = "+30% experience gained"
+effect = "xp_mul"
+value = 0.30
+max_stacks = 3
+
+[[upgrade]]
 id = "pierce"
 name = "Piercing Shots"
 desc = "+1 pierce"
@@ -373,7 +389,7 @@ weapon = "shuriken"
 [[upgrade]]
 id = "u_spreadshot"
 name = "Spreadshot"
-desc = "Double the volley spread and fire rate (all weapons)"
+desc = "Double volley spread and fire rate, but shots spray +/- 30 degrees"
 effect = "fan"
 value = 1
 max_stacks = 1
@@ -447,6 +463,15 @@ id = "u_ice_blood"
 name = "Cold Blood"
 desc = "Enemies that hit you are slowed for 2s"
 effect = "ice_blood"
+value = 1
+max_stacks = 1
+kind = "unique"
+
+[[upgrade]]
+id = "u_last_stand"
+name = "Last Stand"
+desc = "Taking a hit below 20% HP grants 1s of invulnerability (20s cooldown)"
+effect = "last_stand"
 value = 1
 max_stacks = 1
 kind = "unique"

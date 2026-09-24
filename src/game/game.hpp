@@ -35,6 +35,7 @@ struct FrameInput {
   bool togglePause = false;
   bool testModeToggle = false; // T: open/close the weapon test mode
   bool heal = false;           // H: guaranteed 50% max-HP heal (cooldown-gated)
+  bool bestiary = false;       // B: toggle the bestiary while paused
 };
 
 // Attack-speed formula: the final delay between shots is
@@ -72,9 +73,14 @@ struct PlayerStats {
   int lifestealHeal = 1; // HP per proc (Vampiric Heart unique raises to 2)
   // Shield: regenerating damage buffer (see rules in game.hpp docs).
   float shieldMax = 0.0F;
+  // XP gain multiplier (Scholar-style items).
+  float xpMul = 1.0F;
 
   // Unique-item effects (each is a distinct mechanic):
   float spreadMul = 1.0F; // widens weapon volleys (fan item)
+  // Inaccuracy from the Spreadshot unique: each projectile is offset by up to
+  // this many radians (0.5236 = +/- 30 degrees).
+  float aimJitter = 0.0F;
   int extraChoice = 0;    // +N level-up cards
   int rerollCharges = 1;  // +N free rerolls per level-up (1 base)
   float thornsDmg = 0.0F; // AoE burst around player on hit
@@ -83,6 +89,7 @@ struct PlayerStats {
   int chain = 0;          // every 3rd projectile hit chains lightning
   int bloodPrice = 0;     // every 20 kills, burst around player
   int iceBlood = 0;       // enemies that hit you get slowed
+  int lastStand = 0;      // 1s of iframes when hit below 20% HP (cooldown)
 };
 
 struct UpgradeEffectResult {
@@ -102,9 +109,10 @@ float mitigateDamage(float raw, float defense);
 float xpForLevel(int level);
 
 // AoE damage falloff: the more enemies a single blast catches, the less each
-// one takes. 1 target = 100%, 2 = 90%, 3 = 81%, ... (0.9^(n-1)). Clamped so a
-// huge crowd still deals a floor of damage instead of underflowing.
-float aoeFalloff(int enemiesHit);
+// one takes. 1 target = 100%, 2 = 90%, 3 = 81%, ... (0.9^(n-1)). Pierce reduces
+// the falloff: at 20+ pierce there is no falloff at all. Clamped so a huge
+// crowd still deals a floor of damage instead of underflowing.
+float aoeFalloff(int enemiesHit, int pierce = 0);
 
 // Enemy scaling curves, all pure so they can be unit-tested directly.
 // Defense uses the same flat+percent curve as the player (mitigateDamage) and
@@ -161,11 +169,18 @@ public:
   [[nodiscard]] bool milestoneOffer() const { return milestoneOffer_; }
   // True while the weapon test mode is open (T). Exposed for tests.
   [[nodiscard]] bool testMode() const { return testMode_; }
+  // True while the opening 3-weapon pick is being offered.
+  [[nodiscard]] bool choosingStarter() const { return choosingStarter_; }
+  // True while the bestiary overlay is open (paused).
+  [[nodiscard]] bool bestiaryOpen() const { return bestiaryOpen_; }
 
   // Test/debug hooks.
   void grantXp(float amount);
   // Test helper: add weapon by index (bypasses normal level-up flow)
-  void testAddWeapon(int defIndex) { addWeapon(defIndex); }
+  void testAddWeapon(int defIndex) {
+    starterChoicePending_ = false; // tests set up weapons directly
+    addWeapon(defIndex);
+  }
   // Test helper: drop owned weapons + their persistent entities (orbit blades).
   void testClearWeapons();
   // Test helper: place a stationary, high-HP enemy at a world position.
@@ -204,6 +219,26 @@ public:
   // Test helper: circular angular gaps (radians) between a slot's orbit
   // blades, sorted. All gaps equal 2*pi/count when blades are evenly spaced.
   [[nodiscard]] std::vector<float> testOrbitBladeGaps(int slot) const;
+  // Test helper: current invulnerability window (seconds) and what a base
+  // window becomes after the defense scaling.
+  [[nodiscard]] float testIframes() const { return iframes_; }
+  [[nodiscard]] float testIframeDuration(float base) const { return iframeDuration(base); }
+  // Test helper: bestiary kill count / tier bitmask for a content enemy index.
+  [[nodiscard]] int testBestiaryKills(int def) const {
+    if (def < 0 || static_cast<std::size_t>(def) >= bestiaryKills_.size()) return 0;
+    return bestiaryKills_[static_cast<std::size_t>(def)];
+  }
+  [[nodiscard]] int testBestiaryTiers(int def) const {
+    if (def < 0 || static_cast<std::size_t>(def) >= bestiaryTiers_.size()) return 0;
+    return static_cast<int>(bestiaryTiers_[static_cast<std::size_t>(def)]);
+  }
+  // Test helper: deal direct damage to the player through the normal path.
+  void testHurtPlayer(float amount) { hurtPlayer(amount); }
+  // Test helper: set the player's current HP (for low-HP unique tests).
+  void testSetPlayerHp(float hp);
+  // Test helper: kill the first live Enemy through the normal kill path (so
+  // the bestiary records it). No-op when the registry has no enemies.
+  void testKillFirstEnemy();
 
   // Debug introspection for tests: how many live entities each attack type has.
   struct DebugCounts {
@@ -356,6 +391,10 @@ private:
   void updateUniqueEffects();
   void buildSpatialHash();
   void enterLevelUp();
+  // Opening pick: the run begins with no weapon, offering three starter
+  // weapons (wand/dagger/crossbow) instead of a random one.
+  void enterStarterPick();
+  void buildStarterChoices();
   void buildChoices();
   void chooseUpgrade(int slot);
   void reroll();
@@ -378,6 +417,13 @@ private:
   void damagePlayerDirect(float amount); // no thorns trigger (DoT auras)
   void spawnParticles(float x, float y, core::render::Color c, int count, float speed);
   void renderPlayerStats(core::render::Batcher& b, float px, float py);
+  // Bestiary overlay (paused, B): discovered enemy types, their stats,
+  // appearance, kill counts and which elite+ variants have been slain.
+  void renderBestiary(core::render::Batcher& b, float px, float py);
+  // Current global enemy scaling (shared by spawning and the bestiary).
+  void currentScales(float& hp, float& speed, float& touch) const;
+  // Player invulnerability window, nudged up ~1% per 5 defense.
+  [[nodiscard]] float iframeDuration(float base) const;
   // Weapon test mode (T): cycle every weapon incl. evolutions, apply a boosted
   // build to see stat couplings, toggle waves, close to restore the run.
   void enterTestMode();
@@ -414,6 +460,12 @@ private:
   bool wavesEnabled_ = true; // tests may freeze spawning for determinism
   float iframes_ = 0.0F;
   float healCd_ = 0.0F; // H heal cooldown remaining
+  bool starterChoicePending_ = false; // show the opening 3-weapon pick
+  bool choosingStarter_ = false;      // currently in that opening pick
+  bool bestiaryOpen_ = false;         // bestiary overlay (paused)
+  float lastStandCd_ = 0.0F;          // low-HP iframe unique cooldown
+  std::vector<int> bestiaryKills_;    // kills per content enemy index
+  std::vector<std::uint8_t> bestiaryTiers_; // bitmask of tiers killed
   float moveX_ = 0.0F; // latched input for fixed steps
   float moveY_ = 0.0F;
 

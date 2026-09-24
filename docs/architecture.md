@@ -71,8 +71,9 @@ Used by enemy separation and projectile hits. Queries are
 
 The whole run is driven by one `rng_` (`std::mt19937`-backed). Restarts seed
 it with `1337` for determinism; `Game(content, seed)` exists for seeded
-constructor use (tests). The starter weapon, every spawn roll, elite/champion
-rolls, trait picks, card choices and rerolls all flow through this stream.
+constructor use (tests). The opening weapon pick, every spawn roll, elite/
+champion rolls, trait picks, card choices and rerolls all flow through this
+stream.
 
 ## Simulation order (per fixed tick)
 
@@ -83,7 +84,7 @@ rolls, trait picks, card choices and rerolls all flow through this stream.
 4. `fireWeapons()` — per-slot cooldowns, shared nearest-enemy target, fans,
    AoE crowd falloff
 5. `updateProjectiles()` — hits, pierce, chain (Storm Bolt), particle bursts
-6. `updatePickups()` — XP magnetism and collection
+6. `updatePickups()` — XP magnetism and collection (scaled by `xpMul`)
 7. Regen (`regen_add`), black hole timer, adrenaline cooldown, poison tick
 8. `spawnWave()` — spawn interval ramp, weighted enemy pick, elite/champion/
    overlord rolls, pushes a `PendingSpawn` with a 0.6 s telegraph
@@ -92,6 +93,9 @@ rolls, trait picks, card choices and rerolls all flow through this stream.
 
 ## Level-up pipeline
 
+A run opens with `enterStarterPick()` → `buildStarterChoices()`, which shuffles
+the `starter = true` weapons and offers 3; `chooseUpgrade()` equips the pick
+without spending a level-up. Normal level-ups run
 `enterLevelUp()` → `buildChoices()` (weapon card → unique card → normal fill,
 see `docs/mechanics.md`):
 
@@ -154,8 +158,10 @@ Batcher (core)  -> one @instanced draw call per pass
 | `kSpawnTelegraph` | 0.6 s | Telegraph duration before an enemy appears |
 | `kShieldRegenRate` | 10 HP/s | Shield regen out of combat |
 | `kShieldRegenDelay` | 4 s | Damage-free time before regen starts |
-| `kContactIframes` | 0.30 s | Invulnerability after being hit |
-| `kEliteHpMul` / `kChampionHpMul` / `kOverlordHpMul` | 4 / 7 / 14 | Tier HP multipliers (all elite+ also get touch/speed/XP boosts) |
+| `kContactIframes` | 0.18 s | Base invulnerability after being hit; scaled by `1 + defense/500` |
+| `kEliteHpMin` / `kEliteHpMax` | 5 / 10 | Elite HP multiplier range (rolled per spawn) |
+| `kChampionHpMin` / `kChampionHpMax` | 25 / 100 | Champion HP multiplier range |
+| `kOverlordHpMin` / `kOverlordHpMax` | 125 / 1000 | Overlord HP multiplier range |
 | `kMaxEnemies` | — | Hard cap on live enemies (see `game.hpp`) |
 
 ## Testing
@@ -169,7 +175,9 @@ Headless Catch2 tests in `tests/test_game.cpp` construct a `Game` directly
 - Defense/shield/lifesteal pipeline behavior
 - Elite/champion/overlord spawn stat boosts and trait-flag counts
 - Unique item effects (fan, thorns, adrenaline, black hole, chain,
-  blood price, extra choice, reroll)
+  blood price, extra choice, reroll, XP multiplier, Last Stand)
+- Opening 3-weapon pick, defense-scaled iframes, Last Stand low-HP iframes
+- Bestiary kill/tier tracking and the B overlay toggle
 - Milestone offering at level 5
 - Reroll budget accounting
 - Projectile/weapon stat accumulation

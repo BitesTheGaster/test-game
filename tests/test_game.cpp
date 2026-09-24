@@ -95,6 +95,8 @@ TEST_CASE("applyUpgrade supports unique-item effects") {
   // The new attack-speed model is ADDITIVE: the fan adds +100% fire rate,
   // which halves the delay (delay = base / (1 + bonus)).
   REQUIRE(s.fireRateBonus == Catch::Approx(1.0F));
+  // The same item costs accuracy: shots deviate up to +/- 30 degrees (0.5236 rad).
+  REQUIRE(s.aimJitter == Catch::Approx(0.5236F).margin(1e-3F));
 
   REQUIRE(game::applyUpgrade(s, "extra_choice", 1.0F).valid);
   REQUIRE(s.extraChoice == 1);
@@ -108,6 +110,13 @@ TEST_CASE("applyUpgrade supports unique-item effects") {
   REQUIRE(s.chain == 1);
   REQUIRE(game::applyUpgrade(s, "lifesteal_heal", 2.0F).valid);
   REQUIRE(s.lifestealHeal == 2);
+  // XP-boost items stack additively onto the multiplier.
+  REQUIRE(game::applyUpgrade(s, "xp_mul", 0.12F).valid);
+  REQUIRE(game::applyUpgrade(s, "xp_mul", 0.30F).valid);
+  REQUIRE(s.xpMul == Catch::Approx(1.42F));
+  // Last Stand unique flag.
+  REQUIRE(game::applyUpgrade(s, "last_stand", 1.0F).valid);
+  REQUIRE(s.lastStand == 1);
 }
 
 TEST_CASE("attackCooldown: delay = base / (1 + additive fire-rate bonus)") {
@@ -150,6 +159,24 @@ TEST_CASE("aoeFalloff drops per-target damage as a blast catches a crowd") {
     REQUIRE(f <= prev + 1e-5F);
     REQUIRE(f > 0.0F);
     prev = f;
+  }
+}
+
+TEST_CASE("pierce reduces AoE crowd falloff and fully negates it at 20") {
+  // With no pierce the base falloff applies.
+  REQUIRE(game::aoeFalloff(5, 0) == Catch::Approx(game::aoeFalloff(5)));
+  // Pierce always recovers some damage.
+  REQUIRE(game::aoeFalloff(5, 5) > game::aoeFalloff(5, 0));
+  REQUIRE(game::aoeFalloff(5, 10) > game::aoeFalloff(5, 5));
+  // At 20+ pierce a blast deals full damage to every target it catches.
+  REQUIRE(game::aoeFalloff(2, 20) == Catch::Approx(1.0F));
+  REQUIRE(game::aoeFalloff(40, 20) == Catch::Approx(1.0F));
+  REQUIRE(game::aoeFalloff(40, 100) == Catch::Approx(1.0F));
+  // Monotonic in pierce, never above 1.
+  for (int p = 0; p <= 25; ++p) {
+    const float f = game::aoeFalloff(8, p);
+    REQUIRE(f <= 1.0F + 1e-5F);
+    REQUIRE(f >= game::aoeFalloff(8, p > 0 ? p - 1 : 0) - 1e-5F);
   }
 }
 
@@ -238,6 +265,116 @@ TEST_CASE("trait flags survive spawn and are counted") {
   REQUIRE(total == 3); // 2 flags + 1 flag
 }
 
+// --- Round 7: opening pick, iframes, bestiary -------------------------------
+
+TEST_CASE("Run opens with a 3-weapon pick instead of a random starter") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 5};
+
+  // No weapon is granted up front.
+  REQUIRE(g.armedWeaponIds().empty());
+
+  // The first frame opens the starter pick (still no level-up yet).
+  g.advance(1.0F / 60.0F, game::FrameInput{});
+  REQUIRE(g.state() == game::RunState::LevelUp);
+  REQUIRE(g.choosingStarter());
+  REQUIRE(g.upgradeChoices().size() == 3);
+  for (const auto& c : g.upgradeChoices()) {
+    REQUIRE(c.kind == game::Choice::Kind::Weapon);
+  }
+
+  // Picking one starts the run with exactly that weapon and does NOT level up.
+  game::FrameInput pick{};
+  pick.choose1 = true;
+  g.advance(1.0F / 60.0F, pick);
+  REQUIRE(g.state() == game::RunState::Playing);
+  REQUIRE(g.armedWeaponIds().size() == 1);
+  REQUIRE(g.level() == 1);
+}
+
+TEST_CASE("Defense extends the player's invulnerability window") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 6};
+  g.testDisableWaves();
+  g.testAddWeapon(0);
+
+  // No defense: unchanged.
+  REQUIRE(g.testIframeDuration(1.0F) == Catch::Approx(1.0F));
+  // +5 defense -> +1% iframes; +25 -> +5%.
+  g.stats().defense = 5.0F;
+  REQUIRE(g.testIframeDuration(1.0F) == Catch::Approx(1.01F));
+  g.stats().defense = 25.0F;
+  REQUIRE(g.testIframeDuration(1.0F) == Catch::Approx(1.05F));
+  // Monotonic in defense.
+  REQUIRE(g.testIframeDuration(0.18F) > 0.18F);
+}
+
+TEST_CASE("Last Stand grants iframes when hit below 20% HP") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 8};
+  g.testDisableWaves();
+  g.testAddWeapon(0);
+  g.stats().lastStand = 1;
+
+  // Drop to just above the threshold, then take a hit that pushes below 20%.
+  g.testSetPlayerHp(25.0F); // max HP is 100
+  REQUIRE(g.testIframes() == Catch::Approx(0.0F));
+  g.testHurtPlayer(10.0F);
+  REQUIRE(g.testIframes() > 0.9F); // ~1s of invulnerability
+
+  // A healthy player never triggers it.
+  game::Game h{content, 8};
+  h.testDisableWaves();
+  h.testAddWeapon(0);
+  h.stats().lastStand = 1;
+  h.testSetPlayerHp(80.0F);
+  h.testHurtPlayer(5.0F);
+  REQUIRE(h.testIframes() == Catch::Approx(0.0F));
+}
+
+TEST_CASE("Bestiary records kills and the elite+ variants slain") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 9};
+  g.testDisableWaves();
+  g.testSpawnTieredEnemyAt(1.0F, 0.0F, 0);
+  g.testSpawnTieredEnemyAt(2.0F, 0.0F, 2); // champion of the same type (def 0)
+
+  REQUIRE(g.testBestiaryKills(0) == 0);
+  g.testKillFirstEnemy();
+  g.testKillFirstEnemy();
+  REQUIRE(g.testBestiaryKills(0) == 2);
+  // Both the normal and the champion variants are recorded.
+  REQUIRE((g.testBestiaryTiers(0) & (1 << 0)) != 0);
+  REQUIRE((g.testBestiaryTiers(0) & (1 << 2)) != 0);
+}
+
+TEST_CASE("Bestiary overlay opens with B while paused") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 10};
+  g.testDisableWaves();
+  g.testAddWeapon(0);
+
+  game::FrameInput esc{};
+  esc.togglePause = true;
+  g.advance(1.0F / 60.0F, esc);
+  REQUIRE(g.state() == game::RunState::Paused);
+  REQUIRE_FALSE(g.bestiaryOpen());
+
+  game::FrameInput b{};
+  b.bestiary = true;
+  g.advance(1.0F / 60.0F, b);
+  REQUIRE(g.bestiaryOpen());
+  g.advance(1.0F / 60.0F, b);
+  REQUIRE_FALSE(g.bestiaryOpen());
+
+  // Resuming closes the overlay.
+  g.advance(1.0F / 60.0F, b);
+  REQUIRE(g.bestiaryOpen());
+  g.advance(1.0F / 60.0F, esc);
+  REQUIRE(g.state() == game::RunState::Playing);
+  REQUIRE_FALSE(g.bestiaryOpen());
+}
+
 // --- Fixed timestep ----------------------------------------------------------
 
 TEST_CASE("FixedTimestep caps steps and drops backlog") {
@@ -306,6 +443,11 @@ TEST_CASE("SpatialHash queries match brute force") {
 TEST_CASE("Game simulates headless and spawns enemies") {
   const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
   game::Game g{content, 42};
+
+  // The run opens with a 3-weapon pick; take the first one to start playing.
+  game::FrameInput pick{};
+  pick.choose1 = true;
+  g.advance(1.0F / 60.0F, pick);
 
   game::FrameInput in{};
   for (int i = 0; i < 600; ++i) { // 10 seconds at 60 Hz
@@ -393,6 +535,10 @@ TEST_CASE("Enemy separation speed is clamped (no vacuum darting)") {
   const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
   game::Game g{content, 13};
   g.testDisableWaves();
+  // Take the opening weapon pick so the run is actually playing.
+  game::FrameInput pick{};
+  pick.choose1 = true;
+  g.advance(1.0F / 60.0F, pick);
   // Tight cluster: heavily overlapping enemies get a large separation force
   // that used to fling them at many times their base speed whenever they
   // bunched up around the player.

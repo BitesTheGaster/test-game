@@ -40,6 +40,7 @@ struct Enemy {
   float speed = 2.0F;
   float touch = 5.0F;
   float slowT = 0.0F; // >0 => slowed for this many seconds
+  int def = -1;       // content enemy index for the bestiary (-1 = unknown)
 };
 
 // Bit flags for elite/champion enemy traits (non-POD-free: plain POD).
@@ -107,6 +108,7 @@ struct OrbitBlade {
 // Arcing bomb projectile (hammer)
 struct BombProjectile {
   float damage = 1.0F;
+  int pierce = 0;          // reduces crowd damage falloff
   float explodeRadius = 1.5F;
   float knockback = 3.0F;
   float life = 2.0F;
@@ -162,6 +164,7 @@ struct BounceProjectile {
 // Instant beam (beam)
 struct BeamEffect {
   float damage = 1.0F;
+  int pierce = 0;          // reduces crowd damage falloff
   float range = 8.0F;
   float width = 0.3F;
   float duration = 0.15F;
@@ -189,6 +192,7 @@ struct SweepEffect {
 // Damage zone on ground (ember/zone)
 struct ZoneEffect {
   float dps = 15.0F;
+  int pierce = 0;          // reduces crowd damage falloff
   float radius = 1.2F;
   float duration = 4.0F;
   float timer = 0.0F;
@@ -211,6 +215,7 @@ struct ChainLightning {
 // Expanding nova ring (nova evolution)
 struct NovaRing {
   float damagePerTick = 25.0F;
+  int pierce = 0;          // reduces crowd damage falloff
   float maxRadius = 4.0F;
   float expandSpeed = 3.0F;
   float tickRate = 0.15F;
