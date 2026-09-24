@@ -34,6 +34,7 @@ struct FrameInput {
   bool restart = false;
   bool togglePause = false;
   bool testModeToggle = false; // T: open/close the weapon test mode
+  bool heal = false;           // H: guaranteed 50% max-HP heal (cooldown-gated)
 };
 
 // Attack-speed formula: the final delay between shots is
@@ -100,6 +101,23 @@ float mitigateDamage(float raw, float defense);
 // XP needed to advance from `level` to `level + 1`.
 float xpForLevel(int level);
 
+// AoE damage falloff: the more enemies a single blast catches, the less each
+// one takes. 1 target = 100%, 2 = 90%, 3 = 81%, ... (0.9^(n-1)). Clamped so a
+// huge crowd still deals a floor of damage instead of underflowing.
+float aoeFalloff(int enemiesHit);
+
+// Enemy scaling curves, all pure so they can be unit-tested directly.
+// Defense uses the same flat+percent curve as the player (mitigateDamage) and
+// grows after a short grace period; higher tiers are tougher.
+float enemyDefense(float simTime, int tier);
+// Lifesteal resistance: 0.5 => the player's heal chance is halved.
+float enemyLifestealResistance(float simTime, int tier, bool resistant);
+// Knockback resistance: scales incoming push, grows with time.
+float enemyKnockbackResistance(float simTime, int tier, bool resistant);
+// How many traits a given tier rolls: elite = exactly 1, champions several,
+// overlords even more. Grows a little with run time.
+int traitsForTier(int tier, float simTime);
+
 enum class RunState {
   Playing,
   LevelUp,
@@ -152,6 +170,15 @@ public:
   void testClearWeapons();
   // Test helper: place a stationary, high-HP enemy at a world position.
   void testSpawnEnemyAt(float x, float y);
+  // Test helper: place an elite/champion/overlord enemy (tier 1..3) so tests
+  // can inspect the guaranteed stat boosts, resistances and trait flags.
+  void testSpawnTieredEnemyAt(float x, float y, int tier, std::uint32_t traits = 0);
+  // Test helper: tier of every live Enemy (0 normal, 1 elite, 2 champion, 3
+  // overlord). Order unspecified.
+  [[nodiscard]] std::vector<int> testEnemyTiers() const;
+  // Test helper: number of set trait flags for every live Enemy. Order
+  // unspecified.
+  [[nodiscard]] std::vector<int> testEnemyTraitCounts() const;
   // Test helper: freeze wave spawning so tests control the enemy pool exactly.
   void testDisableWaves() { wavesEnabled_ = false; }
   // Test helper: apply a per-weapon upgrade (same path as weapon Focus cards).
@@ -298,13 +325,8 @@ private:
     std::uint8_t tier = 0;
   };
 
-  // Elite name labels collected during the world pass (drawn in screen pass).
-  struct NameLabel {
-    float x = 0.0F;
-    float y = 0.0F;
-    core::render::Color c{1.0F, 1.0F, 1.0F, 1.0F};
-    std::string name;
-  };
+  // Elite name labels are no longer drawn; elites/champions/overlords are
+  // marked by a coloured outline instead (see render()).
 
   // Particles: fixed ring buffer of PODs.
   struct Particle {
@@ -328,6 +350,7 @@ private:
   void updateZoneEffects();
   void updateChainLightning();
   void updateNovaRing();
+  void updateEnemyShots();
   void updatePickups();
   void updateShield();
   void updateUniqueEffects();
@@ -341,14 +364,18 @@ private:
   void applyWeaponEffect(int slotIndex, std::string_view effect, float value);
   int findWeaponSlot(std::string_view weaponId) const;
   bool ownsWeapon(int defIndex) const;
-  int pickWeaponGrant(); // -1 when nothing new to offer
+  // Collects every new weapon the player could be offered (evolutions first,
+  // then normals), shuffled. Used to offer several weapon cards at once.
+  std::vector<int> collectWeaponGrants();
   void spawnEnemy(const PendingSpawn& p);
   void applyEnemyDamage(entt::entity e, float dmg);
   void killEnemy(entt::entity e);
   void chainBolt(float x, float y, float dmg);
-  void tryLifesteal(); // chance-based heal on a damaging hit
+  void tryLifesteal(entt::entity source); // chance-based heal on a damaging hit
+  void applyKnockback(entt::entity e, float angle, float force);
   void explodeBomb(entt::entity bomb, const BombProjectile& bp, float x, float y);
   void hurtPlayer(float amount);
+  void damagePlayerDirect(float amount); // no thorns trigger (DoT auras)
   void spawnParticles(float x, float y, core::render::Color c, int count, float speed);
   void renderPlayerStats(core::render::Batcher& b, float px, float py);
   // Weapon test mode (T): cycle every weapon incl. evolutions, apply a boosted
@@ -369,7 +396,6 @@ private:
   WeaponSlot savedWeapons_[kMaxWeapons];
   PlayerStats savedStats_;
   std::vector<PendingSpawn> pending_;
-  std::vector<NameLabel> labels_;
 
   const Content& content_;
   entt::registry registry_;
@@ -387,6 +413,7 @@ private:
   float hordeTimer_ = 120.0F;  // first horde burst arrives at ~2 minutes
   bool wavesEnabled_ = true; // tests may freeze spawning for determinism
   float iframes_ = 0.0F;
+  float healCd_ = 0.0F; // H heal cooldown remaining
   float moveX_ = 0.0F; // latched input for fixed steps
   float moveY_ = 0.0F;
 

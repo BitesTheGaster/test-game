@@ -73,14 +73,6 @@ value = 1
 max_stacks = 3
 
 [[upgrade]]
-id = "leech"
-name = "Life Leech"
-desc = "Heal 25 HP"
-effect = "heal"
-value = 25
-max_stacks = 3
-
-[[upgrade]]
 id = "regen"
 name = "Regeneration"
 desc = "+1 HP per second"
@@ -119,14 +111,6 @@ desc = "+8% move speed"
 effect = "speed_mul"
 value = 0.08
 max_stacks = 6
-
-[[upgrade]]
-id = "feast"
-name = "Dark Feast"
-desc = "Heal 40 HP"
-effect = "heal"
-value = 40
-max_stacks = 2
 
 [[upgrade]]
 id = "constitution"
@@ -190,14 +174,6 @@ name = "Barrage"
 desc = "+2 projectiles"
 effect = "proj_add"
 value = 2
-max_stacks = 1
-
-[[upgrade]]
-id = "rejuvenation"
-name = "Rejuvenation"
-desc = "Heal 60 HP"
-effect = "heal"
-value = 60
 max_stacks = 1
 
 [[upgrade]]

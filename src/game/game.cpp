@@ -19,10 +19,14 @@ constexpr float kShieldRegenRate = 10.0F;   // HP/s once out of combat
 constexpr float kShieldRegenDelay = 4.0F;   // seconds without damage
 constexpr float kContactIframes = 0.30F;    // enemies connect more often
 
+// Base stat multipliers per enemy tier. Applied to EVERY elite-and-above so
+// they never simply melt, on top of the traits they roll.
 constexpr float kEliteHpMul = 4.0F;
 constexpr float kChampionHpMul = 7.0F;
+constexpr float kOverlordHpMul = 14.0F;
 
-// Trait pool: a growing count of traits is rolled for elite/champion enemies.
+// Trait pool. Elites roll exactly one; champions and overlords roll several
+// (see traitsForTier).
 enum PickTrait : int {
   PickFast,
   PickArmored,
@@ -31,8 +35,30 @@ enum PickTrait : int {
   PickVenomous,
   PickVampiric,
   PickShielded,
+  PickHeavy,
+  PickArcher,
+  PickAura,
+  PickResistant,
   PickCount,
 };
+
+// Base stat multipliers applied to EVERY elite-and-above (before trait rolls),
+// so higher tiers are always beefier regardless of which traits they roll.
+struct TierBuffs {
+  float hp;
+  float touch;
+  float speed;
+  float xp;
+};
+
+TierBuffs tierBuffs(int tier) {
+  switch (tier) {
+    case 3: return {kOverlordHpMul, 4.0F, 1.5F, 10.0F};
+    case 2: return {kChampionHpMul, 2.5F, 1.3F, 5.0F};
+    case 1: return {kEliteHpMul, 1.5F, 1.15F, 3.0F};
+    default: return {1.0F, 1.0F, 1.0F, 1.0F};
+  }
+}
 
 float length(float x, float y) {
   return std::sqrt(x * x + y * y);
@@ -155,8 +181,44 @@ float mitigateDamage(float raw, float defense) {
 }
 
 float xpForLevel(int level) {
+  // Steeper than the original curve: the base is higher and the quadratic term
+  // grows faster, so each level takes noticeably more XP as the run goes on.
   const float l = static_cast<float>(level - 1);
-  return 6.0F + 4.0F * l + 0.5F * l * (l + 1.0F);
+  return 7.0F + 5.0F * l + 0.85F * l * (l + 1.0F);
+}
+
+float aoeFalloff(int enemiesHit) {
+  const int n = std::clamp(enemiesHit, 1, 40);
+  return std::pow(0.9F, static_cast<float>(n - 1));
+}
+
+float enemyDefense(float simTime, int tier) {
+  // A short grace period keeps the opening minute free of mitigation, then
+  // defense ramps so late waves shrug off a slice of every hit.
+  const float base = std::max(0.0F, simTime - 30.0F) / 25.0F;
+  const float tierMul = tier >= 3 ? 2.8F : tier == 2 ? 2.0F : tier == 1 ? 1.4F : 1.0F;
+  return base * tierMul;
+}
+
+float enemyLifestealResistance(float simTime, int tier, bool resistant) {
+  float res = std::min(0.75F, simTime / 1200.0F);
+  res += tier >= 3 ? 0.35F : tier == 2 ? 0.25F : tier == 1 ? 0.15F : 0.0F;
+  if (resistant) res += 0.5F;
+  return std::min(1.0F, res);
+}
+
+float enemyKnockbackResistance(float simTime, int tier, bool resistant) {
+  float res = std::min(0.7F, simTime / 900.0F);
+  res += tier >= 3 ? 0.35F : tier == 2 ? 0.25F : tier == 1 ? 0.15F : 0.0F;
+  if (resistant) res += 0.5F;
+  return std::min(1.0F, res);
+}
+
+int traitsForTier(int tier, float simTime) {
+  if (tier <= 1) return tier == 1 ? 1 : 0; // elite: exactly one bonus
+  // Champions: 2 base, +1 after 4 minutes. Overlords: 4 base, +1 after 8.
+  if (tier == 2) return 2 + (simTime >= 240.0F ? 1 : 0);
+  return 4 + (simTime >= 480.0F ? 1 : 0);
 }
 
 Game::Game(const Content& content, std::uint32_t seed)
@@ -176,11 +238,11 @@ void Game::reset() {
   kills_ = 0;
   spawnTimer_ = 0.5F; // short grace before the first telegraph
   iframes_ = 0.0F;
+  healCd_ = 0.0F;
   stats_ = PlayerStats{};
   std::fill(stacks_.begin(), stacks_.end(), 0);
   choices_.clear();
   pending_.clear();
-  labels_.clear();
   particles_.clear();
   particleCursor_ = 0;
 
@@ -263,6 +325,18 @@ void Game::advance(float frameDt, const FrameInput& input) {
     else if (input.choose4) wavesEnabled_ = !wavesEnabled_;
     else if (input.choose5) exitTestMode();
   }
+  // H: guaranteed heal for 50% of max HP on a cooldown (replaces the old
+  // single-use heal cards, which are no longer in the loot pool).
+  if (state_ == RunState::Playing && input.heal && healCd_ <= 0.0F &&
+      player_ != entt::null && registry_.valid(player_)) {
+    auto& php = registry_.get<Health>(player_);
+    if (php.hp > 0.0F && php.hp < php.max) {
+      php.hp = std::min(php.max, php.hp + php.max * 0.5F);
+      healCd_ = 30.0F;
+      const auto& t = registry_.get<Transform>(player_);
+      spawnParticles(t.x, t.y, {0.4F, 1.0F, 0.6F, 1.0F}, 18, 5.0F);
+    }
+  }
   if (state_ == RunState::LevelUp) {
     const std::size_t n = choices_.size();
     if (input.choose1 && n >= 1) chooseUpgrade(0);
@@ -298,6 +372,9 @@ void Game::fixedUpdate() {
   if (iframes_ > 0.0F) {
     iframes_ -= 1.0F / 60.0F;
   }
+  if (healCd_ > 0.0F) {
+    healCd_ -= 1.0F / 60.0F;
+  }
 
   movePlayer();
   buildSpatialHash();
@@ -313,6 +390,7 @@ void Game::fixedUpdate() {
   updateZoneEffects();
   updateChainLightning();
   updateNovaRing();
+  updateEnemyShots();
   updatePickups();
 
   // Regen.
@@ -427,6 +505,41 @@ void Game::updateEnemies() {
       if (traits->flags & TraitRegenerating) {
         auto& eh = registry_.get<Health>(e);
         eh.hp = std::min(eh.max, eh.hp + traits->regen / 60.0F);
+      }
+      // Damage aura: continuous chip damage while the player stands inside.
+      if (traits->auraRadius > 0.0F) {
+        const float adx = pt.x - t.x;
+        const float ady = pt.y - t.y;
+        if (adx * adx + ady * ady < traits->auraRadius * traits->auraRadius) {
+          damagePlayerDirect(traits->auraDps / 60.0F);
+        }
+      }
+      // Archer: periodic projectiles aimed at the player.
+      if (traits->shootCooldown > 0.0F) {
+        traits->shootTimer -= 1.0F / 60.0F;
+        if (traits->shootTimer <= 0.0F) {
+          const float sdx = pt.x - t.x;
+          const float sdy = pt.y - t.y;
+          const float sd = length(sdx, sdy);
+          if (sd < 9.0F && sd > 0.001F) {
+            traits->shootTimer = traits->shootCooldown;
+            const auto shot = registry_.create();
+            constexpr float kShotSpeed = 7.5F;
+            registry_.emplace<Transform>(shot, t.x, t.y, t.x, t.y);
+            registry_.emplace<Velocity>(shot, sdx / sd * kShotSpeed, sdy / sd * kShotSpeed);
+            registry_.emplace<Radius>(shot, 0.13F);
+            Sprite ss{};
+            ss.color = {1.0F, 0.5F, 0.2F, 1.0F};
+            ss.circle = true;
+            registry_.emplace<Sprite>(shot, ss);
+            EnemyShot es{};
+            es.damage = en.touch * 0.6F;
+            es.life = 3.0F;
+            registry_.emplace<EnemyShot>(shot, es);
+          } else {
+            traits->shootTimer = 0.25F; // out of range: retry shortly
+          }
+        }
       }
     }
 
@@ -599,6 +712,9 @@ void Game::fireWeapons() {
           const float coneRange = w.coneRange * (1.0F + stats_.projAdd * 0.25F);
           const float halfAngle = coneAngle * 0.5F;
           auto view = registry_.view<Transform, Health, Radius, Enemy>();
+          std::vector<entt::entity> hits;
+          std::vector<float> hx;
+          std::vector<float> hy;
           for (const auto e : view) {
             const auto& et = view.get<Transform>(e);
             const float dx = et.x - pt.x;
@@ -610,10 +726,16 @@ void Game::fireWeapons() {
             while (diff > kPi) diff -= 2.0F * kPi;
             while (diff < -kPi) diff += 2.0F * kPi;
             if (std::abs(diff) <= halfAngle) {
-              applyEnemyDamage(e, damage);
-              const auto& er = view.get<Radius>(e); (void)er;
-              spawnParticles(et.x, et.y, {1.0F, 0.5F, 0.1F, 1.0F}, 4, 3.0F);
+              hits.push_back(e);
+              hx.push_back(et.x);
+              hy.push_back(et.y);
             }
+          }
+          // AoE falloff: a cone that catches a crowd deals less to each target.
+          const float coneMul = aoeFalloff(static_cast<int>(hits.size()));
+          for (std::size_t hi = 0; hi < hits.size(); ++hi) {
+            applyEnemyDamage(hits[hi], damage * coneMul);
+            spawnParticles(hx[hi], hy[hi], {1.0F, 0.5F, 0.1F, 1.0F}, 4, 3.0F);
           }
           // Visible flame fan along the aim direction so the cone reads on
           // screen (reuses the fading-wedge renderer).
@@ -797,13 +919,26 @@ void Game::fireWeapons() {
         const float sx = targetX;
         const float sy = targetY;
         auto view = registry_.view<Transform, Health, Radius, Enemy>();
+        std::vector<entt::entity> hits;
+        std::vector<float> hx;
+        std::vector<float> hy;
         for (const auto e : view) {
           const auto& et = view.get<Transform>(e);
           const float dx = et.x - sx;
           const float dy = et.y - sy;
           const float dist2 = dx * dx + dy * dy;
           if (dist2 > sweepRadius * sweepRadius) continue;
-          applyEnemyDamage(e, damage);
+          hits.push_back(e);
+          hx.push_back(et.x);
+          hy.push_back(et.y);
+        }
+        const float sweepMul = aoeFalloff(static_cast<int>(hits.size()));
+        for (std::size_t hi = 0; hi < hits.size(); ++hi) {
+          const entt::entity e = hits[hi];
+          const float dx = hx[hi] - sx;
+          const float dy = hy[hi] - sy;
+          const float dist2 = dx * dx + dy * dy;
+          applyEnemyDamage(e, damage * sweepMul);
           // "Reaper's Harvest" unique: scythe kills restore HP.
           if (w.uniqueHeal > 0.0F) {
             auto* eh = registry_.try_get<Health>(e);
@@ -812,15 +947,11 @@ void Game::fireWeapons() {
               php.hp = std::min(php.max, php.hp + w.uniqueHeal);
             }
           }
-          // Knockback away from the reap center.
-          auto* ev = registry_.try_get<Velocity>(e);
-          if (ev) {
-            float pushAngle = std::atan2(dy, dx);
-            if (dist2 < 1e-4F) pushAngle = baseAngle; // dead center: push along aim
-            ev->x += std::cos(pushAngle) * w.sweepKnockback;
-            ev->y += std::sin(pushAngle) * w.sweepKnockback;
-          }
-          spawnParticles(et.x, et.y, {0.7F, 1.0F, 0.8F, 1.0F}, 6, 4.0F);
+          // Knockback away from the reap center (dead center pushes along aim).
+          float pushAngle = std::atan2(dy, dx);
+          if (dist2 < 1e-4F) pushAngle = baseAngle;
+          applyKnockback(e, pushAngle, w.sweepKnockback);
+          spawnParticles(hx[hi], hy[hi], {0.7F, 1.0F, 0.8F, 1.0F}, 6, 4.0F);
         }
         // Visual: a full 360° fading ring around the target.
         const auto se = registry_.create();
@@ -931,21 +1062,30 @@ void Game::fireWeapons() {
         const float ix = targetX;
         const float iy = targetY;
         auto iview = registry_.view<Transform, Health, Radius, Enemy>();
+        std::vector<entt::entity> ihits;
+        std::vector<float> ihx;
+        std::vector<float> ihy;
         for (const auto e : iview) {
           const auto& et = iview.get<Transform>(e);
           const float dx = et.x - ix;
           const float dy = et.y - iy;
           const float dist2 = dx * dx + dy * dy;
           if (dist2 > sweepRadius * sweepRadius) continue;
-          applyEnemyDamage(e, damage);
-          auto* ev = registry_.try_get<Velocity>(e);
-          if (ev) {
-            float pushAngle = std::atan2(dy, dx);
-            if (dist2 < 1e-4F) pushAngle = baseAngle; // dead center: push along aim
-            ev->x += std::cos(pushAngle) * w.sweepKnockback;
-            ev->y += std::sin(pushAngle) * w.sweepKnockback;
-          }
-          spawnParticles(et.x, et.y, {1.0F, 0.5F, 0.1F, 1.0F}, 6, 4.0F);
+          ihits.push_back(e);
+          ihx.push_back(et.x);
+          ihy.push_back(et.y);
+        }
+        const float infernoMul = aoeFalloff(static_cast<int>(ihits.size()));
+        for (std::size_t hi = 0; hi < ihits.size(); ++hi) {
+          const entt::entity e = ihits[hi];
+          const float dx = ihx[hi] - ix;
+          const float dy = ihy[hi] - iy;
+          const float dist2 = dx * dx + dy * dy;
+          applyEnemyDamage(e, damage * infernoMul);
+          float pushAngle = std::atan2(dy, dx);
+          if (dist2 < 1e-4F) pushAngle = baseAngle; // dead center: push along aim
+          applyKnockback(e, pushAngle, w.sweepKnockback);
+          spawnParticles(ihx[hi], ihy[hi], {1.0F, 0.5F, 0.1F, 1.0F}, 6, 4.0F);
         }
         // Visible full-circle ring of fire around the target.
         const auto se = registry_.create();
@@ -1031,6 +1171,11 @@ void Game::applyEnemyDamage(entt::entity e, float dmg) {
   auto* eh = registry_.try_get<Health>(e);
   if (eh == nullptr || eh->hp <= 0.0F) return;
   auto* tr = registry_.try_get<EnemyTraits>(e);
+  // Enemy defense runs through the SAME flat+percent curve as the player's
+  // (mitigateDamage), and grows over the run so late enemies tank more.
+  if (tr != nullptr && tr->defense > 0.0F) {
+    dmg = mitigateDamage(dmg, tr->defense);
+  }
   if (tr != nullptr && tr->shield > 0.0F) {
     const float absorbed = std::min(tr->shield, dmg);
     tr->shield -= absorbed;
@@ -1048,14 +1193,23 @@ void Game::killEnemy(entt::entity e) {
   if (!registry_.valid(e)) return;
   const auto& t = registry_.get<Transform>(e);
 
-  // Death: XP orb + counter; actual destroy deferred.
+  // Death: XP orb + counter; actual destroy deferred. The orb's colour (and
+  // size) telegraphs its value: green -> cyan -> violet -> gold.
   const float xpValue = registry_.all_of<Xp>(e) ? registry_.get<Xp>(e).value : 1.0F;
   const auto orb = registry_.create();
   registry_.emplace<Transform>(orb, t.x, t.y, t.x, t.y);
   registry_.emplace<Velocity>(orb);
-  registry_.emplace<Radius>(orb, 0.16F);
+  registry_.emplace<Radius>(orb, 0.14F + std::min(0.12F, xpValue * 0.006F));
   Sprite s{};
-  s.color = {0.4F, 1.0F, 0.5F, 1.0F};
+  if (xpValue < 3.0F) {
+    s.color = {0.40F, 1.00F, 0.50F, 1.0F}; // green: common
+  } else if (xpValue < 8.0F) {
+    s.color = {0.40F, 0.80F, 1.00F, 1.0F}; // cyan: uncommon
+  } else if (xpValue < 15.0F) {
+    s.color = {0.75F, 0.50F, 1.00F, 1.0F}; // violet: rare
+  } else {
+    s.color = {1.00F, 0.85F, 0.30F, 1.0F}; // gold: elite/champion
+  }
   s.circle = true;
   registry_.emplace<Sprite>(orb, s);
   registry_.emplace<Xp>(orb, xpValue);
@@ -1126,13 +1280,19 @@ void Game::chainBolt(float x, float y, float dmg) {
 // Chance-based lifesteal: a damaging hit with lifesteal L has L% chance to
 // heal 1 HP. L >= 100 guarantees the first point and rolls the excess
 // (L - 100)% for a second point. The Vampiric Heart unique heals 2 per proc.
-void Game::tryLifesteal() {
+// The damaged enemy's lifesteal resistance scales the chance down (50% res
+// halves it), so late/elite enemies are much harder to drain.
+void Game::tryLifesteal(entt::entity source) {
   if (stats_.lifesteal <= 0.0F) return;
   if (player_ == entt::null || !registry_.valid(player_)) return;
   auto& hp = registry_.get<Health>(player_);
   if (hp.hp >= hp.max) return;
+  float res = 0.0F;
+  if (auto* tr = registry_.try_get<EnemyTraits>(source)) {
+    res = tr->lifestealRes;
+  }
   std::uniform_real_distribution<float> unit(0.0F, 100.0F);
-  const float L = stats_.lifesteal;
+  const float L = stats_.lifesteal * (1.0F - std::clamp(res, 0.0F, 1.0F));
   const float heal = stats_.lifestealHeal >= 2 ? 2.0F : 1.0F;
   int procs = 0;
   if (L >= 100.0F) {
@@ -1144,6 +1304,19 @@ void Game::tryLifesteal() {
   if (procs > 0) {
     hp.hp = std::min(hp.max, hp.hp + heal * static_cast<float>(procs));
   }
+}
+
+// Applies knockback to an enemy, reduced by its knockback resistance.
+void Game::applyKnockback(entt::entity e, float angle, float force) {
+  auto* ev = registry_.try_get<Velocity>(e);
+  if (ev == nullptr) return;
+  float res = 0.0F;
+  if (auto* tr = registry_.try_get<EnemyTraits>(e)) {
+    res = tr->knockbackRes;
+  }
+  const float f = force * (1.0F - std::clamp(res, 0.0F, 1.0F));
+  ev->x += std::cos(angle) * f;
+  ev->y += std::sin(angle) * f;
 }
 
 void Game::updateProjectiles() {
@@ -1208,30 +1381,30 @@ void Game::updateProjectiles() {
       const float hpBefore = eh->hp;
       applyEnemyDamage(enemy, pr.damage);
       const float dealt = hpBefore - eh->hp;
-      if (dealt > 0.0F) tryLifesteal();
+      if (dealt > 0.0F) tryLifesteal(enemy);
 
       // Knockback on hit.
       if (pr.strength > 0.0F && player_ != entt::null) {
         const auto& ptx = registry_.get<Transform>(player_);
         const float pushAngle = std::atan2(et.y - ptx.y, et.x - ptx.x);
-        auto* ev = registry_.try_get<Velocity>(enemy);
-        if (ev) {
-          ev->x += std::cos(pushAngle) * pr.strength / 60.0F;
-          ev->y += std::sin(pushAngle) * pr.strength / 60.0F;
-        }
+        applyKnockback(enemy, pushAngle, pr.strength / 60.0F);
       }
 
-      // Area splash.
+      // Area splash (with crowd falloff).
       if (pr.area > 0.0F) {
+        std::vector<entt::entity> splash;
         auto splashView = registry_.view<Transform, Health, Radius>();
         for (const auto se : splashView) {
           const auto& st = splashView.get<Transform>(se);
-          const auto& sr = splashView.get<Radius>(se); (void)sr;
           const float sdx = st.x - et.x;
           const float sdy = st.y - et.y;
           if (sdx * sdx + sdy * sdy < pr.area * pr.area) {
-            applyEnemyDamage(se, pr.damage * 0.5F);
+            splash.push_back(se);
           }
+        }
+        const float splashMul = aoeFalloff(static_cast<int>(splash.size()));
+        for (const auto se : splash) {
+          applyEnemyDamage(se, pr.damage * 0.5F * splashMul);
         }
         spawnParticles(et.x, et.y, {1.0F, 0.5F, 0.1F, 1.0F}, 16, 5.0F);
       }
@@ -1312,7 +1485,7 @@ void Game::updateOrbitBlades() {
       const float hpBefore = eh->hp;
       applyEnemyDamage(en, damage);
       const float dealt = hpBefore - eh->hp;
-      if (dealt > 0.0F) tryLifesteal();
+      if (dealt > 0.0F) tryLifesteal(en);
       spawnParticles(et.x, et.y, {0.85F, 0.9F, 1.0F, 1.0F}, 2, 2.0F);
     }
   }
@@ -1381,25 +1554,30 @@ void Game::updateBombProjectiles() {
 }
 
 void Game::explodeBomb(entt::entity, const BombProjectile& bp, float x, float y) {
-  // Explosion damage in radius
+  // Explosion damage in radius, with crowd falloff.
   auto view = registry_.view<Transform, Health, Radius, Enemy>();
+  std::vector<entt::entity> hits;
+  std::vector<float> hx;
+  std::vector<float> hy;
   for (const auto e : view) {
     const auto& t = view.get<Transform>(e);
     const float dx = t.x - x;
     const float dy = t.y - y;
     if (dx * dx + dy * dy < bp.explodeRadius * bp.explodeRadius) {
-      applyEnemyDamage(e, bp.damage);
-      // Knockback
-      if (bp.knockback > 0.0F) {
-        auto* ev = registry_.try_get<Velocity>(e);
-        if (ev) {
-          const float angle = std::atan2(t.y - y, t.x - x);
-          ev->x += std::cos(angle) * bp.knockback;
-          ev->y += std::sin(angle) * bp.knockback;
-        }
-      }
-      spawnParticles(t.x, t.y, {1.0F, 0.5F, 0.1F, 1.0F}, 4, 3.0F);
+      hits.push_back(e);
+      hx.push_back(t.x);
+      hy.push_back(t.y);
     }
+  }
+  const float blastMul = aoeFalloff(static_cast<int>(hits.size()));
+  for (std::size_t hi = 0; hi < hits.size(); ++hi) {
+    applyEnemyDamage(hits[hi], bp.damage * blastMul);
+    // Knockback (reduced by the enemy's knockback resistance).
+    if (bp.knockback > 0.0F) {
+      const float angle = std::atan2(hy[hi] - y, hx[hi] - x);
+      applyKnockback(hits[hi], angle, bp.knockback);
+    }
+    spawnParticles(hx[hi], hy[hi], {1.0F, 0.5F, 0.1F, 1.0F}, 4, 3.0F);
   }
   // Big explosion particles
   spawnParticles(x, y, {1.0F, 0.5F, 0.1F, 1.0F}, 20, 6.0F);
@@ -1447,14 +1625,19 @@ void Game::updateBoomerangProjectiles() {
       if (dist < 0.5F) {
         // "Return Tempest" unique: detonate a burst at the return point.
         if (bp.blastRadius > 0.0F) {
+          std::vector<entt::entity> blast;
           auto blastView = registry_.view<Transform, Health, Radius, Enemy>();
           for (const auto be : blastView) {
             const auto& bt = blastView.get<Transform>(be);
             const float bdx = bt.x - t.x;
             const float bdy = bt.y - t.y;
             if (bdx * bdx + bdy * bdy < bp.blastRadius * bp.blastRadius) {
-              applyEnemyDamage(be, bp.damage * 2.0F);
+              blast.push_back(be);
             }
+          }
+          const float blastMul = aoeFalloff(static_cast<int>(blast.size()));
+          for (const auto be : blast) {
+            applyEnemyDamage(be, bp.damage * 2.0F * blastMul);
           }
           spawnParticles(t.x, t.y, {0.6F, 0.9F, 1.0F, 1.0F}, 16, 5.0F);
         }
@@ -1478,6 +1661,8 @@ void Game::updateBoomerangProjectiles() {
         const float segy = t.y - t.py;
         const float segLen2 = segx * segx + segy * segy;
         auto trailView = registry_.view<Transform, Health, Radius, Enemy>();
+        std::vector<entt::entity> thits;
+        std::vector<float> thp;
         for (const auto te : trailView) {
           const auto& tt = trailView.get<Transform>(te);
           const auto& tr = trailView.get<Radius>(te);
@@ -1502,10 +1687,15 @@ void Game::updateBoomerangProjectiles() {
           if (d2 > hitR * hitR) continue;
           auto* teh = registry_.try_get<Health>(te);
           if (teh == nullptr || teh->hp <= 0.0F) continue;
-          const float hpBefore = teh->hp;
-          applyEnemyDamage(te, bp.trailDamage);
-          const float dealt = hpBefore - teh->hp;
-          if (dealt > 0.0F) tryLifesteal();
+          thits.push_back(te);
+          thp.push_back(teh->hp);
+        }
+        const float trailMul = aoeFalloff(static_cast<int>(thits.size()));
+        for (std::size_t ti = 0; ti < thits.size(); ++ti) {
+          auto* teh = registry_.try_get<Health>(thits[ti]);
+          if (teh == nullptr) continue;
+          applyEnemyDamage(thits[ti], bp.trailDamage * trailMul);
+          if (thp[ti] - teh->hp > 0.0F) tryLifesteal(thits[ti]);
         }
         spawnParticles(t.x, t.y, {0.55F, 1.0F, 1.0F, 0.6F}, 3, 2.0F);
       }
@@ -1529,7 +1719,7 @@ void Game::updateBoomerangProjectiles() {
       const float hpBefore = eh->hp;
       applyEnemyDamage(enemy, bp.damage);
       const float dealt = hpBefore - eh->hp;
-      if (dealt > 0.0F) tryLifesteal();
+      if (dealt > 0.0F) tryLifesteal(enemy);
 
       spawnParticles(et.x, et.y, {0.6F, 0.9F, 1.0F, 1.0F}, 3, 3.0F);
       --bp.pierce;
@@ -1625,10 +1815,11 @@ void Game::updateBounceProjectiles() {
       const float hpBefore = eh->hp;
       applyEnemyDamage(enemy, scaledDamage);
       const float dealt = hpBefore - eh->hp;
-      if (dealt > 0.0F) tryLifesteal();
+      if (dealt > 0.0F) tryLifesteal(enemy);
 
-      // "Echo Detonation" unique: every bounce splashes area damage.
+      // "Echo Detonation" unique: every bounce splashes area damage (falloff).
       if (bp.splashRadius > 0.0F) {
+        std::vector<entt::entity> splash;
         auto splashView = registry_.view<Transform, Health, Radius, Enemy>();
         for (const auto se : splashView) {
           if (se == enemy) continue;
@@ -1636,8 +1827,12 @@ void Game::updateBounceProjectiles() {
           const float sdx = st.x - et.x;
           const float sdy = st.y - et.y;
           if (sdx * sdx + sdy * sdy < bp.splashRadius * bp.splashRadius) {
-            applyEnemyDamage(se, scaledDamage * 0.5F);
+            splash.push_back(se);
           }
+        }
+        const float echoMul = aoeFalloff(static_cast<int>(splash.size()));
+        for (const auto se : splash) {
+          applyEnemyDamage(se, scaledDamage * 0.5F * echoMul);
         }
         spawnParticles(et.x, et.y, {0.75F, 0.45F, 1.0F, 1.0F}, 10, 4.0F);
       }
@@ -1706,8 +1901,11 @@ void Game::updateBeamEffects() {
     const float len = std::sqrt(dx * dx + dy * dy);
     if (len < 0.001F) continue;
 
-    // Damage enemies along the beam line
+    // Damage enemies along the beam line (falloff when it catches a row).
     auto enemyView = registry_.view<Transform, Health, Radius, Enemy>();
+    std::vector<entt::entity> bline;
+    std::vector<float> bhx;
+    std::vector<float> bhy;
     for (const auto en : enemyView) {
       const auto& et = enemyView.get<Transform>(en);
       const auto& er = enemyView.get<Radius>(en);
@@ -1725,12 +1923,20 @@ void Game::updateBeamEffects() {
 
       auto* eh = registry_.try_get<Health>(en);
       if (eh == nullptr || eh->hp <= 0.0F) continue;
-
+      bline.push_back(en);
+      bhx.push_back(et.x);
+      bhy.push_back(et.y);
+    }
+    const float beamMul = aoeFalloff(static_cast<int>(bline.size()));
+    for (std::size_t bi = 0; bi < bline.size(); ++bi) {
+      const entt::entity en = bline[bi];
+      auto* eh = registry_.try_get<Health>(en);
+      if (eh == nullptr) continue;
       const float hpBefore = eh->hp;
-      applyEnemyDamage(en, be.damage * stats_.damageMul / 60.0F); // per-tick damage with scaling
+      applyEnemyDamage(en, be.damage * stats_.damageMul / 60.0F * beamMul);
       const float dealt = hpBefore - eh->hp;
-      if (dealt > 0.0F) tryLifesteal();
-      spawnParticles(et.x, et.y, {1.0F, 1.0F, 0.75F, 1.0F}, 2, 2.0F);
+      if (dealt > 0.0F) tryLifesteal(en);
+      spawnParticles(bhx[bi], bhy[bi], {1.0F, 1.0F, 0.75F, 1.0F}, 2, 2.0F);
     }
   }
 }
@@ -1768,8 +1974,11 @@ void Game::updateZoneEffects() {
 
     if (ze.tickTimer >= ze.tickRate) {
       ze.tickTimer = 0.0F;
-      // Damage enemies in zone
+      // Damage enemies in zone (falloff when many are caught at once).
       auto enemyView = registry_.view<Transform, Health, Radius, Enemy>();
+      std::vector<entt::entity> zhits;
+      std::vector<float> zhx;
+      std::vector<float> zhy;
       for (const auto en : enemyView) {
         const auto& et = enemyView.get<Transform>(en);
         const auto& er = enemyView.get<Radius>(en);
@@ -1778,14 +1987,20 @@ void Game::updateZoneEffects() {
         if (dx * dx + dy * dy < (ze.radius + er.r) * (ze.radius + er.r)) {
           auto* eh = registry_.try_get<Health>(en);
           if (eh == nullptr || eh->hp <= 0.0F) continue;
-
-          const float dmg = ze.dps * ze.tickRate * stats_.damageMul;
-          const float hpBefore = eh->hp;
-          applyEnemyDamage(en, dmg);
-          const float dealt = hpBefore - eh->hp;
-          if (dealt > 0.0F) tryLifesteal();
-          spawnParticles(et.x, et.y, {1.0F, 0.4F, 0.15F, 1.0F}, 2, 2.0F);
+          zhits.push_back(en);
+          zhx.push_back(et.x);
+          zhy.push_back(et.y);
         }
+      }
+      const float zoneMul = aoeFalloff(static_cast<int>(zhits.size()));
+      const float dmg = ze.dps * ze.tickRate * stats_.damageMul;
+      for (std::size_t zi = 0; zi < zhits.size(); ++zi) {
+        auto* eh = registry_.try_get<Health>(zhits[zi]);
+        if (eh == nullptr) continue;
+        const float hpBefore = eh->hp;
+        applyEnemyDamage(zhits[zi], dmg * zoneMul);
+        if (hpBefore - eh->hp > 0.0F) tryLifesteal(zhits[zi]);
+        spawnParticles(zhx[zi], zhy[zi], {1.0F, 0.4F, 0.15F, 1.0F}, 2, 2.0F);
       }
     }
   }
@@ -1836,7 +2051,7 @@ void Game::updateChainLightning() {
       const float hpBefore = eh->hp;
       applyEnemyDamage(nextTarget, damage);
       const float dealt = hpBefore - eh->hp;
-      if (dealt > 0.0F) tryLifesteal();
+      if (dealt > 0.0F) tryLifesteal(nextTarget);
 
       const auto& targetT = registry_.get<Transform>(nextTarget);
       spawnParticles(targetT.x, targetT.y, {0.55F, 1.0F, 1.0F, 1.0F}, 8, 4.0F);
@@ -1878,8 +2093,11 @@ void Game::updateNovaRing() {
 
     if (nr.tickTimer >= nr.tickRate) {
       nr.tickTimer = 0.0F;
-      // Damage enemies in current ring
+      // Damage enemies in the current ring (falloff for a full ring).
       auto enemyView = registry_.view<Transform, Health, Radius, Enemy>();
+      std::vector<entt::entity> nhits;
+      std::vector<float> nhx;
+      std::vector<float> nhy;
       for (const auto en : enemyView) {
         const auto& et = enemyView.get<Transform>(en);
         const auto& er = enemyView.get<Radius>(en);
@@ -1890,13 +2108,19 @@ void Game::updateNovaRing() {
         if (std::abs(dist - nr.radius) < er.r + 0.3F) {
           auto* eh = registry_.try_get<Health>(en);
           if (eh == nullptr || eh->hp <= 0.0F) continue;
-
-          const float hpBefore = eh->hp;
-          applyEnemyDamage(en, nr.damagePerTick * stats_.damageMul);
-          const float dealt = hpBefore - eh->hp;
-          if (dealt > 0.0F) tryLifesteal();
-          spawnParticles(et.x, et.y, {0.5F, 0.3F, 1.0F, 1.0F}, 4, 3.0F);
+          nhits.push_back(en);
+          nhx.push_back(et.x);
+          nhy.push_back(et.y);
         }
+      }
+      const float novaMul = aoeFalloff(static_cast<int>(nhits.size()));
+      for (std::size_t ni = 0; ni < nhits.size(); ++ni) {
+        auto* eh = registry_.try_get<Health>(nhits[ni]);
+        if (eh == nullptr) continue;
+        const float hpBefore = eh->hp;
+        applyEnemyDamage(nhits[ni], nr.damagePerTick * stats_.damageMul * novaMul);
+        if (hpBefore - eh->hp > 0.0F) tryLifesteal(nhits[ni]);
+        spawnParticles(nhx[ni], nhy[ni], {0.5F, 0.3F, 1.0F, 1.0F}, 4, 3.0F);
       }
     }
   }
@@ -1995,11 +2219,26 @@ void Game::spawnWave() {
 
   std::uniform_real_distribution<float> unit(0.0F, 1.0F);
 
-  // Difficulty scalars used by both the regular spawn and horde bursts:
-  // HP scales steeper so later waves threaten the leveled arsenal, move speed
-  // drifts up so enemies keep pace with a leveled player.
-  const float hpScale = 1.0F + simTime_ / 70.0F;
-  const float speedScale = std::min(1.35F, 1.0F + simTime_ / 600.0F);
+  // Difficulty scalars used by both the regular spawn and horde bursts.
+  // Growth is piecewise: after the 6-minute mark enemies develop even faster
+  // (steeper HP and speed ramps), so the late game keeps escalating.
+  float hpScale;
+  float speedScale;
+  if (simTime_ <= 360.0F) {
+    hpScale = 1.0F + simTime_ / 70.0F;
+    speedScale = 1.0F + simTime_ / 600.0F;
+  } else {
+    hpScale = 1.0F + 360.0F / 70.0F + (simTime_ - 360.0F) / 45.0F;
+    speedScale = 1.0F + 360.0F / 600.0F + (simTime_ - 360.0F) / 300.0F;
+  }
+  hpScale = std::min(hpScale, 30.0F);
+  speedScale = std::min(speedScale, 2.4F);
+  // Contact damage also creeps up so late enemies hit harder.
+  const float touchScale = 1.0F + simTime_ / 1500.0F;
+
+  // Spawns walk in from farther away each minute, capping at 2x the base
+  // distance by 10:00; after that the distance no longer changes.
+  const float spawnDist = kSpawnDist * std::min(2.0F, 1.0F + simTime_ / 600.0F);
 
   // Weighted pick among unlocked enemy types (regular spawn + horde bursts).
   auto pickDef = [&]() -> int {
@@ -2036,12 +2275,12 @@ void Game::spawnWave() {
               (static_cast<float>(m) / static_cast<float>(hordeSize)) * 2.0F * kPi +
               (unit(rng_) - 0.5F) * 0.4F;
           PendingSpawn pending{};
-          pending.x = hpt.x + std::cos(angle) * kSpawnDist;
-          pending.y = hpt.y + std::sin(angle) * kSpawnDist;
+          pending.x = hpt.x + std::cos(angle) * spawnDist;
+          pending.y = hpt.y + std::sin(angle) * spawnDist;
           pending.t = kSpawnTelegraph;
           pending.def = hordeDef;
           pending.hpMul = std::max(1.0F, hpScale);
-          pending.touchMul = 1.0F;
+          pending.touchMul = touchScale;
           pending.speedMul = speedScale;
           pending.xpMul = 1.0F;
           pending.traits = TraitNone;
@@ -2088,31 +2327,41 @@ void Game::spawnWave() {
     const float angle = centerAngle
         + (packSize > 1 ? (static_cast<float>(member) - static_cast<float>(packSize - 1) * 0.5F) * 0.35F : 0.0F)
         + (member > 0 ? (unit(rng_) - 0.5F) * 0.5F : 0.0F);
-    const float x = pt.x + std::cos(angle) * kSpawnDist;
-    const float y = pt.y + std::sin(angle) * kSpawnDist;
+    const float x = pt.x + std::cos(angle) * spawnDist;
+    const float y = pt.y + std::sin(angle) * spawnDist;
 
-    // Per-member elite/champion rolls (each enemy rolls independently).
-    // Elites from 45s, champions from 120s; chances creep up with time.
+    // Per-member elite/champion/overlord rolls (each enemy rolls
+    // independently). Elites from 45s, champions from 120s, overlords from
+    // 300s; chances creep up with time.
     const float eliteChance = std::min(0.15F, 0.05F + simTime_ * 0.0005F);
     const float champChance = std::min(0.05F, 0.015F + simTime_ * 0.00025F);
+    const float overlordChance =
+        simTime_ >= 300.0F ? std::min(0.02F, 0.008F + (simTime_ - 300.0F) * 0.00008F) : 0.0F;
     bool memberElite = simTime_ >= 45.0F && unit(rng_) < eliteChance;
     bool memberChampion = simTime_ >= 120.0F && unit(rng_) < champChance;
+    const bool memberOverlord = simTime_ >= 300.0F && unit(rng_) < overlordChance;
     if (memberChampion) memberElite = true;
+    if (memberOverlord) {
+      memberElite = true;
+      memberChampion = true;
+    }
 
     float mHpMul = hpScale;
-    float mTouchMul = 1.0F;
+    float mTouchMul = touchScale;
     float mSpeedMul = speedScale;
     float mXpMul = 1.0F;
     std::uint32_t mTraits = TraitNone;
     std::uint8_t mTier = 0;
     if (memberElite) {
-      mTier = memberChampion ? 2 : 1;
-      mHpMul *= memberChampion ? kChampionHpMul : kEliteHpMul;
-      mTouchMul = memberChampion ? 2.5F : 1.5F;
-      mXpMul = memberChampion ? 5.0F : 3.0F;
-      if (memberChampion) mSpeedMul *= 1.3F; // champions press the player hard
-      const int traitCount =
-          std::min(4, 1 + static_cast<int>(simTime_ / 90.0F)) + (memberChampion ? 1 : 0);
+      mTier = memberOverlord ? 3 : (memberChampion ? 2 : 1);
+      // Every elite-and-above gets ALL of its stats boosted so it cannot be
+      // deleted instantly; stronger tiers are boosted more.
+      const TierBuffs buffs = tierBuffs(mTier);
+      mHpMul *= buffs.hp;
+      mTouchMul *= buffs.touch;
+      mSpeedMul *= buffs.speed;
+      mXpMul = buffs.xp;
+      const int traitCount = traitsForTier(mTier, simTime_);
       std::array<bool, PickCount> used{};
       for (int k = 0; k < traitCount; ++k) {
         int pick = static_cast<int>(unit(rng_) * static_cast<float>(PickCount));
@@ -2129,6 +2378,10 @@ void Game::spawnWave() {
           case PickVenomous: mTraits |= TraitVenomous; break;
           case PickVampiric: mTraits |= TraitVampiric; break;
           case PickShielded: mTraits |= TraitShielded; break;
+          case PickHeavy: mTouchMul *= 2.0F; break;
+          case PickArcher: mTraits |= TraitArcher; break;
+          case PickAura: mTraits |= TraitAura; break;
+          case PickResistant: mTraits |= TraitResistant; break;
           default: break;
         }
       }
@@ -2165,9 +2418,9 @@ void Game::spawnEnemy(const PendingSpawn& p) {
   const auto& def = content_.enemies[static_cast<std::size_t>(p.def)];
   const bool elite = p.tier > 0;
   const float hp = def.hp * p.hpMul;
-  // Champions are noticeably larger than elites (tier 2 vs tier 1).
-  const float radius = def.radius *
-                       (p.tier >= 2 ? 1.6F : (p.tier == 1 ? 1.35F : 1.0F));
+  // Champions are noticeably larger than elites; overlords larger still.
+  const float radius =
+      def.radius * (p.tier >= 3 ? 2.0F : (p.tier == 2 ? 1.6F : (p.tier == 1 ? 1.35F : 1.0F)));
 
   const auto e = registry_.create();
   registry_.emplace<Transform>(e, p.x, p.y, p.x, p.y);
@@ -2180,14 +2433,28 @@ void Game::spawnEnemy(const PendingSpawn& p) {
   registry_.emplace<Health>(e, hp, hp);
   registry_.emplace<Enemy>(e, def.speed * p.speedMul, def.touch * p.touchMul);
   registry_.emplace<Xp>(e, def.xp * p.xpMul);
-  if (elite) {
-    EnemyTraits tr{};
-    tr.flags = p.traits;
-    tr.tier = p.tier;
-    if (p.traits & TraitRegenerating) tr.regen = hp * 0.02F;
-    if (p.traits & TraitShielded) tr.shield = hp * 0.5F;
-    registry_.emplace<EnemyTraits>(e, tr);
+
+  // Every enemy carries traits so defense/resistances can scale with run time,
+  // even for normal (tier 0) enemies.
+  EnemyTraits tr{};
+  tr.flags = p.traits;
+  tr.tier = p.tier;
+  tr.defense = enemyDefense(simTime_, p.tier);
+  const bool resistant = (p.traits & TraitResistant) != 0;
+  if (resistant) tr.defense += 40.0F; // a strong-resistance variant
+  tr.lifestealRes = enemyLifestealResistance(simTime_, p.tier, resistant);
+  tr.knockbackRes = enemyKnockbackResistance(simTime_, p.tier, resistant);
+  if (p.traits & TraitRegenerating) tr.regen = hp * 0.02F;
+  if (p.traits & TraitShielded) tr.shield = hp * 0.5F;
+  if (p.traits & TraitArcher) {
+    tr.shootCooldown = std::max(0.9F, 2.4F - simTime_ / 500.0F);
+    tr.shootTimer = 0.4F;
   }
+  if (p.traits & TraitAura) {
+    tr.auraRadius = 1.6F + (p.tier >= 2 ? 0.4F : 0.0F);
+    tr.auraDps = 5.0F + simTime_ / 45.0F + (p.tier >= 2 ? 6.0F : 0.0F);
+  }
+  registry_.emplace<EnemyTraits>(e, tr);
 }
 
 void Game::enterLevelUp() {
@@ -2227,14 +2494,20 @@ void Game::buildChoices() {
 
   const int baseChoices = 3 + stats_.extraChoice;
 
-  // One of the cards can be a NEW WEAPON (rarer the more weapons you have).
+  // Weapon offers are rarer now, but arrive as a CHOICE OF SEVERAL (2 up to
+  // the number of free slots) instead of a single card.
   if (weaponCount_ < kMaxWeapons) {
     const float grantChance =
-        (1.0F - static_cast<float>(weaponCount_) / static_cast<float>(kMaxWeapons)) * 0.5F;
+        (1.0F - static_cast<float>(weaponCount_) / static_cast<float>(kMaxWeapons)) * 0.32F;
     if (unit(rng_) < grantChance) {
-      const int w = pickWeaponGrant();
-      if (w >= 0) {
-        choices_.push_back({Choice::Kind::Weapon, w});
+      std::vector<int> grants = collectWeaponGrants();
+      if (!grants.empty()) {
+        int offerN = 2 + (unit(rng_) < 0.5F ? 1 : 0);
+        offerN = std::min(offerN, kMaxWeapons - weaponCount_);
+        offerN = std::min<int>(offerN, static_cast<int>(grants.size()));
+        for (int k = 0; k < offerN; ++k) {
+          choices_.push_back({Choice::Kind::Weapon, grants[static_cast<std::size_t>(k)]});
+        }
       }
     }
   }
@@ -2580,7 +2853,7 @@ bool Game::ownsWeapon(int defIndex) const {
   return false;
 }
 
-int Game::pickWeaponGrant() {
+std::vector<int> Game::collectWeaponGrants() {
   std::vector<int> evolutions;
   std::vector<int> normals;
   for (std::size_t i = 0; i < content_.weapons.size(); ++i) {
@@ -2599,15 +2872,14 @@ int Game::pickWeaponGrant() {
       normals.push_back(static_cast<int>(i));
     }
   }
-  if (!evolutions.empty()) {
-    std::shuffle(evolutions.begin(), evolutions.end(), rng_);
-    return evolutions.front();
-  }
-  if (!normals.empty()) {
-    std::shuffle(normals.begin(), normals.end(), rng_);
-    return normals.front();
-  }
-  return -1;
+  std::shuffle(evolutions.begin(), evolutions.end(), rng_);
+  std::shuffle(normals.begin(), normals.end(), rng_);
+  std::vector<int> out;
+  out.reserve(evolutions.size() + normals.size());
+  // Evolutions are the marquee offer, so they always lead the list.
+  for (const int idx : evolutions) out.push_back(idx);
+  for (const int idx : normals) out.push_back(idx);
+  return out;
 }
 
 void Game::hurtPlayer(float amount) {
@@ -2650,6 +2922,58 @@ void Game::hurtPlayer(float amount) {
     if (php.hp <= 0.0F) {
       php.hp = 0.0F;
       state_ = RunState::GameOver;
+    }
+  }
+}
+
+// Same mitigation/shield path as hurtPlayer, but without the thorns proc.
+// Used by continuous damage auras so they don't fire thorns every frame.
+void Game::damagePlayerDirect(float amount) {
+  if (player_ == entt::null || !registry_.valid(player_)) return;
+  auto& php = registry_.get<Health>(player_);
+  if (php.hp <= 0.0F) return;
+  float dmg = mitigateDamage(amount, stats_.defense);
+  if (shield_ > 0.0F) {
+    const float absorbed = std::min(shield_, dmg);
+    shield_ -= absorbed;
+    dmg -= absorbed;
+    shieldDelay_ = kShieldRegenDelay;
+  }
+  if (dmg > 0.0F) {
+    php.hp -= dmg;
+    if (php.hp <= 0.0F) {
+      php.hp = 0.0F;
+      state_ = RunState::GameOver;
+    }
+  }
+}
+
+void Game::updateEnemyShots() {
+  if (player_ == entt::null || !registry_.valid(player_)) return;
+  const auto& pt = registry_.get<Transform>(player_);
+  const auto& pr = registry_.get<Radius>(player_);
+  auto view = registry_.view<Transform, Velocity, EnemyShot, Radius>();
+  for (const auto e : view) {
+    auto& t = view.get<Transform>(e);
+    auto& v = view.get<Velocity>(e);
+    auto& es = view.get<EnemyShot>(e);
+    const auto& r = view.get<Radius>(e);
+    t.px = t.x;
+    t.py = t.y;
+    es.life -= 1.0F / 60.0F;
+    if (es.life <= 0.0F) {
+      destroyQueue_.push_back(e);
+      continue;
+    }
+    t.x += v.x / 60.0F;
+    t.y += v.y / 60.0F;
+    const float dx = pt.x - t.x;
+    const float dy = pt.y - t.y;
+    const float hitR = pr.r + r.r;
+    if (dx * dx + dy * dy < hitR * hitR) {
+      hurtPlayer(es.damage);
+      spawnParticles(t.x, t.y, es.color, 5, 3.0F);
+      destroyQueue_.push_back(e);
     }
   }
 }
@@ -2774,6 +3098,47 @@ void Game::testSpawnEnemyAt(float x, float y) {
   s.circle = true;
   registry_.emplace<Sprite>(e, s);
   registry_.emplace<Xp>(e, 1.0F);
+}
+
+void Game::testSpawnTieredEnemyAt(float x, float y, int tier, std::uint32_t traits) {
+  const int t = std::clamp(tier, 0, 3);
+  const TierBuffs buffs = tierBuffs(t);
+  PendingSpawn p{};
+  p.x = x;
+  p.y = y;
+  p.t = 0.0F;
+  p.def = 0; // first content enemy
+  p.hpMul = buffs.hp;
+  p.touchMul = buffs.touch;
+  p.speedMul = buffs.speed;
+  p.xpMul = buffs.xp;
+  p.traits = traits;
+  p.tier = static_cast<std::uint8_t>(t);
+  spawnEnemy(p);
+}
+
+std::vector<int> Game::testEnemyTiers() const {
+  std::vector<int> out;
+  auto view = registry_.view<Enemy, EnemyTraits>();
+  for (const auto e : view) {
+    out.push_back(static_cast<int>(view.get<EnemyTraits>(e).tier));
+  }
+  return out;
+}
+
+std::vector<int> Game::testEnemyTraitCounts() const {
+  std::vector<int> out;
+  auto view = registry_.view<Enemy, EnemyTraits>();
+  for (const auto e : view) {
+    std::uint32_t f = view.get<EnemyTraits>(e).flags;
+    int c = 0;
+    while (f != 0u) {
+      c += static_cast<int>(f & 1u);
+      f >>= 1u;
+    }
+    out.push_back(c);
+  }
+  return out;
 }
 
 Game::DebugCounts Game::debugCounts() const {
@@ -3127,23 +3492,42 @@ void Game::render(core::render::Batcher& b, float alpha) {
                Color{0.9F, 0.25F, 0.25F, 1.0F});
       }
 
-      // Elite/champion glow aura instead of a text label —
-      // a pulsing ring makes them identifiable at a glance.
+      // Strength is shown by a coloured OUTLINE around the enemy (elite gold,
+      // champion orange, overlord violet) — no glow, no floating text.
       if (tr != nullptr && tr->tier > 0) {
-        const float pulse = 1.0F + 0.20F * std::sin(simTime_ * 6.0F);
-        const float glowR = r.r * 1.6F * pulse;
-        Color glow = tr->tier >= 2 ? Color{1.0F, 0.40F, 0.10F, 0.35F}
-                                    : Color{1.0F, 0.85F, 0.20F, 0.30F};
-        b.circle(x, y, glowR, glow);
-        // Brighter inner ring.
-        b.circle(x, y, r.r * 1.15F * pulse,
-                 tr->tier >= 2 ? Color{1.0F, 0.55F, 0.20F, 0.55F}
-                               : Color{1.0F, 0.95F, 0.40F, 0.50F});
-        labels_.push_back({x, y,
-                           tr->tier >= 2 ? Color{1.0F, 0.55F, 0.35F, 1.0F}
-                                         : Color{1.0F, 0.9F, 0.5F, 1.0F},
-                           tr->tier >= 2 ? "CHAMPION" : "ELITE"});
+        Color ring;
+        if (tr->tier >= 3) {
+          ring = {0.85F, 0.35F, 1.0F, 0.95F};
+        } else if (tr->tier == 2) {
+          ring = {1.0F, 0.45F, 0.10F, 0.95F};
+        } else {
+          ring = {1.0F, 0.85F, 0.20F, 0.95F};
+        }
+        const float rr = r.r * 1.14F;
+        constexpr int kRingDots = 22;
+        for (int k = 0; k < kRingDots; ++k) {
+          const float a = (static_cast<float>(k) / static_cast<float>(kRingDots)) * 2.0F * kPi;
+          b.circle(x + std::cos(a) * rr, y + std::sin(a) * rr, 0.05F, ring);
+        }
       }
+      // Damage aura (TraitAura): faint pulsing disc around the enemy.
+      if (tr != nullptr && tr->auraRadius > 0.0F) {
+        b.circle(x, y, tr->auraRadius, Color{1.0F, 0.25F, 0.25F, 0.10F});
+      }
+    }
+  }
+
+  // Enemy shots (TraitArcher projectiles).
+  {
+    auto view = registry_.view<Transform, Sprite, EnemyShot, Radius>();
+    for (const auto e : view) {
+      const auto& t = view.get<Transform>(e);
+      const auto& s = view.get<Sprite>(e);
+      const auto& r = view.get<Radius>(e);
+      const float x = t.px + (t.x - t.px) * lerp;
+      const float y = t.py + (t.y - t.py) * lerp;
+      b.circle(x, y, r.r * 1.6F, Color{s.color.r, s.color.g, s.color.b, 0.30F});
+      b.circle(x, y, r.r, s.color);
     }
   }
 
@@ -3403,6 +3787,16 @@ void Game::render(core::render::Batcher& b, float alpha) {
     b.rectTopLeft(14.0F, 34.0F, 240.0F * frac, 7.0F, Color{0.35F, 0.65F, 1.0F, 1.0F});
   }
 
+  // Heal indicator (H). Shows READY or the remaining cooldown.
+  {
+    const bool ready = healCd_ <= 0.0F;
+    const std::string label = ready ? "[H] HEAL READY"
+                                    : "[H] HEAL " + std::to_string(static_cast<int>(healCd_ + 0.999F)) + "S";
+    b.text(14.0F, 66.0F, 1.6F, ready ? Color{0.4F, 1.0F, 0.6F, 1.0F}
+                                     : Color{0.55F, 0.6F, 0.6F, 1.0F},
+           label);
+  }
+
   // XP bar (top edge) + level.
   const float xpFrac = xpNext_ > 0.0F ? std::min(1.0F, xp_ / xpNext_) : 0.0F;
   b.rectTopLeft(0.0F, 0.0F, px, 8.0F, Color{0.08F, 0.08F, 0.12F, 1.0F});
@@ -3422,15 +3816,6 @@ void Game::render(core::render::Batcher& b, float alpha) {
     const std::string kills = "KILLS " + std::to_string(kills_);
     b.text(px - b.textWidth(2.0F, kills) - 14.0F, 16.0F, 2.0F, white, kills);
   }
-
-  // Elite / champion name tags.
-  for (const auto& l : labels_) {
-    const float sx = (l.x - camX_) * zoom_ + px * 0.5F;
-    const float sy = py * 0.5F - (l.y - camY_) * zoom_;
-    const float w = b.textWidth(1.6F, l.name);
-    b.text(sx - w * 0.5F, sy - 20.0F, 1.6F, l.c, l.name);
-  }
-  labels_.clear();
 
   // Off-screen spawn warnings: a small dot at the screen edge marks where an
   // enemy is about to show up (the in-world ring only covers on-screen spots).
@@ -3506,12 +3891,16 @@ void Game::render(core::render::Batcher& b, float alpha) {
       }
     }
 
-    // Reroll hint (R is always the reroll key on level-up).
-    if (rerollsUsed_ < 1 + stats_.rerollCharges) {
-      const std::string hint = "[R] REROLL (free once per level)";
-      b.text(px * 0.5F - b.textWidth(2.0F, hint) * 0.5F, py * 0.66F, 2.0F,
-             Color{0.7F, 0.7F, 0.8F, 1.0F}, hint);
-    }
+    // Reroll hint (R is always the reroll key on level-up) showing how many
+    // rerolls are still available this level.
+    const int rerollsLeft = 1 + stats_.rerollCharges - rerollsUsed_;
+    const std::string hint = rerollsLeft > 0
+                                 ? "[R] REROLL x" + std::to_string(rerollsLeft)
+                                 : "[R] REROLL NONE LEFT";
+    b.text(px * 0.5F - b.textWidth(2.0F, hint) * 0.5F, py * 0.66F, 2.0F,
+           rerollsLeft > 0 ? Color{0.7F, 0.7F, 0.8F, 1.0F}
+                           : Color{0.45F, 0.45F, 0.5F, 1.0F},
+           hint);
   }
 
   // Pause overlay: ESC pauses and lets you read your character sheet.

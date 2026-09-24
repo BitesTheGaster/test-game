@@ -26,10 +26,10 @@ the instanced renderer and the bitmap font. Everything roguelike lives in
 | File | Responsibility |
 |------|----------------|
 | `game.hpp` / `game.cpp` | The `Game` class: full simulation, systems order, level-ups, elite rolling, rendering of all entities |
-| `components.hpp` | POD entity components: `Transform`, `Velocity`, `Radius`, `Sprite`, `Health`, `Enemy`, `EnemyTraits`, `Projectile`, `Xp`, `PlayerTag` |
+| `components.hpp` | POD entity components: `Transform`, `Velocity`, `Radius`, `Sprite`, `Health`, `Enemy`, `EnemyTraits`, `EnemyShot`, `Projectile`, `Xp`, `PlayerTag` |
 | `content.hpp` / `content.cpp` | `Content` loader: parses `assets/data/*.toml` into `WeaponDef`, `EnemyDef`, `UpgradeDef` structs |
 | `systems.hpp` / `systems.cpp` | Smaller gameplay systems (projectiles, pickups, particles) |
-| `main.cpp` | SDL3 window, GL context, input mapping (WASD, 1–5, Esc, R), game loop |
+| `main.cpp` | SDL3 window, GL context, input mapping (WASD, 1–5, Esc, R, T, H), game loop |
 
 ### ECS (EnTT)
 
@@ -37,7 +37,9 @@ Entities are assembled from POD components in dense pools:
 
 - `PlayerTag` + `Transform/Velocity/Radius/Sprite/Health`
 - `Enemy` (speed, touch damage, slow timer) + `Transform/Velocity/Radius/
-  Sprite/Health/Xp`, and `EnemyTraits` only on elites/champions
+  Sprite/Health/Xp`, plus `EnemyTraits` on every enemy (tier, defense,
+  resistances, regen/shield, archer/aura params). Archers' projectiles are
+  separate entities with `EnemyShot`.
 - Not-white-purposes projectiles get `Projectile` (damage, pierce, life)
 
 Systems iterate `registry_.view<...>()` over the components they need.
@@ -76,14 +78,15 @@ rolls, trait picks, card choices and rerolls all flow through this stream.
 
 1. `movePlayer()` — input → velocity, Adrenaline speed/invuln logic
 2. `buildSpatialHash()`
-3. `updateEnemies()` — seek player, separation, trait ticks (regen/slow),
-   contact damage, vampiric/venomous/ice-blood on hit
-4. `fireWeapons()` — per-slot cooldowns, shared nearest-enemy target, fans
+3. `updateEnemies()` — seek player, separation, trait ticks (regen, archer
+   shots, damage aura), contact damage, vampiric/venomous/ice-blood on hit
+4. `fireWeapons()` — per-slot cooldowns, shared nearest-enemy target, fans,
+   AoE crowd falloff
 5. `updateProjectiles()` — hits, pierce, chain (Storm Bolt), particle bursts
 6. `updatePickups()` — XP magnetism and collection
 7. Regen (`regen_add`), black hole timer, adrenaline cooldown, poison tick
-8. `spawnWave()` — spawn interval ramp, weighted enemy pick, elite/champion
-   rolls, pushes a `PendingSpawn` with a 0.6 s telegraph
+8. `spawnWave()` — spawn interval ramp, weighted enemy pick, elite/champion/
+   overlord rolls, pushes a `PendingSpawn` with a 0.6 s telegraph
 9. `processPendingSpawns()` — materializes enemies after their telegraph
 10. Particle tick, camera update (frame-level, smooth follow)
 
@@ -132,24 +135,27 @@ Batcher (core)  -> one @instanced draw call per pass
 - **No textures required**: colors come from the `color` fields in TOML
   (`proj_color` for projectiles); `assets/sprites/` is reserved for a future
   atlas pipeline.
-- Elites/champions: tint toward white, 1.35× radius, always-on HP bar.
-- Elite/champion **name tags are drawn in the screen pass** with a
-  world→screen projection so they stay legible and screen-aligned.
+- Elites/champions/overlords: tint toward white, larger radius, always-on HP
+  bar, and a **coloured outline ring** (gold / orange / violet by tier) drawn
+  as a ring of dots in the world pass. No floating name tags.
+- `TraitAura` enemies draw a faint pulsing disc; `TraitArcher` shots are drawn
+  with a soft glow in the world pass.
 - Spawn telegraphs: pulsing rings in the world pass + edge dots in the
   screen pass.
-- UI: XP bar, HP/shield bars, level, timer, kill count, and the level-up /
-  milestone / game-over overlays.
+- UI: XP bar, HP/shield bars, H-heal cooldown, level, timer, kill count, and
+  the level-up / milestone / game-over overlays.
 
 ## Key constants (game.cpp)
 
 | Constant | Value | Meaning |
 |----------|-------|---------|
 | `kMaxWeapons` | 4 | Weapon slots |
-| `kSpawnDist` | 11 | Spawn distance from player (units) |
+| `kSpawnDist` | 11 | Base spawn distance from player (units); scales to 2× by 10:00 |
 | `kSpawnTelegraph` | 0.6 s | Telegraph duration before an enemy appears |
 | `kShieldRegenRate` | 10 HP/s | Shield regen out of combat |
 | `kShieldRegenDelay` | 4 s | Damage-free time before regen starts |
-| `kContactIframes` | 0.55 s | Invulnerability after being hit |
+| `kContactIframes` | 0.30 s | Invulnerability after being hit |
+| `kEliteHpMul` / `kChampionHpMul` / `kOverlordHpMul` | 4 / 7 / 14 | Tier HP multipliers (all elite+ also get touch/speed/XP boosts) |
 | `kMaxEnemies` | — | Hard cap on live enemies (see `game.hpp`) |
 
 ## Testing
@@ -158,7 +164,10 @@ Headless Catch2 tests in `tests/test_game.cpp` construct a `Game` directly
 (no SDL window) and assert on:
 
 - `mitigateDamage` defense formula (flat + percent, clamping in 0)
+- `aoeFalloff`, `enemyDefense`, `enemyLifestealResistance`,
+  `enemyKnockbackResistance` and `traitsForTier` pure helpers
 - Defense/shield/lifesteal pipeline behavior
+- Elite/champion/overlord spawn stat boosts and trait-flag counts
 - Unique item effects (fan, thorns, adrenaline, black hole, chain,
   blood price, extra choice, reroll)
 - Milestone offering at level 5

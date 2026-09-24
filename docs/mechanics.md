@@ -32,6 +32,7 @@ curves. Tables of all content are generated into
 | Defense | One stat that mitigates all damage (see below) |
 | Shield | Absorbs damage point-for-point before HP, regenerates out of combat |
 | Lifesteal | Per-hit chance to heal; see [Lifesteal & healing](#lifesteal--healing) |
+| Heal (H) | Guaranteed 50% max-HP heal on a 30 s cooldown |
 | Move speed | Base × `speedMul` |
 | Damage / cooldown | Global multipliers applying to every weapon |
 | Projectiles / pierce | Additive buffs applied to every weapon |
@@ -88,11 +89,17 @@ large hits.
 
 ### Lifesteal & healing
 
-- Heal upgrades (`heal`) restore flat HP instantly.
+- **H** triggers a **guaranteed heal for 50% of max HP** on a 30 s cooldown
+  (shown next to the HP bar as `[H] HEAL READY` / `[H] HEAL nS`). This replaces
+  the old single-use heal cards, which are no longer in the loot pool.
 - **Lifesteal is chance-based**: a damaging hit with lifesteal `L` has an
   `L%` chance to heal **1 HP** (capped at max HP). At `L ≥ 100` the first
   point is guaranteed and the excess `(L − 100)%` rolls for a **second**
   point — so 150 lifesteal means 100% for 1 HP and 50% for another.
+- **Enemy lifesteal resistance** scales the chance down: the proc chance is
+  multiplied by `1 − resistance`. Resistance grows with run time, is higher for
+  tougher tiers, and the `resistant` trait adds a large chunk (a 50% resistance
+  halves the chance).
 - The **Vampiric Heart** unique makes every lifesteal proc heal **2 HP**
   instead of 1.
 - Regen adds flat HP every fixed tick (0.0556 HP/s per point).
@@ -129,6 +136,21 @@ large hits.
   pushes the struck enemy, homing steers the projectile toward the nearest
   foe each tick, and bounces reflect the projectile off the hit surface.
 
+### AoE damage falloff
+
+Any area-of-effect hit (cone, scythe reap, inferno, bomb blast, zone tick,
+nova tick, beam row, boomerang trail/blast, orb splash) deals **slightly less
+damage to each target the more targets it catches at once**:
+
+```text
+multiplier = 0.9^(n − 1)   # n = enemies hit, clamped to 1..40
+```
+
+So one enemy takes 100%, two take ~90% each, three ~81% each, and so on. The
+count is gathered **before** damage is applied so every target in the same
+blast receives the same multiplier. Single-target hits (chain-lightning jumps,
+direct projectile impacts) are unaffected.
+
 ### Evolutions (A + B = C)
 
 Four weapons are **evolutions**: `storm` (Arcane Wand + Heavy Crossbow),
@@ -146,7 +168,7 @@ with a `requires = [a, b]` list:
 
 ## Level-ups
 
-XP per level: `6 + 4·(level−1) + 0.5·(level−1)·level`. Overflow XP carries into
+XP per level: `7 + 5·(level−1) + 0.85·(level−1)·level`. Overflow XP carries into
 the next level; if it purchases another level immediately, another card choice
 queues.
 
@@ -155,9 +177,12 @@ queues.
 Each level-up shows **3 cards, plus** one extra per `extraChoice`
 (Gambler's Eye). The cards are filled in this order:
 
-1. **Weapon card** — one card may be a new weapon, with probability
-   `(1 − weaponCount/4) · 0.5` (rarer as you fill the 4 slots). When an
-   evolution's prerequisites are owned, this card is always that evolution.
+1. **Weapon cards** — one level-up may roll new weapons. The chance is
+   `(1 − weaponCount/4) · 0.32` (rarer than before). When it fires you are
+   offered a **choice of 2–3 weapon cards at once** (2, or 3 half the time),
+   clamped to the free slots and to the number of available weapons. When an
+   evolution's prerequisites are owned, that evolution is always the first
+   card offered.
 2. **Unique card** — if no weapon card was rolled, a **45%** chance to offer
    a random unpicked unique item.
 3. **Normal pool** — all remaining slots are filled from non-consumed normal
@@ -175,7 +200,8 @@ Each level-up shows **3 cards, plus** one extra per `extraChoice`
 - **Keys:** `1`–`5` pick the matching card. **`R` always rerolls** the
   level-up choice while free rerolls remain; it does nothing once the budget
   is spent.
-- The reroll hint is shown under the cards when free rerolls remain.
+- The reroll hint is shown under the cards and reports how many rerolls are
+  left this level (`[R] REROLL xN`, or `NONE LEFT`).
 
 ### Unique items (one-time, rule-changing)
 
@@ -249,9 +275,10 @@ relative `weight`, and `color`/`shape`.
 
 ### Spawning
 
-- Spawns happen **11 world units away** from the player (off-screen at
-  typical zoom) at a random angle — enemies materialize outside the visible
-  area, never on top of you.
+- Spawns happen **11 world units away** from the player at run start (off-screen
+  at typical zoom) at a random angle — enemies materialize outside the visible
+  area, never on top of you. The distance grows **linearly to 2× (22 units) by
+  the 10-minute mark**, then stays there for the rest of the run.
 - Every spawn is preceded by a **0.6 s telegraph**: a pulsing ring at the
   spawn point (visible when on-screen), plus a small dot at the screen edge
   pointing at the spawn for off-screen spawns.
@@ -282,32 +309,43 @@ t < 30 s :  interval = 1.2 − t·0.005         (1.20 s → 1.05 s)
 t ≥ 90 s :  interval = max(0.12, 0.45 − (t−90)·0.004) (→ min 0.12 s)
 ```
 
-- Enemy HP also scales globally: every enemy's HP is multiplied by
-  `1 + t/70`, so a 2-minute run faces ×2.71 the base HP, a 4-minute run
-  ×4.43.
-- Enemy **move speed** drifts up over the run (`×1` → `×1.35` at ~3.5 min)
-  so late waves stay threatening even for a leveled arsenal.
+- Enemy HP also scales globally. Up to the 6-minute mark it is multiplied by
+  `1 + t/70`; **after 6 minutes the ramp steepens** (`+ (t−360)/45`), so the
+  late game escalates faster. Capped at ×30.
+- Enemy **move speed** drifts up over the run (`1 + t/600` → `×1.6` at 6 min),
+  and **after 6 minutes it too accelerates** (`+ (t−360)/300`, capped at
+  ×2.4) so late waves stay threatening even for a leveled arsenal.
+- Enemy **contact damage** creeps up as `1 + t/1500`, so late hits land harder.
+- Enemy **defense** grows over time (see below) so late enemies shrug off a
+  slice of every hit.
 - Up to **8000 enemies** can be alive at once; the cap protects the frame
   rate rather than throttling spawns.
 
-### Elites & champions
+### Elites, champions & overlords
 
-From elapsed time `t`:
+Elite-and-above enemies are rolled per spawn from elapsed time `t`. Every one
+of them gets **all** of its base stats boosted (so they never simply melt), on
+top of the traits they roll:
 
-| Roll | Becomes | Chance | HP | Touch | XP |
-|------|---------|--------|----|-------|----|
-| t ≥ 45 s | Elite | 5% → 15% (creeps up) | ×4 | ×1.5 | ×3 |
-| t ≥ 120 s | Champion | ~2% → 5% (creeps up) | ×7 | ×2.5 | ×5 |
+| Roll | Becomes | Chance | HP | Touch | Speed | XP |
+|------|---------|--------|----|-------|-------|----|
+| t ≥ 45 s | Elite (tier 1) | 5% → 15% | ×4 | ×1.5 | ×1.15 | ×3 |
+| t ≥ 120 s | Champion (tier 2) | ~2% → 5% | ×7 | ×2.5 | ×1.3 | ×5 |
+| t ≥ 300 s | Overlord (tier 3) | ~1% → 2% | ×14 | ×4 | ×1.5 | ×10 |
 
-- Champions fight harder than elites: they also move **×1.3 faster** than
-  their base speed and spawn **1.6× larger** (elites are 1.35×).
-- Elites are visually **tinted toward white** and always show their enlarged
-  hitbox, a HP bar, and a **name tag** with their trait list above them.
-- Champions get a distinctive gold-ish tag of their own.
+- Tougher tiers are **larger** (elite ×1.35, champion ×1.6, overlord ×2.0).
+- Strength is shown by a **coloured outline** around the enemy — elite **gold**,
+  champion **orange**, overlord **violet** — replacing the old glow and
+  floating name tags. They always show an enlarged HP bar.
+- **Trait count** grows with tier and time: an elite rolls **exactly one**
+  trait, a champion **2** (+1 after 4 min), an overlord **4** (+1 after 8 min).
+- Every elite-and-above also has **stronger defenses and resistances**: their
+  defense, lifesteal resistance and knockback resistance all scale with tier
+  (see below). The `resistant` trait pushes those even higher.
 
 **Trait pool** (compiled in `game.cpp`, `PickTrait`): `fast, armored,
-regenerating, explosive, venomous, vampiric, shielded`. The number of traits
-rolled grows with time — `min(4, 1 + t/90)`, and a champion gets **+1 more**:
+regenerating, explosive, venomous, vampiric, shielded, heavy, archer, aura,
+resistant`. Traits never repeat on the same enemy:
 
 | Trait | Effect |
 |-------|--------|
@@ -318,9 +356,27 @@ rolled grows with time — `min(4, 1 + t/90)`, and a champion gets **+1 more**:
 | Venomous | Hitting the player applies 3 s poison (damage over time) |
 | Vampiric | Heals 50% of its touch damage when it hits you |
 | Shielded | Gains a shield equal to 50% of max HP (absorbs damage first) |
+| Heavy | ×2 touch damage — a hard-hitting bruiser |
+| Archer | Shoots aimed projectiles at the player periodically |
+| Aura | Burns the player with a damage aura while they stand inside it |
+| Resistant | Strong lifesteal + knockback resistance and extra defense |
 
-Elites never roll duplicate traits, and their name tag lists the applied
-traits so the player can react.
+### Enemy defense & resistances
+
+Enemies run through the **same flat+percent defense curve as the player**
+(`mitigateDamage`) and gain defense as the run goes on:
+
+```text
+defense   = max(0, t − 30) / 25 · tierMul     # tierMul: 1 / 1.4 / 2.0 / 2.8
+lifestealRes = min(0.75, t/1200) + tierBonus + (resistant ? 0.5 : 0)
+knockbackRes = min(0.70, t/900)  + tierBonus + (resistant ? 0.5 : 0)
+```
+
+- The 30-second grace period keeps the opening minute free of mitigation.
+- **Knockback** from projectiles, the scythe reap, inferno and bombs is scaled
+  by `1 − knockbackRes`, so late/elite enemies get pushed around less and less.
+- **Lifesteal** proc chance is scaled by `1 − lifestealRes`; a 50% resistance
+  halves the player's chance to heal.
 
 ### Contact damage
 

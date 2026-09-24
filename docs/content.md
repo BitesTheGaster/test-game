@@ -76,13 +76,11 @@ python3 tools/gendocs.py
 | Vigor | vigor | max_hp_add | 20 | 6 |  |  | +20 max HP and heal 20 |
 | Soul Magnet | magnet | pickup_mul | 0.6 | 4 |  |  | +60% pickup range |
 | Piercing Shots | pierce | pierce_add | 1 | 3 |  |  | +1 pierce |
-| Life Leech | leech | heal | 25 | 3 |  |  | Heal 25 HP |
 | Regeneration | regen | regen_add | 1 | 4 |  |  | +1 HP per second |
 | Might | might | damage_mul | 0.25 | 4 |  |  | +25% damage |
 | Quickdraw | quickdraw | fire_rate | 0.13 | 3 |  |  | +13% fire rate |
 | Twin Cast | twin_shot | proj_add | 1 | 2 |  |  | +1 projectile |
 | Windrunner | windrunner | speed_mul | 0.08 | 6 |  |  | +8% move speed |
-| Dark Feast | feast | heal | 40 | 2 |  |  | Heal 40 HP |
 | Iron Constitution | constitution | max_hp_add | 35 | 4 |  |  | +35 max HP and heal 35 |
 | Bulwark | bulwark | max_hp_add | 50 | 2 |  |  | +50 max HP and heal 50 |
 | Vitality | vitality | regen_add | 2 | 2 |  |  | +2 HP per second |
@@ -91,7 +89,6 @@ python3 tools/gendocs.py
 | Garrote Bolts | garrote | pierce_add | 2 | 1 |  |  | +2 pierce |
 | Battle Echoes | echoes | fire_rate | 0.19 | 2 |  |  | +19% fire rate |
 | Barrage | barrage | proj_add | 2 | 1 |  |  | +2 projectiles |
-| Rejuvenation | rejuvenation | heal | 60 | 1 |  |  | Heal 60 HP |
 | Fervor | fervor | damage_mul | 0.35 | 2 |  |  | +35% damage |
 | Gale Steps | gale | speed_mul | 0.15 | 2 |  |  | +15% move speed |
 | Heartwood | heartwood | max_hp_add | 70 | 1 |  |  | +70 max HP and heal 70 |
@@ -166,7 +163,7 @@ python3 tools/gendocs.py
 | Starlight Ward | m128_starlight | shield_add | 500 | 1 |  | 128 | MILESTONE: +500 regenerating shield |
 | Overdrive | m128_overdrive | damage_mul | 2 | 1 |  | 128 | MILESTONE: +200% damage |
 
-**Totals:** 86 upgrades (45 normal, 23 unique, 18 milestones).
+**Totals:** 83 upgrades (42 normal, 23 unique, 18 milestones).
 
 
 ---

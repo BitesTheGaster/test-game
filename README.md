@@ -2,10 +2,10 @@
 
 Vampire Survivors-like roguelike. C++20, SDL3 + OpenGL 3.3, CMake + vcpkg.
 
-Multi-weapon build-your-arsenal roguelike: 14 weapons (incl. 2 evolutions),
-18 enemy types with elite/champion traits, 72 upgrades (normal / unique /
-milestone), regenerating shield + defense + lifesteal, and a difficulty ramp
-that kicks in from ~60s.
+Multi-weapon build-your-arsenal roguelike: 13 weapons (incl. 4 evolutions),
+18 enemy types with elite/champion/overlord traits, 83 upgrades (normal /
+unique / milestone), regenerating shield + defense + lifesteal, an H-key heal,
+AoE damage falloff, and a difficulty ramp that accelerates after 6 minutes.
 
 ## Documentation
 

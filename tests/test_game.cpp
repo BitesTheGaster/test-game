@@ -127,13 +127,115 @@ TEST_CASE("attackCooldown: delay = base / (1 + additive fire-rate bonus)") {
 }
 
 TEST_CASE("xpForLevel grows monotonically") {
-  REQUIRE(game::xpForLevel(1) == Catch::Approx(6.0F));
+  REQUIRE(game::xpForLevel(1) == Catch::Approx(7.0F));
   float prev = 0.0F;
   for (int lvl = 1; lvl <= 20; ++lvl) {
     const float need = game::xpForLevel(lvl);
     REQUIRE(need > prev);
     prev = need;
   }
+}
+
+TEST_CASE("aoeFalloff drops per-target damage as a blast catches a crowd") {
+  // A single target takes full damage.
+  REQUIRE(game::aoeFalloff(0) == Catch::Approx(1.0F));
+  REQUIRE(game::aoeFalloff(1) == Catch::Approx(1.0F));
+  // Two targets: ~90% each; three: ~81%.
+  REQUIRE(game::aoeFalloff(2) == Catch::Approx(0.9F));
+  REQUIRE(game::aoeFalloff(3) == Catch::Approx(0.81F));
+  // Monotonically decreasing, but never zero (clamped floor).
+  float prev = 1.0F;
+  for (int n = 1; n <= 40; ++n) {
+    const float f = game::aoeFalloff(n);
+    REQUIRE(f <= prev + 1e-5F);
+    REQUIRE(f > 0.0F);
+    prev = f;
+  }
+}
+
+TEST_CASE("enemyDefense grows with time and tier, after a grace period") {
+  // Grace period: no mitigation for the first 30 seconds.
+  REQUIRE(game::enemyDefense(0.0F, 0) == Catch::Approx(0.0F));
+  REQUIRE(game::enemyDefense(30.0F, 0) == Catch::Approx(0.0F));
+  // Grows after the grace period.
+  REQUIRE(game::enemyDefense(100.0F, 0) > 0.0F);
+  REQUIRE(game::enemyDefense(200.0F, 0) > game::enemyDefense(100.0F, 0));
+  // Higher tiers are tougher at the same time.
+  REQUIRE(game::enemyDefense(200.0F, 1) > game::enemyDefense(200.0F, 0));
+  REQUIRE(game::enemyDefense(200.0F, 2) > game::enemyDefense(200.0F, 1));
+  REQUIRE(game::enemyDefense(200.0F, 3) > game::enemyDefense(200.0F, 2));
+}
+
+TEST_CASE("enemy resistances scale with time, tier and the resistant trait") {
+  // Both resistances are clamped into [0, 1].
+  for (float t = 0.0F; t <= 3000.0F; t += 250.0F) {
+    const float lr = game::enemyLifestealResistance(t, 0, false);
+    const float kr = game::enemyKnockbackResistance(t, 0, false);
+    REQUIRE(lr >= 0.0F);
+    REQUIRE(lr <= 1.0F);
+    REQUIRE(kr >= 0.0F);
+    REQUIRE(kr <= 1.0F);
+  }
+  // The "resistant" variant resists noticeably more.
+  REQUIRE(game::enemyLifestealResistance(120.0F, 1, true) >
+          game::enemyLifestealResistance(120.0F, 1, false));
+  REQUIRE(game::enemyKnockbackResistance(120.0F, 1, true) >
+          game::enemyKnockbackResistance(120.0F, 1, false));
+  // A 50% lifesteal resistance halves the player's chance.
+  REQUIRE(game::enemyLifestealResistance(600.0F, 0, false) == Catch::Approx(0.5F));
+}
+
+TEST_CASE("traitsForTier gives elites exactly one bonus and stronger tiers more") {
+  REQUIRE(game::traitsForTier(0, 0.0F) == 0);
+  REQUIRE(game::traitsForTier(1, 0.0F) == 1);
+  REQUIRE(game::traitsForTier(1, 9999.0F) == 1); // elite always exactly one
+  REQUIRE(game::traitsForTier(2, 0.0F) >= 2);
+  REQUIRE(game::traitsForTier(2, 300.0F) > game::traitsForTier(2, 0.0F));
+  REQUIRE(game::traitsForTier(3, 0.0F) >= 4);
+  REQUIRE(game::traitsForTier(3, 600.0F) > game::traitsForTier(3, 0.0F));
+  // Overlords always roll more than champions, who roll more than elites.
+  REQUIRE(game::traitsForTier(3, 0.0F) > game::traitsForTier(2, 0.0F));
+  REQUIRE(game::traitsForTier(2, 0.0F) > game::traitsForTier(1, 0.0F));
+}
+
+TEST_CASE("elite+ enemies always get boosted stats and grow with tier") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 99};
+  g.testDisableWaves();
+  g.testSpawnTieredEnemyAt(0.0F, 0.0F, 0);
+  g.testSpawnTieredEnemyAt(2.0F, 0.0F, 1);
+  g.testSpawnTieredEnemyAt(4.0F, 0.0F, 2);
+  g.testSpawnTieredEnemyAt(6.0F, 0.0F, 3);
+
+  const auto tiers = g.testEnemyTiers();
+  REQUIRE(tiers.size() == 4);
+  std::vector<int> sortedTiers = tiers;
+  std::sort(sortedTiers.begin(), sortedTiers.end());
+  REQUIRE(sortedTiers == std::vector<int>{0, 1, 2, 3});
+
+  const auto hps = g.testEnemyHps();
+  REQUIRE(hps.size() == 4);
+  std::vector<float> hs = hps;
+  std::sort(hs.begin(), hs.end());
+  // Strictly increasing HP with tier (all stats boosted, never deleted fast).
+  REQUIRE(hs[0] < hs[1]);
+  REQUIRE(hs[1] < hs[2]);
+  REQUIRE(hs[2] < hs[3]);
+}
+
+TEST_CASE("trait flags survive spawn and are counted") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 100};
+  g.testDisableWaves();
+  g.testSpawnTieredEnemyAt(0.0F, 0.0F, 1, game::TraitFast | game::TraitArcher);
+  g.testSpawnTieredEnemyAt(2.0F, 0.0F, 2, game::TraitResistant);
+  const auto counts = g.testEnemyTraitCounts();
+  REQUIRE(counts.size() == 2);
+  int total = 0;
+  for (const int c : counts) {
+    total += c;
+  }
+  REQUIRE(total == 3); // 2 flags + 1 flag
 }
 
 // --- Fixed timestep ----------------------------------------------------------

@@ -43,6 +43,7 @@ struct Enemy {
 };
 
 // Bit flags for elite/champion enemy traits (non-POD-free: plain POD).
+// Elites roll exactly ONE trait; champions and stronger roll several.
 enum TraitFlag : std::uint32_t {
   TraitNone = 0,
   TraitFast = 1u << 0,
@@ -52,13 +53,33 @@ enum TraitFlag : std::uint32_t {
   TraitVenomous = 1u << 4,
   TraitVampiric = 1u << 5,
   TraitShielded = 1u << 6,
+  TraitHeavy = 1u << 7,     // hits much harder
+  TraitArcher = 1u << 8,    // shoots projectiles at the player
+  TraitAura = 1u << 9,      // burns the player inside an aura
+  TraitResistant = 1u << 10 // strong lifesteal + knockback resistance
 };
 
 struct EnemyTraits {
   std::uint32_t flags = TraitNone;
-  std::uint8_t tier = 0; // 0 normal, 1 elite, 2 champion
+  std::uint8_t tier = 0; // 0 normal, 1 elite, 2 champion, 3 overlord
   float regen = 0.0F;    // HP per second
   float shield = 0.0F;   // absorbs damage point-for-point
+  // Defense uses the same flat+percent curve as the player (mitigateDamage)
+  // and grows with run time, so late enemies shrug off a slice of every hit.
+  float defense = 0.0F;
+  float lifestealRes = 0.0F; // 0..1: scales the player's lifesteal proc chance
+  float knockbackRes = 0.0F; // 0..1: scales incoming knockback
+  float shootCooldown = 0.0F; // >0 => ranged attacker (TraitArcher)
+  float shootTimer = 0.0F;
+  float auraRadius = 0.0F;    // >0 => damage aura (TraitAura)
+  float auraDps = 0.0F;
+};
+
+// A hostile projectile spat out by a TraitArcher enemy.
+struct EnemyShot {
+  float damage = 1.0F;
+  float life = 3.0F;
+  core::render::Color color{1.0F, 0.4F, 0.2F, 1.0F};
 };
 
 struct Projectile {
