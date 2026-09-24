@@ -109,7 +109,7 @@ int main() {
       return 1;
     }
 
-    const game::Content content = game::loadContent(GAME_ASSETS_DIR "/data");
+    const game::Content content = game::loadContent(findDataDir());
     game::Game g{content};
 
     std::uint64_t previous = SDL_GetPerformanceCounter();
