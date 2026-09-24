@@ -64,6 +64,7 @@ AttackType parseAttackType(const toml::table& t, const std::string& where) {
   if (s == "nova") return AttackType::Nova;
   if (s == "inferno") return AttackType::Inferno;
   if (s == "pulsar") return AttackType::Pulsar;
+  if (s == "halo") return AttackType::Halo;
   throw std::runtime_error(where + ": unknown attack_type \"" + s + "\"");
 }
 
@@ -170,6 +171,9 @@ Content loadContent(const std::filesystem::path& dir) {
       def.beamRange = (*t)["beam_range"].value_or(8.0F);
       def.beamWidth = (*t)["beam_width"].value_or(0.3F);
       def.beamDuration = (*t)["beam_duration"].value_or(0.15F);
+
+      // Halo
+      def.haloKnockback = (*t)["halo_knockback"].value_or(0.0F);
 
       // Sweep
       def.sweepAngle = (*t)["sweep_angle"].value_or(3.14F);

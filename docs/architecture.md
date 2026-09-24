@@ -153,7 +153,7 @@ Batcher (core)  -> one @instanced draw call per pass
 
 | Constant | Value | Meaning |
 |----------|-------|---------|
-| `kMaxWeapons` | 4 | Weapon slots |
+| `kMaxWeapons` | 5 | Weapon slots |
 | `kSpawnDist` | 11 | Base spawn distance from player (units); scales to 2× by 10:00 |
 | `kSpawnTelegraph` | 0.6 s | Telegraph duration before an enemy appears |
 | `kShieldRegenRate` | 10 HP/s | Shield regen out of combat |
@@ -175,8 +175,12 @@ Headless Catch2 tests in `tests/test_game.cpp` construct a `Game` directly
 - Defense/shield/lifesteal pipeline behavior
 - Elite/champion/overlord spawn stat boosts and trait-flag counts
 - Unique item effects (fan, thorns, adrenaline, black hole, chain,
-  blood price, extra choice, reroll, XP multiplier, Last Stand)
+  blood price, extra choice, reroll, XP multiplier, Last Stand, Repulsion Field)
+- Knockback: Repulsion Field retaliation and the Impact multiplier, plus the
+  decaying-impulse push landing on the enemy
 - Opening 3-weapon pick, defense-scaled iframes, Last Stand low-HP iframes
+- Halo spokes (Radiant Halo / Helios Wheel) and super-evolution prerequisites
+- The lethal-hit rule (a hit covering the remaining HP always kills)
 - Bestiary kill/tier tracking and the B overlay toggle
 - Milestone offering at level 5
 - Reroll budget accounting

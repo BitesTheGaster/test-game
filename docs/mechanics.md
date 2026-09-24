@@ -46,8 +46,9 @@ curves. Tables of all content are generated into
 | Stat | Also affects |
 |------|--------------|
 | Fire rate | **Dagger orbit spin** — blades rotate at `orbitSpeed · max(0.5, 1 + fireRateBonus)` |
-| Projectiles | **Cone range** (+25%/proj), **Bomb arc height** (+25%), **Beam count & width** (each projectile is a parallel beam; width +5%/proj), **Scythe arc radius** (+15%), **Nova radius** (+10%), **Zone radius** (+20%) |
+| Projectiles | **Cone range** (+25%/proj), **Bomb arc height** (+25%), **Beam count & width** (each projectile is a parallel beam; width +5%/proj), **Halo spokes** (+1 spoke), **Scythe arc radius** (+15%), **Nova radius** (+10%), **Zone radius** (+20%) |
 | Pierce | **Bomb blast radius** (+15%), **Bounce bounces**, **Chain jumps** (one more each), **Zone DPS** (+2) |
+| Knockback | **Impact** cards multiply every knockback the player deals — bombs, scythe/inferno bursts, Radiant Halo / Helios spokes and Repulsion Field retaliation |
 
 ### Fire rate (additive, never zero)
 
@@ -110,7 +111,7 @@ large hits.
 
 ## Weapons
 
-- Up to **4 weapon slots** (`kMaxWeapons`). Each slot runs its own cooldown,
+- Up to **5 weapon slots** (`kMaxWeapons`). Each slot runs its own cooldown,
   damage, projectile count/speed/life/pierce/spread and projectile tint.
 - Every weapon fires `projectiles` bolts in a fan of `spread` radians around
   the aim direction. The fan angle caps at a reasonable maximum so extra
@@ -119,8 +120,9 @@ large hits.
   pool.
 - Each weapon has a distinct **role**: some are rapid spray (**Ember Sprayer**
   rakes a visible flame fan in an arc, dealing its damage instantly), some are
-  piercing snipers (**Heavy Crossbow** bolts home and punch through crowds,
-  and the **Solar Lance** is an instant hitscan line), some are area-splash
+  piercing snipers (**Heavy Crossbow** bolts home and punch through crowds —
+  a slow, heavy 2.2 s reload after the balance pass — and the **Solar Lance**
+  is an instant hitscan line), some are area-splash
   (**Runic Hammer** lobs an arcing bomb that detonates where it lands,
   destroying itself), some bounce (orb), and some home toward the target
   (crossbow, shuriken, nova). The **Solar Lance** fires a wide beam across the
@@ -161,20 +163,27 @@ to every target it catches. Every area source passes its own pierce (weapon
 pierce plus the global pierce buff) — cones, scythe reaps, infernos, bombs,
 zones, novas, beams, boomerang trails/blasts and orb splashes.
 
-### Evolutions (A + B = C)
+### Evolutions & super evolutions (A + B = C)
 
-Four weapons are **evolutions**: `storm` (Arcane Wand + Heavy Crossbow),
-`nova` (Void Orb + Runic Hammer), `inferno` (Ember Sprayer + Soul Scythe) and
-`pulsar` (Solar Lance + Storm Shuriken). They are defined as ordinary weapons
-with a `requires = [a, b]` list:
+Weapons can require other weapons. When you own **all** prerequisites, the
+result becomes the **highest-priority** weapon offer, replacing the random
+weapon grant:
 
-- While you own **both** prerequisites, the evolution becomes the **highest
-  priority** weapon offer, replacing the random weapon grant.
-- Evolutions are **not** added to the normal weapon pool before the
+- **Two-ingredient evolutions** (tag `EVOLUTION! (A+B)`): `storm` (Arcane Wand
+  + Heavy Crossbow), `nova` (Void Orb + Runic Hammer), `inferno` (Ember Sprayer
+  + Soul Scythe), `pulsar` (Solar Lance + Storm Shuriken) and `halo` (**Radiant
+  Halo**: Throwing Dagger + Solar Lance). Radiant Halo spawns **persistent
+  beams that orbit you**, reaping everything they sweep through — the beam's
+  damage re-expressed as an always-on ring rather than a brief flash.
+- **Three-ingredient super evolutions** (tag `SUPER EVOLUTION! (A+B+C)`):
+  `aether` (**Aetherstorm**: Arcane Wand + Heavy Crossbow + Storm Shuriken) and
+  `helios` (**Helios Wheel**: Throwing Dagger + Solar Lance + Runic Hammer).
+  Helios is a four-spoke halo that also **hurls** what it touches outward;
+  Aetherstorm is a storm of returning light-blades dragging searing trails.
+- Evolutions and supers are **not** added to the normal weapon pool before the
   prerequisites are met.
-- Picking the evolution grants the evolved weapon **in addition to** the two
-  prerequisites' slot usage (it occupies one of the 4 slots; you do not lose
-  the ingredients).
+- Picking one grants the evolved weapon **in addition to** the ingredients'
+  slot usage (it occupies one of the 5 slots; you never lose the ingredients).
 
 ## Level-ups
 
@@ -189,11 +198,11 @@ Each level-up shows **3 cards, plus** one extra per `extraChoice`
 (Gambler's Eye). The cards are filled in this order:
 
 1. **Weapon cards** — one level-up may roll new weapons. The chance is
-   `(1 − weaponCount/4) · 0.32` (rarer than before). When it fires you are
+   `(1 − weaponCount/5) · 0.32` (rarer than before). When it fires you are
    offered a **choice of 2–3 weapon cards at once** (2, or 3 half the time),
    clamped to the free slots and to the number of available weapons. When an
-   evolution's prerequisites are owned, that evolution is always the first
-   card offered.
+   evolution's prerequisites are owned, that evolution (or super evolution) is
+   always the first card offered.
 2. **Unique card** — if no weapon card was rolled, a **45%** chance to offer
    a random unpicked unique item.
 3. **Normal pool** — all remaining slots are filled from non-consumed normal
@@ -232,10 +241,11 @@ once. See [`content.md`](content.md) for the exact list; the rules they bend:
 | Cold Blood | Enemies that hit you are slowed for 2s (45% speed) |
 | Vampiric Heart | Lifesteal procs heal 2 HP instead of 1 |
 | Last Stand | Taking a hit below 20% HP grants 1s of invulnerability (20s cooldown) |
+| Repulsion Field | Enemies that strike you are violently knocked away |
 
-**Weapon uniques** — each of the 13 weapons has one exclusive treasure card.
-They are only offered while that weapon is equipped (the card carries
-`weapon = "<id>"`), so the pool stays relevant to your loadout:
+**Weapon uniques** — thirteen weapons have one exclusive treasure card, offered
+only while that weapon is equipped (the card carries `weapon = "<id>"`), so the
+pool stays relevant to your loadout:
 
 | Weapon | Unique | Effect |
 |--------|--------|--------|
@@ -252,6 +262,9 @@ They are only offered while that weapon is equipped (the card carries
 | Void Nova | Supernova | Ring expands faster, wider, and hits harder |
 | Inferno | Everflame | Wider reap; burning ground lasts longer and burns harder |
 | Pulsar | Arc Saw | The laser trail is 80% wider and deals 35% more damage |
+
+The newer Radiant Halo and the two super evolutions have no exclusive card;
+they rely on their raw stats and synergies instead.
 
 ### Milestones
 
@@ -270,7 +283,7 @@ and stats are snapshotted and restored when you leave):
 | Key | Action |
 |-----|--------|
 | `T` | Toggle test mode on/off |
-| `1` / `2` | Previous / next weapon — **all 13 including evolutions** (`storm`, `nova`, `inferno`, `pulsar`) |
+| `1` / `2` | Previous / next weapon — **all 16 including evolutions and supers** (`storm`, `nova`, `inferno`, `pulsar`, `halo`, `aether`, `helios`) |
 | `3` | Apply a **max build** boost: +100% damage, +4 projectiles, +3 pierce, +80% fire rate |
 | `4` | Toggle enemy waves (fodder bats spawn so every weapon has a target) |
 | `5` | Exit back to the untouched run |
@@ -342,8 +355,11 @@ top of the traits they roll:
 | Roll | Becomes | Chance | HP | Touch | Speed | XP |
 |------|---------|--------|----|-------|-------|----|
 | t ≥ 45 s | Elite (tier 1) | 5% → 15% | ×4 | ×1.5 | ×1.15 | ×3 |
-| t ≥ 120 s | Champion (tier 2) | ~2% → 5% | ×7 | ×2.5 | ×1.3 | ×5 |
-| t ≥ 300 s | Overlord (tier 3) | ~1% → 2% | ×14 | ×4 | ×1.5 | ×10 |
+| t ≥ 120 s | Champion (tier 2) | ~1% → 3% | ×7 | ×2.5 | ×1.3 | ×5 |
+| t ≥ 300 s | Overlord (tier 3) | ~0.4% → 1.2% | ×14 | ×4 | ×1.5 | ×10 |
+
+Champions and overlords are deliberately **rarer** than in earlier builds: a
+single unlucky fast tank should not decide a run.
 
 - Tougher tiers are **larger** (elite ×1.35, champion ×1.6, overlord ×2.0).
 - Strength is shown by a **coloured outline** around the enemy — elite **gold**,
@@ -385,10 +401,18 @@ knockbackRes = min(0.70, t/900)  + tierBonus + (resistant ? 0.5 : 0)
 ```
 
 - The 30-second grace period keeps the opening minute free of mitigation.
-- **Knockback** from projectiles, the scythe reap, inferno and bombs is scaled
-  by `1 − knockbackRes`, so late/elite enemies get pushed around less and less.
+- **Knockback** from bombs, the scythe reap, inferno, Radiant Halo / Helios
+  spokes and Repulsion Field retaliation is scaled by `1 − knockbackRes`, so
+  late/elite enemies get pushed around less and less. Every shove is stored as
+  a decaying impulse on the enemy (`kbX`/`kbY`, ×0.82 per tick) that is added
+  on top of its steering velocity, so the push actually lands before the AI
+  re-clamps its movement. **Impact** cards multiply the whole shove.
 - **Lifesteal** proc chance is scaled by `1 − lifestealRes`; a 50% resistance
   halves the player's chance to heal.
+- **Lethal hits always kill.** If a hit's raw damage already covers the
+  target's remaining HP, it dies even when defense mitigation would leave a
+  fraction behind — no more "0 HP" enemies that are technically still alive.
+  Shields are exempt: the Shielded trait still absorbs its buffer first.
 
 ### Contact damage
 

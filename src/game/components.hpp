@@ -41,6 +41,10 @@ struct Enemy {
   float touch = 5.0F;
   float slowT = 0.0F; // >0 => slowed for this many seconds
   int def = -1;       // content enemy index for the bestiary (-1 = unknown)
+  // Decaying knockback velocity, added on top of the AI seek each tick so
+  // explosions, sweeps and the Repulsion Field unique actually shove enemies.
+  float kbX = 0.0F;
+  float kbY = 0.0F;
 };
 
 // Bit flags for elite/champion enemy traits (non-POD-free: plain POD).
@@ -227,6 +231,20 @@ struct NovaRing {
 
 struct Xp {
   float value = 1.0F;
+};
+
+// Persistent rotating beam (halo evolution): a spoke of light anchored to the
+// player that sweeps around and damages everything along its length.
+struct HaloBeam {
+  float damage = 30.0F;    // damage per second along the beam
+  int pierce = 0;          // reduces crowd damage falloff
+  float length = 6.0F;     // beam reach from the player
+  float width = 0.4F;      // beam thickness
+  float angle = 0.0F;      // current rotation angle
+  float spin = 2.0F;       // radians per second
+  float knockback = 0.0F;  // outward shove applied along the beam (per second)
+  int weaponIndex = -1;    // owning weapon slot (-1 = orphaned)
+  core::render::Color color{1.0F, 1.0F, 0.75F, 1.0F};
 };
 
 } // namespace game

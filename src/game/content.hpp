@@ -25,7 +25,8 @@ enum class AttackType : std::uint8_t {
   Chain,        // lightning jumps between enemies (evolution)
   Nova,         // expanding ring from player (evolution)
   Inferno,      // target-centered circle reap + burning ground (evolution)
-  Pulsar        // boomerang that drags a damage trail (evolution)
+  Pulsar,       // boomerang that drags a damage trail (evolution)
+  Halo          // beams orbiting the player (evolution)
 };
 
 struct WeaponDef {
@@ -75,6 +76,9 @@ struct WeaponDef {
   float beamRange = 8.0F;       // max range
   float beamWidth = 0.3F;       // line thickness
   float beamDuration = 0.15F;   // visual persist time
+
+  // Halo (evolution)
+  float haloKnockback = 0.0F;   // outward shove applied along the beam (per sec)
 
   // Sweep
   float sweepAngle = 3.14F;     // radians (PI = 180°, 2PI = 360°)

@@ -10,8 +10,8 @@ Regenerate with:
 python3 tools/gendocs.py
 ```
 
-**Totals:** 13 weapons (9 base +
-4 evolutions), 18 enemies.
+**Totals:** 16 weapons (9 base +
+7 evolutions), 18 enemies.
 
 ### Base weapons
 
@@ -19,7 +19,7 @@ python3 tools/gendocs.py
 |---|---|---|---|---|---|---|---|---|---|---|
 | Arcane Wand | wand | 8 | 0.5 | 1 | 14 | 0 | 0.1 | yes |  | Reliable magic bolts. The balanced baseline. |
 | Throwing Dagger | dagger | 5 | 0.4 | 3 | 0 | 0 | 0 | yes |  | Orbiting knives that carve up anything close. |
-| Heavy Crossbow | crossbow | 20 | 1.2 | 1 | 22 | 4 | 0.18 | yes | homing | Slow, homing piercing bolt that punches through crowds. |
+| Heavy Crossbow | crossbow | 20 | 2.2 | 1 | 22 | 4 | 0.18 | yes | homing | Slow, homing piercing bolt that punches through crowds. |
 | Ember Sprayer | flame | 4 | 0.35 | 1 | 0 | 0 | 0 |  |  | Cone of fire — instant damage in a wide arc. |
 | Runic Hammer | hammer | 45 | 1.8 | 1 | 8 | 0 | 0.3 |  |  | Arcing bomb with massive explosion and knockback. |
 | Storm Shuriken | shuriken | 8 | 0.6 | 2 | 16 | 1 | 0.2 |  |  | Boomerang blades — hit going out AND coming back. |
@@ -35,6 +35,9 @@ python3 tools/gendocs.py
 | Void Nova | nova | orb + hammer | 40 | 1.8 | 1 | 0 | 0 | Orb + Hammer. Expanding ring of destruction. |
 | Inferno | inferno | flame + scythe | 60 | 1.6 | 1 | 0 | 0 | Sprayer + Scythe. Reaps a circle and leaves burning ground. |
 | Pulsar | pulsar | beam + shuriken | 12 | 0.9 | 1 | 2 | 0 | Shuriken + Lance. Light-chakram dragging a burning laser trail. |
+| Radiant Halo | halo | dagger + beam | 55 | 1 | 2 | 4 | 0 | Dagger + Lance. Blades of light orbit you, reaping all they touch. |
+| Aetherstorm | aether | wand + crossbow + shuriken | 26 | 0.65 | 3 | 6 | 0 | Wand + Crossbow + Shuriken. A storm of returning light-blades dragging searing trails. |
+| Helios Wheel | helios | dagger + beam + hammer | 90 | 0.8 | 4 | 6 | 0 | Dagger + Lance + Hammer. Four blades of sunlight orbit you, crushing and hurling all they touch. |
 
 ---
 
@@ -72,6 +75,7 @@ python3 tools/gendocs.py
 | Sharpened Bolts | damage | damage_mul | 0.15 | 6 |  |  | +15% damage |
 | Battle Haste | haste | fire_rate | 0.09 | 5 |  |  | +9% fire rate |
 | Split Shot | multi | proj_add | 1 | 4 |  |  | +1 projectile |
+| Impact | impact | knockback_mul | 0.45 | 3 |  |  | +45% knockback from all your attacks and bursts |
 | Swift Boots | boots | speed_mul | 0.12 | 4 |  |  | +12% move speed |
 | Vigor | vigor | max_hp_add | 20 | 6 |  |  | +20 max HP and heal 20 |
 | Soul Magnet | magnet | pickup_mul | 0.6 | 4 |  |  | +60% pickup range |
@@ -128,6 +132,7 @@ python3 tools/gendocs.py
 | Blood Price | u_blood_price | blood_price | 1 | 1 |  |  | Every 20 kills detonates a burst around you |
 | Cold Blood | u_ice_blood | ice_blood | 1 | 1 |  |  | Enemies that hit you are slowed for 2s |
 | Last Stand | u_last_stand | last_stand | 1 | 1 |  |  | Taking a hit below 20% HP grants 1s of invulnerability (20s cooldown) |
+| Repulsion Field | u_repulsion | knockback_retaliate | 6 | 1 |  |  | Enemies that strike you are violently knocked away |
 | Vampiric Heart | u_vampiric_heart | lifesteal_heal | 2 | 1 |  |  | Lifesteal heals 2 HP per proc instead of 1 |
 | Seeking Missiles | uw_wand_seeking | w_unique_homing | 1 | 1 | wand |  | Arcane Wand: bolts home onto the nearest enemy |
 | Blade Vortex | uw_dagger_vortex | w_unique_vortex | 1 | 1 | dagger |  | Throwing Dagger: blades spin 2x faster in a 25% wider orbit |
@@ -166,7 +171,7 @@ python3 tools/gendocs.py
 | Starlight Ward | m128_starlight | shield_add | 500 | 1 |  | 128 | MILESTONE: +500 regenerating shield |
 | Overdrive | m128_overdrive | damage_mul | 2 | 1 |  | 128 | MILESTONE: +200% damage |
 
-**Totals:** 86 upgrades (44 normal, 24 unique, 18 milestones).
+**Totals:** 88 upgrades (45 normal, 25 unique, 18 milestones).
 
 
 ---

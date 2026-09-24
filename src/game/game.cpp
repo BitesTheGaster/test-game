@@ -19,6 +19,11 @@ constexpr float kShieldRegenRate = 10.0F;   // HP/s once out of combat
 constexpr float kShieldRegenDelay = 4.0F;   // seconds without damage
 constexpr float kContactIframes = 0.18F;    // enemies connect more often
 
+// Enemies die once their HP drops to (or below) this tiny epsilon. Defense
+// mitigation and float rounding can otherwise leave a sliver of HP, so a hit
+// that should be lethal leaves a "0 HP" enemy alive.
+constexpr float kEnemyDeathEpsilon = 1.0e-3F;
+
 // Base HP multiplier ranges per enemy tier. Rolled per spawn so each elite is
 // tougher than the last; higher tiers are exponentially beefier so they never
 // simply melt. Applied on top of the global time-based hp scale.
@@ -183,6 +188,16 @@ UpgradeEffectResult applyUpgrade(PlayerStats& stats, std::string_view effect, fl
   }
   if (effect == "xp_mul") {
     stats.xpMul += value;
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "knockback_retaliate") {
+    // Repulsion Field: enemies that damage you are shoved away.
+    stats.knockbackRetaliate += value;
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "knockback_mul") {
+    // Impact: every knockback the player deals is stronger.
+    stats.knockbackMul += value;
     return {true, 0.0F, 0.0F};
   }
   if (effect == "last_stand") {
@@ -417,6 +432,7 @@ void Game::fixedUpdate() {
   fireWeapons();
   updateProjectiles();
   updateOrbitBlades();
+  updateHaloBeams();
   updateBombProjectiles();
   updateBoomerangProjectiles();
   updateBounceProjectiles();
@@ -631,6 +647,15 @@ void Game::updateEnemies() {
       v.x *= inv;
       v.y *= inv;
     }
+    // Knockback shove: added on top of the clamped AI velocity, then decays
+    // over a handful of ticks so hits genuinely push enemies around.
+    v.x += en.kbX;
+    v.y += en.kbY;
+    constexpr float kKbDecay = 0.82F;
+    en.kbX *= kKbDecay;
+    en.kbY *= kKbDecay;
+    if (std::abs(en.kbX) < 0.01F) en.kbX = 0.0F;
+    if (std::abs(en.kbY) < 0.01F) en.kbY = 0.0F;
     t.x += v.x / 60.0F;
     t.y += v.y / 60.0F;
 
@@ -652,6 +677,7 @@ void Game::updateEnemies() {
         en.slowT = 2.0F;
       }
       hurtPlayer(en.touch);
+      retaliateKnockback(e);
       iframes_ = iframeDuration(kContactIframes);
       spawnParticles(pt.x, pt.y, {1.0F, 0.3F, 0.3F, 1.0F}, 6, 4.0F);
       if (php.hp <= 0.0F) {
@@ -1205,6 +1231,12 @@ void Game::fireWeapons() {
         w.timer = cooldown;
         break;
       }
+      case AttackType::Halo: {
+        // Halo beams are persistent entities created in addWeapon()/syncHaloBeams
+        // and steered in updateHaloBeams(); firing only paces the cooldown.
+        w.timer = cooldown;
+        break;
+      }
     }
   }
 }
@@ -1214,6 +1246,9 @@ void Game::applyEnemyDamage(entt::entity e, float dmg) {
   auto* eh = registry_.try_get<Health>(e);
   if (eh == nullptr || eh->hp <= 0.0F) return;
   auto* tr = registry_.try_get<EnemyTraits>(e);
+  const float hpBefore = eh->hp;
+  const float raw = dmg; // pre-mitigation damage, used for the lethal check
+  const bool hadShield = tr != nullptr && tr->shield > 0.0F;
   // Enemy defense runs through the SAME flat+percent curve as the player's
   // (mitigateDamage), and grows over the run so late enemies tank more.
   if (tr != nullptr && tr->defense > 0.0F) {
@@ -1227,7 +1262,12 @@ void Game::applyEnemyDamage(entt::entity e, float dmg) {
                    {0.5F, 0.8F, 1.0F, 1.0F}, 2, 2.0F);
   }
   eh->hp -= dmg;
-  if (eh->hp <= 0.0F) {
+  // A hit whose raw damage already covers the remaining HP always kills:
+  // defense mitigation must never leave a "0 HP" enemy standing. Shields are
+  // exempt so the Shielded trait still buys its buffer.
+  const bool rawLethal = raw >= hpBefore && !hadShield;
+  if (rawLethal || eh->hp <= kEnemyDeathEpsilon) {
+    eh->hp = 0.0F;
     killEnemy(e);
   }
 }
@@ -1364,15 +1404,30 @@ void Game::tryLifesteal(entt::entity source) {
 
 // Applies knockback to an enemy, reduced by its knockback resistance.
 void Game::applyKnockback(entt::entity e, float angle, float force) {
-  auto* ev = registry_.try_get<Velocity>(e);
-  if (ev == nullptr) return;
+  // Store the shove as a decaying knockback velocity on the enemy. The AI seek
+  // overwrites Velocity every tick, so writing it there would be a no-op; this
+  // separate channel is added to movement in updateEnemies and decays away.
+  auto* en = registry_.try_get<Enemy>(e);
+  if (en == nullptr) return;
   float res = 0.0F;
   if (auto* tr = registry_.try_get<EnemyTraits>(e)) {
     res = tr->knockbackRes;
   }
-  const float f = force * (1.0F - std::clamp(res, 0.0F, 1.0F));
-  ev->x += std::cos(angle) * f;
-  ev->y += std::sin(angle) * f;
+  const float f = force * stats_.knockbackMul *
+                  (1.0F - std::clamp(res, 0.0F, 1.0F));
+  en->kbX += std::cos(angle) * f;
+  en->kbY += std::sin(angle) * f;
+}
+
+void Game::retaliateKnockback(entt::entity attacker) {
+  if (stats_.knockbackRetaliate <= 0.0F) return;
+  if (attacker == entt::null || !registry_.valid(attacker)) return;
+  if (player_ == entt::null || !registry_.valid(player_)) return;
+  const auto& pt = registry_.get<Transform>(player_);
+  const auto& at = registry_.get<Transform>(attacker);
+  // Shove the attacker directly away from the player.
+  const float angle = std::atan2(at.y - pt.y, at.x - pt.x);
+  applyKnockback(attacker, angle, stats_.knockbackRetaliate);
 }
 
 void Game::updateProjectiles() {
@@ -1543,6 +1598,81 @@ void Game::updateOrbitBlades() {
       const float dealt = hpBefore - eh->hp;
       if (dealt > 0.0F) tryLifesteal(en);
       spawnParticles(et.x, et.y, {0.85F, 0.9F, 1.0F, 1.0F}, 2, 2.0F);
+    }
+  }
+}
+
+void Game::updateHaloBeams() {
+  if (player_ == entt::null || !registry_.valid(player_)) return;
+  const auto& pt = registry_.get<Transform>(player_);
+  const float dt = 1.0F / 60.0F;
+  auto view = registry_.view<Transform, HaloBeam>();
+  for (const auto e : view) {
+    auto& t = view.get<Transform>(e);
+    auto& hb = view.get<HaloBeam>(e);
+
+    // Derive damage/pierce/spin/length from the owning weapon slot each tick so
+    // upgrades (projectile count, damage, fire rate) apply to existing beams.
+    const bool owned = hb.weaponIndex >= 0 && hb.weaponIndex < weaponCount_;
+    const float damage = owned ? weapons_[hb.weaponIndex].damage * stats_.damageMul
+                               : hb.damage * stats_.damageMul;
+    const int pierce = owned ? weapons_[hb.weaponIndex].pierce + stats_.pierceAdd
+                             : hb.pierce + stats_.pierceAdd;
+    const float spin = owned ? weapons_[hb.weaponIndex].orbitSpeed : hb.spin;
+    const float length = owned ? weapons_[hb.weaponIndex].beamRange : hb.length;
+    const float width = owned ? weapons_[hb.weaponIndex].beamWidth : hb.width;
+    const float knockback =
+        owned ? weapons_[hb.weaponIndex].haloKnockback : hb.knockback;
+
+    t.px = t.x;
+    t.py = t.y;
+    // Attack speed also spins the halo faster, like the dagger ring.
+    hb.angle += spin * std::max(0.5F, 1.0F + stats_.fireRateBonus) * dt;
+    t.x = pt.x;
+    t.y = pt.y;
+
+    const float ex = pt.x + std::cos(hb.angle) * length;
+    const float ey = pt.y + std::sin(hb.angle) * length;
+    const float dx = ex - pt.x;
+    const float dy = ey - pt.y;
+    const float len = std::sqrt(dx * dx + dy * dy);
+    if (len < 0.001F) continue;
+
+    // Damage enemies along the spoke (falloff when it sweeps a whole row).
+    auto enemyView = registry_.view<Transform, Health, Radius, Enemy>();
+    std::vector<entt::entity> hits;
+    std::vector<float> hx;
+    std::vector<float> hy;
+    for (const auto en : enemyView) {
+      const auto& et = enemyView.get<Transform>(en);
+      const auto& er = enemyView.get<Radius>(en);
+      const float lx = et.x - pt.x;
+      const float ly = et.y - pt.y;
+      const float proj = (lx * dx + ly * dy) / len;
+      if (proj < 0.0F || proj > len) continue;
+      const float closestX = pt.x + (dx / len) * proj;
+      const float closestY = pt.y + (dy / len) * proj;
+      const float ddx = et.x - closestX;
+      const float ddy = et.y - closestY;
+      if (std::sqrt(ddx * ddx + ddy * ddy) > width * 0.5F + er.r) continue;
+      auto* eh = registry_.try_get<Health>(en);
+      if (eh == nullptr || eh->hp <= 0.0F) continue;
+      hits.push_back(en);
+      hx.push_back(et.x);
+      hy.push_back(et.y);
+    }
+    const float haloMul = aoeFalloff(static_cast<int>(hits.size()), pierce);
+    for (std::size_t hi = 0; hi < hits.size(); ++hi) {
+      auto* eh = registry_.try_get<Health>(hits[hi]);
+      if (eh == nullptr) continue;
+      const float hpBefore = eh->hp;
+      applyEnemyDamage(hits[hi], damage * dt * haloMul);
+      if (hpBefore - eh->hp > 0.0F) tryLifesteal(hits[hi]);
+      // The spoke shoves what it touches outward (super halo).
+      if (knockback > 0.0F) {
+        applyKnockback(hits[hi], hb.angle, knockback * dt);
+      }
+      spawnParticles(hx[hi], hy[hi], {1.0F, 1.0F, 0.75F, 1.0F}, 2, 2.0F);
     }
   }
 }
@@ -2395,9 +2525,11 @@ void Game::spawnWave() {
     // independently). Elites from 45s, champions from 120s, overlords from
     // 300s; chances creep up with time.
     const float eliteChance = std::min(0.15F, 0.05F + simTime_ * 0.0005F);
-    const float champChance = std::min(0.05F, 0.015F + simTime_ * 0.00025F);
+    // Champions and overlords are intentionally rarer: one unlucky fast tank
+    // should not decide an entire run.
+    const float champChance = std::min(0.03F, 0.008F + simTime_ * 0.00015F);
     const float overlordChance =
-        simTime_ >= 300.0F ? std::min(0.02F, 0.008F + (simTime_ - 300.0F) * 0.00008F) : 0.0F;
+        simTime_ >= 300.0F ? std::min(0.012F, 0.004F + (simTime_ - 300.0F) * 0.00005F) : 0.0F;
     bool memberElite = simTime_ >= 45.0F && unit(rng_) < eliteChance;
     bool memberChampion = simTime_ >= 120.0F && unit(rng_) < champChance;
     const bool memberOverlord = simTime_ >= 300.0F && unit(rng_) < overlordChance;
@@ -2687,11 +2819,13 @@ void Game::chooseUpgrade(int slot) {
     }
     ++stacks_[static_cast<std::size_t>(choice.index)];
 
-    // Global "+1 projectile" upgrades also add orbit blades.
+    // Global "+1 projectile" upgrades also add orbit blades / halo spokes.
     if (def.effect == "proj_add") {
       for (int s = 0; s < weaponCount_; ++s) {
         if (weapons_[s].attackType == AttackType::Orbit) {
           syncOrbitBlades(s);
+        } else if (weapons_[s].attackType == AttackType::Halo) {
+          syncHaloBeams(s);
         }
       }
     }
@@ -2778,6 +2912,9 @@ void Game::addWeapon(int defIndex) {
   w.beamWidth = def.beamWidth;
   w.beamDuration = def.beamDuration;
 
+  // Halo
+  w.haloKnockback = def.haloKnockback;
+
   // Sweep
   w.sweepAngle = def.sweepAngle;
   w.sweepRadius = def.sweepRadius;
@@ -2819,6 +2956,10 @@ void Game::addWeapon(int defIndex) {
   // w.projectiles + stats_.projAdd so "+1 projectile" upgrades add blades.
   if (w.attackType == AttackType::Orbit && player_ != entt::null && registry_.valid(player_)) {
     syncOrbitBlades(weaponCount_ - 1);
+  }
+  // Halo evolution: persistent rotating beams, count tracks projectiles.
+  if (w.attackType == AttackType::Halo && player_ != entt::null && registry_.valid(player_)) {
+    syncHaloBeams(weaponCount_ - 1);
   }
 }
 
@@ -2891,6 +3032,70 @@ void Game::syncOrbitBlades(int slot) {
   }
 }
 
+void Game::syncHaloBeams(int slot) {
+  if (slot < 0 || slot >= weaponCount_) return;
+  if (player_ == entt::null || !registry_.valid(player_)) return;
+  auto& w = weapons_[slot];
+  if (w.attackType != AttackType::Halo) return;
+
+  const int desired = std::max(1, w.projectiles + stats_.projAdd);
+
+  std::vector<entt::entity> beams;
+  float phase = 0.0F;
+  bool havePhase = false;
+  for (const auto e : registry_.view<HaloBeam>()) {
+    auto& hb = registry_.get<HaloBeam>(e);
+    if (hb.weaponIndex == slot) {
+      if (!havePhase) {
+        phase = hb.angle;
+        havePhase = true;
+      }
+      beams.push_back(e);
+    }
+  }
+
+  while (static_cast<int>(beams.size()) < desired) {
+    const auto beam = registry_.create();
+    registry_.emplace<Transform>(beam, 0.0F, 0.0F, 0.0F, 0.0F);
+    registry_.emplace<Radius>(beam, w.beamWidth * 0.5F);
+    Sprite s{};
+    s.color = w.color;
+    s.circle = false;
+    registry_.emplace<Sprite>(beam, s);
+    HaloBeam hb{};
+    hb.damage = w.damage;
+    hb.pierce = w.pierce;
+    hb.length = w.beamRange;
+    hb.width = w.beamWidth;
+    hb.angle = 0.0F;
+    hb.spin = w.orbitSpeed;
+    hb.knockback = w.haloKnockback;
+    hb.weaponIndex = slot;
+    hb.color = w.color;
+    registry_.emplace<HaloBeam>(beam, hb);
+    beams.push_back(beam);
+  }
+  while (static_cast<int>(beams.size()) > desired) {
+    destroyQueue_.push_back(beams.back());
+    beams.pop_back();
+  }
+
+  // Re-space evenly around the player, preserving the ring's phase.
+  const float step = 2.0F * kPi / static_cast<float>(desired);
+  phase = std::round(phase / step) * step;
+  const auto& pt = registry_.get<Transform>(player_);
+  for (int i = 0; i < desired; ++i) {
+    const auto e = beams[static_cast<std::size_t>(i)];
+    auto& hb = registry_.get<HaloBeam>(e);
+    hb.angle = phase + static_cast<float>(i) * step;
+    auto& t = registry_.get<Transform>(e);
+    t.px = pt.x;
+    t.py = pt.y;
+    t.x = pt.x;
+    t.y = pt.y;
+  }
+}
+
 void Game::applyWeaponEffect(int slotIndex, std::string_view effect, float value) {
   if (slotIndex < 0 || slotIndex >= weaponCount_) return;
   auto& w = weapons_[slotIndex];
@@ -2900,6 +3105,8 @@ void Game::applyWeaponEffect(int slotIndex, std::string_view effect, float value
     w.projectiles += static_cast<int>(value);
     if (w.attackType == AttackType::Orbit) {
       syncOrbitBlades(slotIndex);
+    } else if (w.attackType == AttackType::Halo) {
+      syncHaloBeams(slotIndex);
     }
   } else if (effect == "w_pierce_add") {
     w.pierce += static_cast<int>(value);
@@ -3121,6 +3328,9 @@ void Game::testClearWeapons() {
   for (auto e : registry_.view<OrbitBlade>()) {
     registry_.destroy(e);
   }
+  for (auto e : registry_.view<HaloBeam>()) {
+    registry_.destroy(e);
+  }
   // Drop every live projectile/effect so the eternal orb or in-flight blades
   // never linger into the next test (or the restored run) after a swap.
   for (auto e : registry_.view<Projectile>()) registry_.destroy(e);
@@ -3173,6 +3383,8 @@ void Game::exitTestMode() {
   for (int s = 0; s < weaponCount_; ++s) {
     if (weapons_[s].attackType == AttackType::Orbit) {
       syncOrbitBlades(s);
+    } else if (weapons_[s].attackType == AttackType::Halo) {
+      syncHaloBeams(s);
     }
   }
 }
@@ -3202,6 +3414,8 @@ void Game::toggleTestBoost() {
   for (int s = 0; s < weaponCount_; ++s) {
     if (weapons_[s].attackType == AttackType::Orbit) {
       syncOrbitBlades(s);
+    } else if (weapons_[s].attackType == AttackType::Halo) {
+      syncHaloBeams(s);
     }
   }
 }
@@ -3293,6 +3507,7 @@ Game::DebugCounts Game::debugCounts() const {
   DebugCounts c;
   c.projectiles = registry_.view<Projectile>().size();
   c.orbitBlades = registry_.view<OrbitBlade>().size();
+  c.halos = registry_.view<HaloBeam>().size();
   c.bombs = registry_.view<BombProjectile>().size();
   c.boomerangs = registry_.view<BoomerangProjectile>().size();
   c.bounces = registry_.view<BounceProjectile>().size();
@@ -3308,6 +3523,35 @@ float Game::testFirstEnemyHp() const {
   auto view = registry_.view<Health, Enemy>();
   for (const auto e : view) {
     return view.get<Health>(e).hp;
+  }
+  return -1.0F;
+}
+
+void Game::testSetFirstEnemyHp(float hp) {
+  auto view = registry_.view<Health, Enemy>();
+  for (const auto e : view) {
+    view.get<Health>(e).hp = hp;
+    return;
+  }
+}
+
+void Game::testDamageFirstEnemy(float dmg) {
+  auto view = registry_.view<Health, Enemy>();
+  for (const auto e : view) {
+    applyEnemyDamage(e, dmg);
+    return;
+  }
+}
+
+float Game::testFirstEnemyDistToPlayer() const {
+  if (player_ == entt::null || !registry_.valid(player_)) return -1.0F;
+  const auto& pt = registry_.get<Transform>(player_);
+  auto view = registry_.view<Transform, Enemy>();
+  for (const auto e : view) {
+    const auto& t = view.get<Transform>(e);
+    const float dx = t.x - pt.x;
+    const float dy = t.y - pt.y;
+    return std::sqrt(dx * dx + dy * dy);
   }
   return -1.0F;
 }
@@ -3435,6 +3679,7 @@ static const char* attackTypeName(AttackType t) {
     case AttackType::Nova: return "nova";
     case AttackType::Inferno: return "inferno";
     case AttackType::Pulsar: return "pulsar";
+    case AttackType::Halo: return "halo";
   }
   return "?";
 }
@@ -3807,6 +4052,32 @@ void Game::render(core::render::Batcher& b, float alpha) {
     }
   }
 
+  // Halo beams (evolution): bright spokes of light rotating around the player.
+  {
+    auto view = registry_.view<Transform, HaloBeam>();
+    for (const auto e : view) {
+      const auto& t = view.get<Transform>(e);
+      const auto& hb = view.get<HaloBeam>(e);
+      const float len = hb.length;
+      const float ex = t.x + std::cos(hb.angle) * len;
+      const float ey = t.y + std::sin(hb.angle) * len;
+      Color glow = hb.color;
+      glow.a = 0.16F;
+      Color core = hb.color;
+      core.a = 0.95F;
+      const int steps = std::max(1, static_cast<int>(len / std::max(0.03F, hb.width * 0.15F)));
+      for (int s = 0; s <= steps; ++s) {
+        const float fr = static_cast<float>(s) / static_cast<float>(steps);
+        const float sx = t.x + (ex - t.x) * fr;
+        const float sy = t.y + (ey - t.y) * fr;
+        b.circle(sx, sy, hb.width * 0.52F, glow);
+        b.circle(sx, sy, hb.width * 0.30F, core);
+      }
+      // Bright hub where the spoke meets the player.
+      b.circle(t.x, t.y, hb.width * 0.7F, core);
+    }
+  }
+
   // Bombs (hammer): body + faint shadow beneath to sell the arc.
   {
     auto view = registry_.view<Transform, BombProjectile, Radius>();
@@ -4133,8 +4404,11 @@ void Game::render(core::render::Batcher& b, float alpha) {
           renderWrappedText(b, x + 16.0F, y + 80.0F, 1.7F,
                             Color{0.85F, 0.85F, 0.9F, 1.0F}, def.desc,
                             cardW - 32.0F, 14.0F);
-          const std::string tag = def.prereqs.empty() ? "NEW WEAPON"
-                                                       : "EVOLUTION! (A+B)";
+          const std::string tag =
+              def.prereqs.empty()
+                  ? "NEW WEAPON"
+                  : (def.prereqs.size() >= 3 ? "SUPER EVOLUTION! (A+B+C)"
+                                             : "EVOLUTION! (A+B)");
           b.text(x + 16.0F, y + cardH - 30.0F, 1.5F, teal, tag);
         }
         x += cardW + gap;
@@ -4185,7 +4459,8 @@ void Game::render(core::render::Batcher& b, float alpha) {
     if (weaponCount_ >= 1) {
       const auto& def = content_.weapons[static_cast<std::size_t>(weapons_[0].def)];
       wname = def.name;
-      wtag = def.prereqs.empty() ? "" : " (EVO)";
+      wtag = def.prereqs.empty() ? ""
+                                 : (def.prereqs.size() >= 3 ? " (SUPER)" : " (EVO)");
     }
     const std::string title =
         "WEAPON TEST " + std::to_string(testWeaponIdx_ + 1) + "/" +

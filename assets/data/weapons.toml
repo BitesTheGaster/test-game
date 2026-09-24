@@ -58,7 +58,7 @@ name = "Heavy Crossbow"
 desc = "Slow, homing piercing bolt that punches through crowds."
 attack_type = "projectile"
 damage = 20.0
-cooldown = 1.20
+cooldown = 2.20
 projectiles = 1
 proj_speed = 22.0
 proj_life = 2.0
@@ -248,3 +248,60 @@ requires = ["beam", "shuriken"]
 boomerang_range = 6.5
 boomerang_return_speed = 2.4
 beam_width = 0.5
+
+[[weapon]]
+id = "halo"
+name = "Radiant Halo"
+desc = "Dagger + Lance. Blades of light orbit you, reaping all they touch."
+attack_type = "halo"
+damage = 55.0
+cooldown = 1.00
+projectiles = 2
+proj_speed = 0.0
+proj_life = 0.0
+pierce = 4
+spread = 0.0
+proj_color = [1.0, 0.95, 0.5, 1.0]
+requires = ["dagger", "beam"]
+orbit_speed = 2.6
+beam_range = 6.0
+beam_width = 0.5
+
+# --- Super evolutions (A+B+C = super) ----------------------------------------
+
+[[weapon]]
+id = "aether"
+name = "Aetherstorm"
+desc = "Wand + Crossbow + Shuriken. A storm of returning light-blades dragging searing trails."
+attack_type = "pulsar"
+damage = 26.0
+cooldown = 0.65
+projectiles = 3
+proj_speed = 24.0
+proj_life = 2.6
+pierce = 6
+spread = 0.14
+proj_color = [0.70, 0.90, 1.00, 1.0]
+requires = ["wand", "crossbow", "shuriken"]
+boomerang_range = 9.0
+boomerang_return_speed = 2.8
+beam_width = 0.8
+
+[[weapon]]
+id = "helios"
+name = "Helios Wheel"
+desc = "Dagger + Lance + Hammer. Four blades of sunlight orbit you, crushing and hurling all they touch."
+attack_type = "halo"
+damage = 90.0
+cooldown = 0.80
+projectiles = 4
+proj_speed = 0.0
+proj_life = 0.0
+pierce = 6
+spread = 0.0
+proj_color = [1.00, 0.85, 0.35, 1.0]
+requires = ["dagger", "beam", "hammer"]
+orbit_speed = 3.2
+beam_range = 8.0
+beam_width = 0.6
+halo_knockback = 5.0

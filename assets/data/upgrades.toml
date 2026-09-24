@@ -41,6 +41,14 @@ value = 1
 max_stacks = 4
 
 [[upgrade]]
+id = "impact"
+name = "Impact"
+desc = "+45% knockback from all your attacks and bursts"
+effect = "knockback_mul"
+value = 0.45
+max_stacks = 3
+
+[[upgrade]]
 id = "boots"
 name = "Swift Boots"
 desc = "+12% move speed"
@@ -473,6 +481,15 @@ name = "Last Stand"
 desc = "Taking a hit below 20% HP grants 1s of invulnerability (20s cooldown)"
 effect = "last_stand"
 value = 1
+max_stacks = 1
+kind = "unique"
+
+[[upgrade]]
+id = "u_repulsion"
+name = "Repulsion Field"
+desc = "Enemies that strike you are violently knocked away"
+effect = "knockback_retaliate"
+value = 6
 max_stacks = 1
 kind = "unique"
 

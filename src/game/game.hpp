@@ -82,7 +82,7 @@ struct PlayerStats {
   // this many radians (0.5236 = +/- 30 degrees).
   float aimJitter = 0.0F;
   int extraChoice = 0;    // +N level-up cards
-  int rerollCharges = 1;  // +N free rerolls per level-up (1 base)
+  int rerollCharges = 0;  // +N extra rerolls (the base budget is already 1)
   float thornsDmg = 0.0F; // AoE burst around player on hit
   int adrenaline = 0;     // speed burst when HP is low
   int blackHole = 0;      // periodic enemy pull
@@ -90,6 +90,10 @@ struct PlayerStats {
   int bloodPrice = 0;     // every 20 kills, burst around player
   int iceBlood = 0;       // enemies that hit you get slowed
   int lastStand = 0;      // 1s of iframes when hit below 20% HP (cooldown)
+  // Repulsion Field unique: enemies that strike the player are shoved away.
+  float knockbackRetaliate = 0.0F;
+  // Impact cards: multiplies every knockback the player deals (default 1).
+  float knockbackMul = 1.0F;
 };
 
 struct UpgradeEffectResult {
@@ -202,6 +206,13 @@ public:
   }
   // Test helper: current HP of the first Enemy in the registry (-1 if none).
   [[nodiscard]] float testFirstEnemyHp() const;
+  // Test helper: overwrite the first enemy's current HP (death-boundary tests).
+  void testSetFirstEnemyHp(float hp);
+  // Test helper: route a raw damage packet through applyEnemyDamage() on the
+  // first enemy (so defense mitigation and the lethal rule are exercised).
+  void testDamageFirstEnemy(float dmg);
+  // Test helper: distance from the player to the first Enemy (-1 if none).
+  [[nodiscard]] float testFirstEnemyDistToPlayer() const;
   // Test helper: current speed (velocity magnitude) of every live Enemy.
   [[nodiscard]] std::vector<float> testEnemySpeeds() const;
   // Test helper: current HP of every live Enemy (order unspecified — use for
@@ -244,6 +255,7 @@ public:
   struct DebugCounts {
     std::size_t projectiles = 0;
     std::size_t orbitBlades = 0;
+    std::size_t halos = 0;
     std::size_t bombs = 0;
     std::size_t boomerangs = 0;
     std::size_t bounces = 0;
@@ -305,6 +317,9 @@ private:
     float beamWidth = 0.3F;
     float beamDuration = 0.15F;
 
+    // Halo (evolution)
+    float haloKnockback = 0.0F;
+
     // Sweep
     float sweepAngle = 3.14F;
     float sweepRadius = 2.0F;
@@ -344,7 +359,7 @@ private:
     float uniqueHeal = 0.0F; // scythe "Reaper's Harvest": heal HP per kill
     int beamSplit = 0;       // beam "Prism Lance": beam count multiplier
   };
-  static constexpr int kMaxWeapons = 4;
+  static constexpr int kMaxWeapons = 5;
 
   // Pending spawn telegraphs (enemies walk in after a short warning).
   struct PendingSpawn {
@@ -377,6 +392,7 @@ private:
   void updateEnemies();
   void updateProjectiles();
   void updateOrbitBlades();
+  void updateHaloBeams();
   void updateBombProjectiles();
   void updateBoomerangProjectiles();
   void updateBounceProjectiles();
@@ -400,6 +416,7 @@ private:
   void reroll();
   void addWeapon(int defIndex);
   void syncOrbitBlades(int slot); // add orbit blades up to the current count
+  void syncHaloBeams(int slot);   // add halo beams up to the current count
   void applyWeaponEffect(int slotIndex, std::string_view effect, float value);
   int findWeaponSlot(std::string_view weaponId) const;
   bool ownsWeapon(int defIndex) const;
@@ -412,6 +429,8 @@ private:
   void chainBolt(float x, float y, float dmg);
   void tryLifesteal(entt::entity source); // chance-based heal on a damaging hit
   void applyKnockback(entt::entity e, float angle, float force);
+  // Repulsion Field unique: shove an enemy that just damaged the player.
+  void retaliateKnockback(entt::entity attacker);
   void explodeBomb(entt::entity bomb, const BombProjectile& bp, float x, float y);
   void hurtPlayer(float amount);
   void damagePlayerDirect(float amount); // no thorns trigger (DoT auras)

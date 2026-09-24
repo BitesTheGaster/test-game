@@ -101,7 +101,7 @@ TEST_CASE("applyUpgrade supports unique-item effects") {
   REQUIRE(game::applyUpgrade(s, "extra_choice", 1.0F).valid);
   REQUIRE(s.extraChoice == 1);
   REQUIRE(game::applyUpgrade(s, "reroll_add", 1.0F).valid);
-  REQUIRE(s.rerollCharges == 2);  // default 1 base + 1 from item
+  REQUIRE(s.rerollCharges == 1);  // base budget is 1, item adds +1 (total 2)
   REQUIRE(game::applyUpgrade(s, "thorns", 3.0F).valid);
   REQUIRE(s.thornsDmg == Catch::Approx(3.0F));
   REQUIRE(game::applyUpgrade(s, "adrenaline", 1.0F).valid);
@@ -117,6 +117,15 @@ TEST_CASE("applyUpgrade supports unique-item effects") {
   // Last Stand unique flag.
   REQUIRE(game::applyUpgrade(s, "last_stand", 1.0F).valid);
   REQUIRE(s.lastStand == 1);
+  // Repulsion Field: retaliation knockback force.
+  REQUIRE(game::applyUpgrade(s, "knockback_retaliate", 6.0F).valid);
+  REQUIRE(s.knockbackRetaliate == Catch::Approx(6.0F));
+  // Impact: a global multiplier on every knockback the player deals.
+  REQUIRE(s.knockbackMul == Catch::Approx(1.0F)); // default
+  REQUIRE(game::applyUpgrade(s, "knockback_mul", 0.45F).valid);
+  REQUIRE(s.knockbackMul == Catch::Approx(1.45F));
+  REQUIRE(game::applyUpgrade(s, "knockback_mul", 0.45F).valid);
+  REQUIRE(s.knockbackMul == Catch::Approx(1.90F));
 }
 
 TEST_CASE("attackCooldown: delay = base / (1 + additive fire-rate bonus)") {
@@ -504,7 +513,10 @@ TEST_CASE("Milestones fire on power-of-two levels (4, 8, ...) not 5") {
   g.grantXp(game::xpForLevel(5));
   REQUIRE(g.state() == game::RunState::LevelUp);
   REQUIRE_FALSE(g.milestoneOffer());
-  REQUIRE(g.upgradeChoices().size() == 3);
+  // Normal level-up offers the base hand of 3, plus any Gambler's Eye picks
+  // the random cards above may have granted.
+  REQUIRE(g.upgradeChoices().size() ==
+          static_cast<std::size_t>(3 + g.stats().extraChoice));
 }
 
 TEST_CASE("Reroll refreshes the offered choices once per level-up") {
@@ -520,13 +532,10 @@ TEST_CASE("Reroll refreshes the offered choices once per level-up") {
   REQUIRE(g.state() == game::RunState::LevelUp); // still choosing
   REQUIRE(g.rerollsUsed() == 1);
 
-  // A second reroll also succeeds (1 base + 1 from reroll_add = 2 budget).
+  // The base budget is exactly ONE reroll (the Second Chance unique adds a
+  // second), so another reroll this level-up is a no-op.
   g.advance(1.0F / 60.0F, in);
-  REQUIRE(g.rerollsUsed() == 2);
-
-  // A third reroll is a no-op (budget exhausted).
-  g.advance(1.0F / 60.0F, in);
-  REQUIRE(g.rerollsUsed() == 2);
+  REQUIRE(g.rerollsUsed() == 1);
 }
 
 // --- Enemy movement ----------------------------------------------------------
@@ -625,6 +634,8 @@ TEST_CASE("Weapon attack types are loaded correctly") {
   REQUIRE(crossbow->attackType == game::AttackType::Projectile);
   // homing is now handled in fireWeapons via weapon slot data
   REQUIRE(crossbow->starter == true);
+  // Reload was roughly doubled: a slow, heavy, hard-hitting bolt.
+  REQUIRE(crossbow->cooldown == Catch::Approx(2.20F));
   
   const auto* flame = content.weapon("flame");
   REQUIRE(flame != nullptr);
@@ -701,6 +712,29 @@ TEST_CASE("Weapon attack types are loaded correctly") {
   REQUIRE(pulsar->boomerangRange > 0.0F);
   REQUIRE(pulsar->beamWidth > 0.0F);
   REQUIRE(pulsar->prereqs.size() == 2);
+
+  const auto* halo = content.weapon("halo");
+  REQUIRE(halo != nullptr);
+  REQUIRE(halo->attackType == game::AttackType::Halo);
+  REQUIRE(halo->beamRange > 0.0F);
+  REQUIRE(halo->beamWidth > 0.0F);
+  REQUIRE(halo->orbitSpeed > 0.0F);
+  REQUIRE(halo->prereqs.size() == 2);
+
+  // Super evolutions: three prerequisites (A+B+C), the marquee build payoff.
+  const auto* aether = content.weapon("aether");
+  REQUIRE(aether != nullptr);
+  REQUIRE(aether->attackType == game::AttackType::Pulsar);
+  REQUIRE(aether->prereqs.size() == 3);
+  REQUIRE(aether->damage > 0.0F);
+  REQUIRE(aether->projectiles >= 3);
+
+  const auto* helios = content.weapon("helios");
+  REQUIRE(helios != nullptr);
+  REQUIRE(helios->attackType == game::AttackType::Halo);
+  REQUIRE(helios->prereqs.size() == 3);
+  REQUIRE(helios->projectiles >= 4);
+  REQUIRE(helios->haloKnockback > 0.0F);
 }
 
 TEST_CASE("Orbit weapon creates blades on acquisition") {
@@ -1281,6 +1315,119 @@ TEST_CASE("Pulsar evolves beam + shuriken into a slicing laser trail") {
   }
 }
 
+TEST_CASE("Halo evolves dagger + beam into beams orbiting the player") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 91};
+  g.testDisableWaves();
+  g.testClearWeapons();
+  int haloIdx = -1;
+  for (std::size_t i = 0; i < content.weapons.size(); ++i) {
+    if (content.weapons[i].id == "halo") {
+      haloIdx = static_cast<int>(i);
+      break;
+    }
+  }
+  REQUIRE(haloIdx >= 0);
+  g.testAddWeapon(haloIdx);
+  game::FrameInput in{};
+  g.advance(1.0F / 60.0F, in);
+  // Two persistent spokes by default.
+  REQUIRE(g.debugCounts().halos == 2);
+  // "+1 projectile" adds a third spoke.
+  g.testAddWeaponUpgrade(0, "w_proj_add", 1.0F);
+  REQUIRE(g.debugCounts().halos == 3);
+
+  // An enemy in the ring is carved by the sweeping spokes over time.
+  g.testSpawnEnemyAt(2.0F, 0.0F);
+  for (int i = 0; i < 180; ++i) g.advance(1.0F / 60.0F, in);
+  REQUIRE(g.testFirstEnemyHp() < 100000.0F);
+}
+
+TEST_CASE("Repulsion Field shoves enemies that strike the player") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  const auto endDist = [&](float retaliate) {
+    game::Game g{content, 5};
+    g.testDisableWaves();
+    g.testClearWeapons();
+    g.stats().knockbackRetaliate = retaliate;
+    // Just inside contact range, so the enemy lands a hit immediately.
+    g.testSpawnEnemyAt(0.3F, 0.0F);
+    game::FrameInput in{};
+    for (int i = 0; i < 60; ++i) g.advance(1.0F / 60.0F, in);
+    return g.testFirstEnemyDistToPlayer();
+  };
+  const float without = endDist(0.0F);
+  const float with = endDist(6.0F);
+  REQUIRE(without > 0.0F);
+  // The retaliation shove pushes the attacker clearly farther away.
+  REQUIRE(with > without + 0.2F);
+}
+
+TEST_CASE("Impact multiplies the knockback the player deals") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  const auto endDist = [&](float knockbackMul) {
+    game::Game g{content, 5};
+    g.testDisableWaves();
+    g.testClearWeapons();
+    g.stats().knockbackRetaliate = 6.0F;
+    g.stats().knockbackMul = knockbackMul;
+    g.testSpawnEnemyAt(0.3F, 0.0F);
+    game::FrameInput in{};
+    for (int i = 0; i < 60; ++i) g.advance(1.0F / 60.0F, in);
+    return g.testFirstEnemyDistToPlayer();
+  };
+  const float plain = endDist(1.0F);
+  const float boosted = endDist(2.0F);
+  REQUIRE(plain > 0.0F);
+  // Doubling the multiplier shoves the attacker farther than the base shove.
+  REQUIRE(boosted > plain + 0.1F);
+}
+
+TEST_CASE("Super evolutions require three weapons") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  const auto* aether = content.weapon("aether");
+  const auto* helios = content.weapon("helios");
+  REQUIRE(aether != nullptr);
+  REQUIRE(helios != nullptr);
+  REQUIRE(aether->prereqs ==
+          std::vector<std::string>{"wand", "crossbow", "shuriken"});
+  REQUIRE(helios->prereqs ==
+          std::vector<std::string>{"dagger", "beam", "hammer"});
+
+  // Helios is a halo super: it spawns four spokes and a "+1 projectile" card
+  // adds a fifth.
+  int heliosIdx = -1;
+  for (std::size_t i = 0; i < content.weapons.size(); ++i) {
+    if (content.weapons[i].id == "helios") heliosIdx = static_cast<int>(i);
+  }
+  REQUIRE(heliosIdx >= 0);
+  game::Game g{content, 17};
+  g.testDisableWaves();
+  g.testClearWeapons();
+  g.testAddWeapon(heliosIdx);
+  game::FrameInput in{};
+  g.advance(1.0F / 60.0F, in);
+  REQUIRE(g.debugCounts().halos == 4);
+  g.testAddWeaponUpgrade(0, "w_proj_add", 1.0F);
+  REQUIRE(g.debugCounts().halos == 5);
+}
+
+TEST_CASE("A hit that covers the remaining HP always kills") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 7};
+  g.testDisableWaves();
+  g.testClearWeapons();
+  // Skip the opening grace period so the elite actually has defense and would
+  // mitigate the hit below its remaining HP.
+  game::FrameInput in{};
+  for (int i = 0; i < 31 * 60; ++i) g.advance(1.0F / 60.0F, in);
+  g.testSpawnTieredEnemyAt(5.0F, 0.0F, 1);
+  g.testSetFirstEnemyHp(10.0F);
+  // Raw damage equals the remaining HP: it must die, not linger at ~0 HP.
+  g.testDamageFirstEnemy(10.0F);
+  REQUIRE(g.testFirstEnemyHp() <= 0.0F);
+}
+
 TEST_CASE("Cone weapon deals instant cone damage") {
   const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
   game::Game g{content, 333};
@@ -1458,6 +1605,9 @@ TEST_CASE("Every weapon creates its attack-type entities") {
       {"nova", &game::Game::DebugCounts::novas},
       {"inferno", &game::Game::DebugCounts::sweeps},
       {"pulsar", &game::Game::DebugCounts::boomerangs},
+      {"halo", &game::Game::DebugCounts::halos},
+      {"aether", &game::Game::DebugCounts::boomerangs},
+      {"helios", &game::Game::DebugCounts::halos},
   };
   for (const auto& c : cases) {
     CAPTURE(c.id);
@@ -1487,7 +1637,7 @@ TEST_CASE("Damage multiplier scales exactly once per attack type") {
 
   const char* ids[] = {"wand", "flame", "hammer", "shuriken",
                        "orb", "beam", "scythe", "storm", "nova",
-                       "inferno", "pulsar"};
+                       "inferno", "pulsar", "halo", "aether", "helios"};
   for (const char* id : ids) {
     CAPTURE(id);
     const int wi = idx(id);
