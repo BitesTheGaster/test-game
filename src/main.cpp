@@ -6,9 +6,54 @@
 #include <SDL3/SDL.h>
 
 #include <exception>
+#include <filesystem>
 #include <iostream>
+#include <vector>
 
 namespace {
+
+// Resolves the runtime data directory (the folder containing *.toml content
+// files, i.e. "<assets>/data").
+//
+// Portability contract: the game must run from a copy of the project on any
+// machine without the binary containing a path minted on the build machine
+// (the old configure-time absolute GAME_ASSETS_DIR leaked e.g. /home/<user>,
+// which broke "give the build to a friend"). Assets are therefore located
+// dynamically:
+//   1. relative to the running executable (SDL base path),
+//   2. relative to the current working directory (run from the repo root),
+//   3. the configure-time define as a last-resort fallback.
+std::filesystem::path findDataDir() {
+  std::error_code ec;
+
+  // Normalise so ".." elements are resolved; keeps the probe robust against
+  // build trees that nest the binary (e.g. build/debug/bin/…).
+  auto candidate = [&](std::filesystem::path p) -> std::filesystem::path {
+    p = std::filesystem::weakly_canonical(std::filesystem::absolute(p), ec);
+    return p;
+  };
+
+  std::vector<std::filesystem::path> candidates;
+  if (const char* base = SDL_GetBasePath()) {
+    candidates.emplace_back(candidate(std::filesystem::path(base) / "assets" / "data"));
+    // CMake build trees (Ninja/Make debug|release) place the binary under
+    // build/<preset>/ while assets live at the project root.
+    candidates.emplace_back(candidate(std::filesystem::path(base) / ".." / "assets" / "data"));
+    candidates.emplace_back(candidate(std::filesystem::path(base) / ".." / ".." / "assets" / "data"));
+  }
+  candidates.emplace_back(candidate("assets/data"));    // run from the repo root
+  candidates.emplace_back(candidate("../assets/data"));  // run from a build depth-1 dir
+  candidates.emplace_back(candidate("../../assets/data")); // run from a build depth-2 dir
+  candidates.emplace_back(candidate(GAME_ASSETS_DIR "/data")); // configure-time last resort
+
+  for (const auto& c : candidates) {
+    if (std::filesystem::is_directory(c, ec)) return c;
+  }
+  throw std::runtime_error(
+      "could not locate assets/data (probed exe-relative and CWD-relative "
+      "locations, then the configure-time GAME_ASSETS_DIR). Copy the whole "
+      "project directory — the game resolves assets relative to the binary.");
+}
 
 game::FrameInput pollInput(bool& quit) {
   game::FrameInput in{};
