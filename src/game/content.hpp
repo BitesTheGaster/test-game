@@ -108,15 +108,15 @@ struct WeaponDef {
   // Vortex (evolution)
   float vortexRadius = 1.3F;      // damage core radius
   float vortexReach = 2.6F;       // enemies inside this start getting pulled in
-  float vortexPull = 4.0F;        // pull strength (world units / sec)
+  float vortexPull = 5.0F;        // pull strength (world units / sec)
   float vortexOrbit = 2.6F;       // distance of a zone from the player
-  float vortexOrbitSpeed = 1.8F;  // radians / second
+  float vortexOrbitSpeed = 1.7F;  // radians / second
   float vortexTickRate = 0.1F;    // damage ticks per second
 
   // Prism (evolution)
   float prismRange = 9.0F;        // max distance a locked beam can reach
   float prismWidth = 0.45F;
-  int prismMaxTargets = 6;        // hard cap on simultaneously locked beams
+  int prismMaxTargets = 5;        // hard cap on simultaneously locked beams
 };
 
 struct EnemyDef {

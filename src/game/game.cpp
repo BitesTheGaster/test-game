@@ -261,7 +261,10 @@ float enemyLifestealResistance(float simTime, int tier, bool resistant) {
 }
 
 float enemyKnockbackResistance(float simTime, int tier, bool resistant) {
-  float res = std::min(0.7F, simTime / 900.0F);
+  // Reaches 70% resistance for an ordinary enemy at 8:45, then tier and trait
+  // bonuses push elites/champions/overlords towards the cap. 750s instead of
+  // the old 900s makes the ramp visible inside a normal run.
+  float res = std::min(0.7F, simTime / 750.0F);
   res += tier >= 3 ? 0.35F : tier == 2 ? 0.25F : tier == 1 ? 0.15F : 0.0F;
   if (resistant) res += 0.5F;
   return std::min(1.0F, res);
@@ -320,6 +323,15 @@ void Game::reset() {
   strongestKilledTier_ = 0;
   strongestKilledDef_ = -1;
   tierKillMask_ = 0;
+  // The adaptive tribunal director is per-run too: a fresh run starts with no
+  // handling score, so the heavy tiers are shut again.
+  for (int t = 0; t < 4; ++t) {
+    tierPressure_[t] = 0.0F;
+    tierGrace_[t] = 0.0F;
+    tierOpen_[t] = t == 1;
+  }
+  tierBanner_.clear();
+  tierBannerT_ = 0.0F;
   // Seed the "3 most recent" exemption set. As more types unlock this is
   // recomputed in refreshRecentTypes().
   recentTypes_.assign(content_.enemies.size(), 0);
@@ -634,6 +646,7 @@ void Game::fixedStep() {
   updateUniqueEffects();
 
   processPendingSpawns();
+  updateTierDirector();
   spawnWave();
 
   // Deferred destruction (command buffer convention).
@@ -1590,6 +1603,14 @@ void Game::killEnemy(entt::entity e) {
   // Tier unlock mask + strongest-kill tracking (used by the bestiary and by
   // the elite/champion/overlord player-outline unlocks).
   tierKillMask_ = static_cast<std::uint8_t>(tierKillMask_ | (1u << slainTier));
+  // Adaptive tribunal director: handling a tier is the currency that opens the
+  // NEXT one. Champions eat this score, overlords eat the champion score, and
+  // both bleed away again if the player stops keeping up.
+  if (slainTier > 0 && slainTier < 4) {
+    // A champion or overlord is worth more than a plain elite: clearing one
+    // says more about the build than mowing down three fodder-tier elites.
+    tierPressure_[slainTier] += slainTier == 1 ? 1.0F : 1.25F;
+  }
   if (slainTier > strongestKilledTier_) {
     strongestKilledTier_ = slainTier;
     strongestKilledDef_ = registry_.try_get<Enemy>(e) != nullptr
@@ -1708,6 +1729,25 @@ void Game::tryLifestealOnKill(entt::entity source) {
   }
 }
 
+float Game::displacementResistance(entt::entity e) const {
+  // The stored value is the resistance the enemy spawned with (which already
+  // includes the tier and trait bonuses). Taking the max with the CURRENT
+  // time-based ramp also lifts old enemies into the late-game curve instead of
+  // leaving early spawns permanently soft.
+  float res = std::min(0.7F, simTime_ / 750.0F);
+  if (const auto* tr = registry_.try_get<EnemyTraits>(e); tr != nullptr) {
+    res = std::max(res, tr->knockbackRes);
+  }
+  return std::clamp(res, 0.0F, 1.0F);
+}
+
+float Game::continuousPullScale(entt::entity e) const {
+  // 80% of the resistance applies to a sustained field, with a 20% floor. A
+  // fully resistant overlord can still be nudged, but it cannot be corkscrewed
+  // and deleted by an aura alone.
+  return std::max(0.2F, 1.0F - 0.8F * displacementResistance(e));
+}
+
 // Applies knockback to an enemy, reduced by its knockback resistance.
 void Game::applyKnockback(entt::entity e, float angle, float force) {
   // Store the shove as a decaying knockback velocity on the enemy. The AI seek
@@ -1715,12 +1755,7 @@ void Game::applyKnockback(entt::entity e, float angle, float force) {
   // separate channel is added to movement in updateEnemies and decays away.
   auto* en = registry_.try_get<Enemy>(e);
   if (en == nullptr) return;
-  float res = 0.0F;
-  if (auto* tr = registry_.try_get<EnemyTraits>(e)) {
-    res = tr->knockbackRes;
-  }
-  const float f = force * stats_.knockbackMul *
-                  (1.0F - std::clamp(res, 0.0F, 1.0F));
+  const float f = force * stats_.knockbackMul * (1.0F - displacementResistance(e));
   en->kbX += std::cos(angle) * f;
   en->kbY += std::sin(angle) * f;
 }
@@ -2021,7 +2056,12 @@ void Game::updateVortices() {
       // Drag scales down at the very edge of the reach so enemies are nudged
       // in rather than teleported, and clamp so nobody overshoots the core.
       const float edge = std::clamp(1.0F - (d - vx.radius) / std::max(0.001F, vx.reach - vx.radius), 0.35F, 1.0F);
-      const float step = std::min(pull * edge * dt, std::max(0.0F, d - vx.radius * 0.15F));
+      // Unlike a one-off shove, this force is applied every tick. It therefore
+      // has to respect the enemy's live knockback resistance, otherwise late
+      // bosses can never escape and the aura deletes the whole game by itself.
+      const float step =
+          std::min(pull * edge * continuousPullScale(en) * dt,
+                   std::max(0.0F, d - vx.radius * 0.15F));
       et.x += (dx / d) * step;
       et.y += (dy / d) * step;
       caught.push_back(en);
@@ -2736,8 +2776,12 @@ void Game::updateUniqueEffects() {
         const float d2 = dx * dx + dy * dy;
         if (d2 < 3.0F * 3.0F && d2 > 0.0001F) {
           const float d = std::sqrt(d2);
-          t.x += (dx / d) * 1.1F;
-          t.y += (dy / d) * 1.1F;
+          // Black Hole is a continuous field too: it respects the same live
+          // displacement resistance as the Void Gyre instead of teleporting
+          // even a fully resistant overlord.
+          const float step = 1.1F * continuousPullScale(e);
+          t.x += (dx / d) * step;
+          t.y += (dy / d) * step;
           spawnParticles(t.x, t.y, {0.6F, 0.4F, 1.0F, 1.0F}, 1, 2.0F);
         }
       }
@@ -2938,22 +2982,19 @@ void Game::spawnWave() {
     const float y = pt.y + std::sin(angle) * spawnDist;
 
     // Per-member elite/champion/overlord rolls (each enemy rolls
-    // independently). Elites from 45s, champions from 180s, overlords from
-    // 420s; chances creep up with time.
+    // independently). Elites open at 45s and creep up with time. Champions and
+    // overlords are NOT on a clock: the adaptive tribunal director opens them
+    // once the previous tier is being handled easily, and the chance scales with
+    // how far above that line the player is.
     //
-    // Champions/overlords were pushed back this round (120->180s, 300->420s)
-    // so the player has time to build anti-armour and multi-weapon coverage
-    // before the heavy tiers arrive. Their power is deliberately UNCHANGED —
-    // an overlord is meant to be the difficulty spike, not a soft one.
-    const float eliteChance = std::min(0.15F, 0.05F + simTime_ * 0.0005F);
-    // Champions and overlords are intentionally rarer: one unlucky fast tank
-    // should not decide an entire run.
-    const float champChance = std::min(0.03F, 0.008F + simTime_ * 0.00015F);
-    const float overlordChance =
-        simTime_ >= 420.0F ? std::min(0.012F, 0.004F + (simTime_ - 420.0F) * 0.00005F) : 0.0F;
-    bool memberElite = simTime_ >= 45.0F && unit(rng_) < eliteChance;
-    bool memberChampion = simTime_ >= 180.0F && unit(rng_) < champChance;
-    const bool memberOverlord = simTime_ >= 420.0F && unit(rng_) < overlordChance;
+    // Their POWER is deliberately unchanged — an overlord is meant to be the
+    // difficulty spike, not a soft one. Only the timing follows the player.
+    const float eliteChance = tierSpawnChance(1);
+    const float champChance = tierSpawnChance(2);
+    const float overlordChance = tierSpawnChance(3);
+    bool memberElite = unit(rng_) < eliteChance;
+    bool memberChampion = unit(rng_) < champChance;
+    const bool memberOverlord = unit(rng_) < overlordChance;
     if (memberChampion) memberElite = true;
     if (memberOverlord) {
       memberElite = true;
@@ -3116,6 +3157,77 @@ void Game::enterLevelUp() {
   buildChoices();
 }
 
+// --- Adaptive tribunal director ----------------------------------------------
+// The heavy tiers answer to the player, not to the clock. Champions wait until
+// elites are routine, overlords wait until champions are, and both shut again
+// if the run stops keeping up. Killing the tier is what feeds the score, so a
+// high-damage build unlocks the next tribunal early and a struggling one never
+// sees it — the difficulty curve follows the build instead of the clock.
+
+bool Game::tierUnlocked(int tier) const {
+  switch (tier) {
+    case 0: return true;
+    case 1: return tierOpen_[1] && simTime_ >= 45.0F;
+    case 2: return tierOpen_[2];
+    case 3: return tierOpen_[3];
+    default: return false;
+  }
+}
+
+float Game::tierSpawnChance(int tier) const {
+  if (!tierUnlocked(tier)) return 0.0F;
+  if (tier == 1) {
+    return std::min(0.15F, 0.05F + simTime_ * 0.0005F);
+  }
+  if (tier == 2) {
+    // The further above the "elites are routine" line the player is, the more
+    // champions show up — up to the old late-game cap, so an overwhelming
+    // build still gets a real fight instead of an endless stream.
+    const float over = tierPressure_[1] - kChampionPressure;
+    return std::clamp(over * 0.006F, 0.0F, 0.05F);
+  }
+  if (tier == 3) {
+    const float over = tierPressure_[2] - kOverlordPressure;
+    return std::clamp(over * 0.003F, 0.0F, 0.02F);
+  }
+  return 0.0F;
+}
+
+void Game::updateTierDirector() {
+  constexpr float dt = 1.0F / 60.0F;
+  if (tierBannerT_ > 0.0F) {
+    tierBannerT_ -= dt;
+    if (tierBannerT_ <= 0.0F) tierBanner_.clear();
+  }
+  for (int t = 1; t < 4; ++t) {
+    // The handling score bleeds away, so only *recent* form counts: a build
+    // that was strong ten minutes ago does not keep the overlords coming.
+    tierPressure_[t] = std::max(0.0F, tierPressure_[t] - dt / kPressureWindow);
+    if (tierGrace_[t] > 0.0F) tierGrace_[t] = std::max(0.0F, tierGrace_[t] - dt);
+  }
+  const bool champWant =
+      simTime_ >= kChampionMinTime && tierPressure_[1] >= kChampionPressure;
+  const bool lordWant = tierOpen_[2] && simTime_ >= kOverlordMinTime &&
+                        tierPressure_[2] >= kOverlordPressure;
+  const auto apply = [this](int tier, bool want, const char* label) {
+    if (want) {
+      // Announce it once, on the edge of the switch: this is the game's way of
+      // saying "you outgrew the last tier".
+      if (!tierOpen_[tier]) {
+        tierBanner_ = std::string(label) + " TRIBUNAL OPEN";
+        tierBannerT_ = 4.0F;
+      }
+      tierOpen_[tier] = true;
+      tierGrace_[tier] = kTierGrace;
+    } else if (tierGrace_[tier] <= 0.0F) {
+      tierOpen_[tier] = false;
+    }
+  };
+  apply(2, champWant, "CHAMPION");
+  apply(3, lordWant, "OVERLORD");
+}
+
+
 void Game::enterStarterPick() {
   state_ = RunState::LevelUp;
   choosingStarter_ = true;
@@ -3232,14 +3344,44 @@ void Game::buildChoices() {
     choices_.push_back({Choice::Kind::Upgrade, normals[k]});
   }
 
-  // Absolute fallback so a level-up never bricks silently.
+  // Absolute fallback so a level-up never bricks silently. Only cards that can
+  // ACTUALLY be applied are eligible: a weapon-specific card whose weapon is not
+  // equipped used to be picked here, and choosing it silently failed, leaving
+  // the player on the level-up screen forever.
   if (choices_.empty()) {
     for (std::size_t i = 0; i < content_.upgrades.size(); ++i) {
-      if (stacks_[i] < content_.upgrades[i].maxStacks) {
-        choices_.push_back({Choice::Kind::Upgrade, static_cast<int>(i)});
-        break;
-      }
+      if (stacks_[i] >= content_.upgrades[i].maxStacks) continue;
+      if (!upgradeIsUsable(static_cast<int>(i))) continue;
+      choices_.push_back({Choice::Kind::Upgrade, static_cast<int>(i)});
+      break;
     }
+  }
+  // Everything is maxed (or nothing left is usable): offer an explicit "continue"
+  // card so the level-up always has a working way out.
+  if (choices_.empty()) {
+    choices_.push_back({Choice::Kind::Skip, -1});
+  }
+}
+
+bool Game::upgradeIsUsable(int upgradeIndex) const {
+  if (upgradeIndex < 0 ||
+      static_cast<std::size_t>(upgradeIndex) >= content_.upgrades.size()) {
+    return false;
+  }
+  const auto& def = content_.upgrades[static_cast<std::size_t>(upgradeIndex)];
+  return def.weapon.empty() || findWeaponSlot(def.weapon) >= 0;
+}
+
+void Game::completeLevelUp() {
+  choices_.clear();
+  xp_ -= xpNext_;
+  ++level_;
+  xpNext_ = xpForLevel(level_);
+
+  if (xp_ >= xpNext_) {
+    enterLevelUp(); // queued level-ups
+  } else {
+    state_ = RunState::Playing;
   }
 }
 
@@ -3258,21 +3400,24 @@ void Game::chooseUpgrade(int slot) {
     return;
   }
 
+  if (choice.kind == Choice::Kind::Skip) {
+    completeLevelUp();
+    return;
+  }
+
   if (choice.kind == Choice::Kind::Weapon) {
     addWeapon(choice.index);
   } else {
-    if (!applyUpgradeAt(choice.index)) return;
+    // A card can go stale (e.g. its weapon left the arsenal between the roll
+    // and the pick). Never consume the level-up in that case: rebuild so the
+    // player gets a card that actually works instead of being stuck.
+    if (!applyUpgradeAt(choice.index)) {
+      buildChoices();
+      return;
+    }
   }
 
-  xp_ -= xpNext_;
-  ++level_;
-  xpNext_ = xpForLevel(level_);
-
-  if (xp_ >= xpNext_) {
-    enterLevelUp(); // queued level-ups
-  } else {
-    state_ = RunState::Playing;
-  }
+  completeLevelUp();
 }
 
 // Applies one upgrade card. Returns false when the effect is unknown or when a
@@ -3613,9 +3758,12 @@ void Game::syncVortices(int slot) {
     }
   }
 
-  const float scale = 1.0F + 0.18F * static_cast<float>(desired - 1);
+  // Size growth is deliberately sub-linear and capped. Projectile upgrades
+  // should thicken the ring, not turn it into one screen-wide vacuum that holds
+  // every late-game boss in place forever.
+  const float scale = std::min(1.55F, 1.0F + 0.09F * static_cast<float>(desired - 1));
   const float core = w.vortexRadius * scale;
-  const float orbit = w.vortexOrbit * (1.0F + 0.12F * static_cast<float>(desired - 1));
+  const float orbit = w.vortexOrbit * std::min(1.35F, 1.0F + 0.07F * static_cast<float>(desired - 1));
 
   while (static_cast<int>(zones.size()) < desired) {
     const auto z = registry_.create();
@@ -3902,26 +4050,41 @@ void Game::grantXp(float amount) {
 void Game::testClearWeapons() {
   weaponCount_ = 0;
   starterChoicePending_ = false; // test sandbox: no opening pick
-  for (auto e : registry_.view<OrbitBlade>()) {
-    registry_.destroy(e);
-  }
-  for (auto e : registry_.view<HaloBeam>()) {
-    registry_.destroy(e);
-  }
-  for (auto e : registry_.view<Vortex>()) {
-    registry_.destroy(e);
-  }
+  // Collect first, destroy after: destroying an entity while an EnTT view over
+  // that same component is being walked is undefined behaviour, and an entity
+  // can carry several of the types below (an area projectile is also a
+  // Projectile), so the list is de-duplicated before anything is removed.
+  std::vector<entt::entity> doomed;
+  const auto collect = [&doomed](auto&& view) {
+    for (const auto e : view) {
+      if (std::find(doomed.begin(), doomed.end(), e) == doomed.end()) doomed.push_back(e);
+    }
+  };
+  collect(registry_.view<OrbitBlade>());
+  collect(registry_.view<HaloBeam>());
+  collect(registry_.view<Vortex>());
   // Drop every live projectile/effect so the eternal orb or in-flight blades
   // never linger into the next test (or the restored run) after a swap.
-  for (auto e : registry_.view<Projectile>()) registry_.destroy(e);
-  for (auto e : registry_.view<BombProjectile>()) registry_.destroy(e);
-  for (auto e : registry_.view<BoomerangProjectile>()) registry_.destroy(e);
-  for (auto e : registry_.view<BounceProjectile>()) registry_.destroy(e);
-  for (auto e : registry_.view<BeamEffect>()) registry_.destroy(e);
-  for (auto e : registry_.view<SweepEffect>()) registry_.destroy(e);
-  for (auto e : registry_.view<ZoneEffect>()) registry_.destroy(e);
-  for (auto e : registry_.view<ChainLightning>()) registry_.destroy(e);
-  for (auto e : registry_.view<NovaRing>()) registry_.destroy(e);
+  collect(registry_.view<Projectile>());
+  collect(registry_.view<BombProjectile>());
+  collect(registry_.view<BoomerangProjectile>());
+  collect(registry_.view<BounceProjectile>());
+  collect(registry_.view<BeamEffect>());
+  collect(registry_.view<SweepEffect>());
+  collect(registry_.view<ZoneEffect>());
+  collect(registry_.view<ChainLightning>());
+  collect(registry_.view<NovaRing>());
+  // A deferred death queued for one of these entities would double-destroy it
+  // later in the frame, so it is dropped from the queue as well.
+  destroyQueue_.erase(
+      std::remove_if(destroyQueue_.begin(), destroyQueue_.end(),
+                     [&doomed](entt::entity e) {
+                       return std::find(doomed.begin(), doomed.end(), e) != doomed.end();
+                     }),
+      destroyQueue_.end());
+  for (const auto e : doomed) {
+    if (registry_.valid(e)) registry_.destroy(e);
+  }
 }
 
 void Game::testSetPlayerHp(float hp) {
@@ -3962,8 +4125,43 @@ void Game::enterTestModeImpl() {
   // into the real run.
   savedWeaponCount_ = weaponCount_;
   for (int i = 0; i < savedWeaponCount_; ++i) savedWeapons_[i] = weapons_[i];
+  // Snapshot EVERY live entity id: whatever is not in this list was born inside
+  // the sandbox and is removed again on exit.
+  savedEntityIds_.clear();
+  for (const auto e : registry_.view<entt::entity>()) savedEntityIds_.push_back(e);
   savedEnemies_.clear();
-  for (const auto e : registry_.view<Enemy>()) savedEnemies_.push_back(e);
+  savedEnemySpawns_.clear();
+  for (const auto e : registry_.view<Enemy>()) {
+    if (registry_.try_get<Transform>(e) == nullptr) continue;
+    SavedEnemyState s;
+    s.entity = e;
+    s.transform = registry_.get<Transform>(e);
+    if (const auto* v = registry_.try_get<Velocity>(e); v != nullptr) s.velocity = *v;
+    if (const auto* r = registry_.try_get<Radius>(e); r != nullptr) s.radius = *r;
+    s.health = registry_.get<Health>(e);
+    s.enemy = registry_.get<Enemy>(e);
+    if (const auto* t = registry_.try_get<EnemyTraits>(e); t != nullptr) s.traits = *t;
+    if (const auto* sp = registry_.try_get<Sprite>(e); sp != nullptr) s.sprite = *sp;
+    if (const auto* xp = registry_.try_get<Xp>(e); xp != nullptr) s.xp = *xp;
+    savedEnemies_.push_back(s);
+
+    // Remember how the enemy was rolled so it can be rebuilt if the sandbox
+    // manages to kill it. Killing is irreversible for an entity id.
+    SavedSpawnState ss;
+    ss.def = registry_.get<Enemy>(e).def;
+    ss.tier = registry_.try_get<EnemyTraits>(e) != nullptr
+                  ? registry_.get<EnemyTraits>(e).tier
+                  : 0;
+    ss.hpMul = registry_.get<Health>(e).max;
+    const auto& body = registry_.get<Enemy>(e);
+    ss.speedMul = body.speed;
+    ss.touchMul = body.touch;
+    ss.xpMul = registry_.try_get<Xp>(e) != nullptr ? registry_.get<Xp>(e).value : 1.0F;
+    if (const auto* t = registry_.try_get<EnemyTraits>(e); t != nullptr) {
+      ss.traitFlags = t->flags;
+    }
+    savedEnemySpawns_.push_back(ss);
+  }
   if (player_ != entt::null && registry_.valid(player_)) {
     const auto& t = registry_.get<Transform>(player_);
     savedPlayerX_ = t.x;
@@ -3987,6 +4185,40 @@ void Game::enterTestModeImpl() {
   savedStrongestTier_ = strongestKilledTier_;
   savedStrongestDef_ = strongestKilledDef_;
   savedTierKillMask_ = tierKillMask_;
+  for (int t = 0; t < 4; ++t) {
+    savedTierPressure_[t] = tierPressure_[t];
+    savedTierOpen_[t] = tierOpen_[t];
+    savedTierGrace_[t] = tierGrace_[t];
+  }
+  savedTierBanner_ = tierBanner_;
+  savedTierBannerT_ = tierBannerT_;
+  savedPending_ = pending_;
+  savedSpawnTimer_ = spawnTimer_;
+  savedHordeTimer_ = hordeTimer_;
+  savedStarterChoicePending_ = starterChoicePending_;
+  savedLastStandCd_ = lastStandCd_;
+  savedRetiredTypes_ = retiredTypes_;
+  savedRecentTypes_ = recentTypes_;
+  savedRerollsUsed_ = rerollsUsed_;
+  savedMilestoneOffer_ = milestoneOffer_;
+  savedChoices_ = choices_;
+  savedPoison_ = poison_;
+  savedChainCounter_ = chainCounter_;
+  savedBloodKills_ = bloodKills_;
+  savedBlackHoleTimer_ = blackHoleTimer_;
+  savedAdrenalineCd_ = adrenalineCd_;
+  savedAdrenalineActive_ = adrenalineActive_;
+  savedBestiaryOpen_ = bestiaryOpen_;
+  savedSyncedUnlocks_ = syncedUnlocks_;
+  savedProfileDirty_ = profileDirty_;
+  savedMoveX_ = moveX_;
+  savedMoveY_ = moveY_;
+  savedCamX_ = camX_;
+  savedCamY_ = camY_;
+  savedZoom_ = zoom_;
+  savedParticles_ = particles_;
+  savedParticleCursor_ = particleCursor_;
+  savedRng_ = rng_;
   if (player_ != entt::null && registry_.valid(player_)) {
     const auto& h = registry_.get<Health>(player_);
     savedHp_ = h.hp;
@@ -4007,19 +4239,52 @@ void Game::exitTestModeImpl() {
   // Nothing may stay paused in LevelUp when the run takes over again.
   state_ = RunState::Playing;
   testClearWeapons(); // drop the sandbox weapon + its persistent entities
-  // The sandbox's own fodder is not part of the real run either: leaving a
-  // herd of injected test spawns behind would be the last bit of cheat
-  // leakage, and they would immediately maul the restored player. Destroyed
-  // eagerly (not via destroyQueue_) so no contact tick can land this frame.
-  // Enemies that were already on the field when the sandbox opened are kept.
-  std::vector<entt::entity> sandboxFodder;
-  for (const auto e : registry_.view<Enemy>()) {
-    if (std::find(savedEnemies_.begin(), savedEnemies_.end(), e) == savedEnemies_.end()) {
-      sandboxFodder.push_back(e);
+  // The sandbox's own fodder is not part of the real run either: leaving a herd
+  // of injected test spawns, XP orbs, drops or effect entities behind would be
+  // the last bit of cheat leakage, and the new ones would immediately maul the
+  // restored player. Everything that was NOT alive when the sandbox opened is
+  // destroyed eagerly (not via destroyQueue_) so no contact tick can land this
+  // frame. Ids are collected first: destroying while an EnTT view is being
+  // walked is not allowed.
+  std::vector<entt::entity> sandboxOnly;
+  for (const auto e : registry_.view<entt::entity>()) {
+    if (std::find(savedEntityIds_.begin(), savedEntityIds_.end(), e) == savedEntityIds_.end()) {
+      sandboxOnly.push_back(e);
     }
   }
-  for (const auto e : sandboxFodder) registry_.destroy(e);
-  pending_.clear();
+  for (const auto e : sandboxOnly) registry_.destroy(e);
+  // Deferred deaths queued during the sandbox would otherwise fire against the
+  // restored run later on and delete entities the player owns.
+  destroyQueue_.clear();
+  // Enemies that were on the field when the sandbox opened are put back exactly
+  // as they were: same position, HP, tier, traits and pending knockback. One
+  // that the sandbox managed to kill is rebuilt from its snapshot.
+  for (std::size_t i = 0; i < savedEnemies_.size(); ++i) {
+    SavedEnemyState& s = savedEnemies_[i];
+    const SavedSpawnState* spawn = i < savedEnemySpawns_.size() ? &savedEnemySpawns_[i] : nullptr;
+    if (!registry_.valid(s.entity)) {
+      if (spawn == nullptr) continue; // no rebuild data: better gone than a ghost
+      const auto fresh = registry_.create();
+      registry_.emplace<Transform>(fresh);
+      registry_.emplace<Velocity>(fresh);
+      registry_.emplace<Radius>(fresh, s.radius);
+      registry_.emplace<Health>(fresh, s.health);
+      registry_.emplace<Enemy>(fresh, s.enemy);
+      registry_.emplace<EnemyTraits>(fresh, s.traits);
+      registry_.emplace<Sprite>(fresh, s.sprite);
+      registry_.emplace<Xp>(fresh, s.xp);
+      s.entity = fresh;
+    }
+    registry_.emplace_or_replace<Transform>(s.entity, s.transform);
+    registry_.emplace_or_replace<Velocity>(s.entity, s.velocity);
+    registry_.emplace_or_replace<Radius>(s.entity, s.radius);
+    registry_.emplace_or_replace<Health>(s.entity, s.health);
+    registry_.emplace_or_replace<Enemy>(s.entity, s.enemy);
+    registry_.emplace_or_replace<EnemyTraits>(s.entity, s.traits);
+    registry_.emplace_or_replace<Sprite>(s.entity, s.sprite);
+    registry_.emplace_or_replace<Xp>(s.entity, s.xp);
+  }
+  pending_ = savedPending_;
   weaponCount_ = savedWeaponCount_;
   for (int i = 0; i < weaponCount_; ++i) weapons_[i] = savedWeapons_[i];
   stats_ = savedStats_;
@@ -4035,12 +4300,44 @@ void Game::exitTestModeImpl() {
   iframes_ = savedIframes_;
   healCd_ = savedHealCd_;
   simTime_ = savedSimTime_;
+  spawnTimer_ = savedSpawnTimer_;
+  hordeTimer_ = savedHordeTimer_;
   wavesEnabled_ = savedWaves_;
   choosingStarter_ = savedChoosingStarter_;
-  starterChoicePending_ = savedChoosingStarter_;
+  starterChoicePending_ = savedStarterChoicePending_;
   strongestKilledTier_ = savedStrongestTier_;
   strongestKilledDef_ = savedStrongestDef_;
   tierKillMask_ = savedTierKillMask_;
+  for (int t = 0; t < 4; ++t) {
+    tierPressure_[t] = savedTierPressure_[t];
+    tierOpen_[t] = savedTierOpen_[t];
+    tierGrace_[t] = savedTierGrace_[t];
+  }
+  tierBanner_ = savedTierBanner_;
+  tierBannerT_ = savedTierBannerT_;
+  lastStandCd_ = savedLastStandCd_;
+  retiredTypes_ = savedRetiredTypes_;
+  recentTypes_ = savedRecentTypes_;
+  rerollsUsed_ = savedRerollsUsed_;
+  milestoneOffer_ = savedMilestoneOffer_;
+  choices_ = savedChoices_;
+  poison_ = savedPoison_;
+  chainCounter_ = savedChainCounter_;
+  bloodKills_ = savedBloodKills_;
+  blackHoleTimer_ = savedBlackHoleTimer_;
+  adrenalineCd_ = savedAdrenalineCd_;
+  adrenalineActive_ = savedAdrenalineActive_;
+  bestiaryOpen_ = savedBestiaryOpen_;
+  syncedUnlocks_ = savedSyncedUnlocks_;
+  profileDirty_ = savedProfileDirty_;
+  moveX_ = savedMoveX_;
+  moveY_ = savedMoveY_;
+  camX_ = savedCamX_;
+  camY_ = savedCamY_;
+  zoom_ = savedZoom_;
+  particles_ = savedParticles_;
+  particleCursor_ = savedParticleCursor_;
+  rng_ = savedRng_;
   if (player_ != entt::null && registry_.valid(player_)) {
     auto& h = registry_.get<Health>(player_);
     h.max = savedHpMax_;
@@ -4066,6 +4363,14 @@ void Game::exitTestModeImpl() {
       syncVortices(s);
     }
   }
+  // Release the snapshot buffers: a long session that toggles the sandbox a lot
+  // should not keep a second copy of every entity alive.
+  savedEntityIds_.clear();
+  savedEnemies_.clear();
+  savedEnemySpawns_.clear();
+  savedChoices_.clear();
+  savedPending_.clear();
+  savedParticles_.clear();
 }
 
 void Game::setTestWeapon(int defIndex) {
@@ -4327,6 +4632,20 @@ void Game::testSetFirstEnemyHp(float hp) {
   auto view = registry_.view<Health, Enemy>();
   for (const auto e : view) {
     view.get<Health>(e).hp = hp;
+    return;
+  }
+}
+
+void Game::testSetFirstEnemyKnockbackRes(float res) {
+  auto view = registry_.view<Enemy>();
+  for (const auto e : view) {
+    if (auto* t = registry_.try_get<EnemyTraits>(e); t != nullptr) {
+      t->knockbackRes = std::clamp(res, 0.0F, 1.0F);
+    } else {
+      EnemyTraits fresh{};
+      fresh.knockbackRes = std::clamp(res, 0.0F, 1.0F);
+      registry_.emplace<EnemyTraits>(e, fresh);
+    }
     return;
   }
 }
@@ -4695,13 +5014,13 @@ void Game::renderBestiary(core::render::Batcher& b, float px, float py) {
     int tier;
     const char* name;
     const char* roman;
-    int unlockSec;
+    const char* gate; // how this tier is unlocked
     Color color;
   };
   const Tribunal tribunals[] = {
-      {1, "ELITE",    "I",   45,  eliteGold},
-      {2, "CHAMPION", "II",  180, champOrange},
-      {3, "OVERLORD", "III", 420, overlordViolet},
+      {1, "ELITE",    "I",   "FROM 45s",            eliteGold},
+      {2, "CHAMPION", "II",  "WHEN ELITES ARE EASY", champOrange},
+      {3, "OVERLORD", "III", "WHEN CHAMPIONS ARE",  overlordViolet},
   };
 
   b.text(24.0F, 100.0F, 1.8F, gold, "TRIBUNALS");
@@ -4712,6 +5031,7 @@ void Game::renderBestiary(core::render::Batcher& b, float px, float py) {
     const auto& tb = tribunals[ti];
     const float x = 24.0F + static_cast<float>(ti) * tribW;
     const bool slain = (tierKillMask_ & (1u << tb.tier)) != 0u;
+    const bool open = tierUnlocked(tb.tier);
     // Panel backdrop; a slain tribunal gets a brighter border strip so the
     // player can see at a glance which ones they have actually faced.
     b.rectTopLeft(x, tribY, tribW - 10.0F, tribH,
@@ -4722,10 +5042,20 @@ void Game::renderBestiary(core::render::Batcher& b, float px, float py) {
            std::string(tb.roman) + ". " + tb.name);
     const int traitCount = traitsForTier(tb.tier, simTime_);
     const TierBuffs buffs = tierBuffs(tb.tier);
-    std::snprintf(buf, sizeof(buf), "FROM %ds   %d TRAIT%s   XP x%.0f",
-                  tb.unlockSec, traitCount, traitCount == 1 ? "" : "S",
-                  static_cast<double>(buffs.xp));
+    std::snprintf(buf, sizeof(buf), "%d TRAIT%s   XP x%.0f   %s",
+                  traitCount, traitCount == 1 ? "" : "S",
+                  static_cast<double>(buffs.xp), tb.gate);
     b.text(x + 14.0F, tribY + 26.0F, 1.25F, dim, buf);
+    // Live gate status: closed tiers show how far the player is from opening
+    // them, which is the whole point of the adaptive director.
+    if (tb.tier >= 2) {
+      const float have = tierPressure_[tb.tier - 1];
+      const float need = tb.tier == 2 ? kChampionPressure : kOverlordPressure;
+      const int pct = static_cast<int>(std::clamp(have / need, 0.0F, 1.0F) * 100.0F);
+      std::snprintf(buf, sizeof(buf), "%s  %d%%", open ? "OPEN" : "LOCKED", pct);
+      b.text(x + 14.0F, tribY + 40.0F, 1.25F,
+             open ? tb.color : Color{dim.r, dim.g, dim.b, 0.7F}, buf);
+    }
 
     std::snprintf(buf, sizeof(buf), "HP x%.0f-%.0f  DMG x%.1f  SPD x%.2f  DEF %d",
                   static_cast<double>(buffs.hpMin), static_cast<double>(buffs.hpMax),
@@ -4865,8 +5195,12 @@ void Game::renderMainMenu(core::render::Batcher& b, float px, float py) {
   const float titleScale = 7.0F;
   b.text(px * 0.5F - b.textWidth(titleScale, kGameName) * 0.5F, py * 0.13F, titleScale,
          gold, kGameName);
-  b.text(px * 0.5F - b.textWidth(1.8F, kGameSubtitle) * 0.5F, py * 0.13F + 62.0F, 1.8F,
-         violet, kGameSubtitle);
+  // No tagline: the title is the whole brand. The slot stays so a future
+  // subtitle only has to set kGameSubtitle.
+  if (kGameSubtitle[0] != '\0') {
+    b.text(px * 0.5F - b.textWidth(1.8F, kGameSubtitle) * 0.5F, py * 0.13F + 62.0F, 1.8F,
+           violet, kGameSubtitle);
+  }
 
   // A thin rule under the title, drawn as a row of dots (screen space: px).
   {
@@ -5536,6 +5870,20 @@ void Game::render(core::render::Batcher& b, float alpha) {
     b.text(px - b.textWidth(2.0F, kills) - 14.0F, 16.0F, 2.0F, white, kills);
   }
 
+  // Tribunal banner: the adaptive director announces a newly opened tier under
+  // the timer, so the player learns the rule at the moment it fires.
+  if (!tierBanner_.empty() && tierBannerT_ > 0.0F) {
+    const Color tierGlow = tierBanner_[0] == 'O' ? Color{0.85F, 0.45F, 1.0F, 1.0F}
+                                               : Color{1.0F, 0.55F, 0.25F, 1.0F};
+    // Fade in over the first 0.3 s, hold, then fade out over the last second.
+    const float a = std::min(1.0F, (4.0F - tierBannerT_) / 0.3F) *
+                    std::min(1.0F, tierBannerT_ / 1.0F);
+    Color fade = tierGlow;
+    fade.a = a;
+    b.text(px * 0.5F - b.textWidth(2.6F, tierBanner_) * 0.5F, py * 0.5F - 150.0F, 2.6F,
+           fade, tierBanner_);
+  }
+
   // Off-screen spawn warnings: a small dot at the screen edge marks where an
   // enemy is about to show up (the in-world ring only covers on-screen spots).
   for (const auto& p : pending_) {
@@ -5579,6 +5927,7 @@ void Game::render(core::render::Batcher& b, float alpha) {
         Color accent = gold;
         if (milestoneOffer_) accent = violet;
         else if (choice.kind == Choice::Kind::Weapon) accent = teal;
+        else if (choice.kind == Choice::Kind::Skip) accent = Color{0.55F, 0.6F, 0.7F, 1.0F};
         else if (content_.upgrades[static_cast<std::size_t>(choice.index)].kind == "unique") {
           accent = gold;
         }
@@ -5587,7 +5936,13 @@ void Game::render(core::render::Batcher& b, float alpha) {
         const std::string key = "[" + std::to_string(i + 1) + "]";
         b.text(x + 16.0F, y + 16.0F, 3.0F, accent, key);
 
-        if (choice.kind == Choice::Kind::Upgrade) {
+        if (choice.kind == Choice::Kind::Skip) {
+          b.text(x + 16.0F, y + 52.0F, 2.3F, white, "NOTHING LEFT");
+          renderWrappedText(b, x + 16.0F, y + 80.0F, 1.7F,
+                            Color{0.85F, 0.85F, 0.9F, 1.0F},
+                            "Every upgrade you can use is already maxed.", cardW - 32.0F, 14.0F);
+          b.text(x + 16.0F, y + cardH - 30.0F, 1.5F, accent, "PRESS 1 TO CONTINUE");
+        } else if (choice.kind == Choice::Kind::Upgrade) {
           const auto& def = content_.upgrades[static_cast<std::size_t>(choice.index)];
           b.text(x + 16.0F, y + 52.0F, 2.3F, white, def.name);
           renderWrappedText(b, x + 16.0F, y + 80.0F, 1.7F,

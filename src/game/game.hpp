@@ -18,11 +18,9 @@
 
 namespace game {
 
-// The game's title. Invented for round 9: the premise is a gauntlet run
-// through a monster council's three tribunals (elite / champion / overlord),
-// which is exactly how the spawn tiers and the bestiary are built.
-inline constexpr const char* kGameName = "HOLLOW TRIBUNAL";
-inline constexpr const char* kGameSubtitle = "THREE TRIBUNALS. ONE SURVIVOR.";
+// The game's title, and the single line the main menu puts under it.
+inline constexpr const char* kGameName = "TEST GAME";
+inline constexpr const char* kGameSubtitle = "";
 
 // Word-wraps `str` into lines of at most `maxChars` characters (word-based,
 // single words longer than the limit overflow their own line). Shared between
@@ -167,7 +165,15 @@ enum class RunState {
 
 // One level-up card: either an upgrade from content_ or a new weapon.
 struct Choice {
-  enum class Kind : std::uint8_t { Upgrade, Weapon } kind = Kind::Upgrade;
+  enum class Kind : std::uint8_t {
+    Upgrade,
+    Weapon,
+    // Fallback card shown when every real upgrade is maxed or inapplicable.
+    // Without it a level-up screen can be left with no usable card and the run
+    // is stuck forever.
+    Skip,
+  };
+  Kind kind = Kind::Upgrade;
   int index = -1; // upgrade index or weapon index
 };
 
@@ -278,6 +284,9 @@ public:
   [[nodiscard]] std::vector<int> testEnemyTraitCounts() const;
   // Test hook: freeze wave spawning so tests control the enemy pool exactly.
   void testDisableWaves() { wavesEnabled_ = false; }
+  // Test hook: jump the run clock, so time-gated systems (spawn tiers, scaling
+  // curves) can be tested without simulating minutes of real time.
+  void testSetSimTime(float seconds) { simTime_ = seconds; }
   // --- Weapon test sandbox (T) — public controls, used by input + tests ------
   void enterTestMode();
   void exitTestMode();
@@ -307,6 +316,10 @@ public:
   [[nodiscard]] bool testFirstCanShoot() const;
   // Test helper: overwrite the first enemy's current HP (death-boundary tests).
   void testSetFirstEnemyHp(float hp);
+  // Test helper: force the first enemy's knockback resistance (and give it the
+  // EnemyTraits component it does not have by default). Lets a test compare how
+  // hard a shove or a suction field moves a soft enemy versus a boss.
+  void testSetFirstEnemyKnockbackRes(float res);
   // Test helper: route a raw damage packet through applyEnemyDamage() on the
   // first enemy (so defense mitigation and the lethal rule are exercised).
   void testDamageFirstEnemy(float dmg);
@@ -361,6 +374,25 @@ public:
   // Bitmask (1<<tier) of every tier killed at least once this run. Used both by
   // the bestiary and to unlock the elite/champion/overlord player outlines.
   [[nodiscard]] std::uint8_t tierKillMask() const { return tierKillMask_; }
+  // --- Adaptive tribunal director (test + HUD introspection) -----------------
+  // True while a tier is allowed to spawn at all. Tier 0 always, tier 1 from
+  // 45s on, tier 2 once elites are routine, tier 3 once champions are.
+  [[nodiscard]] bool tierUnlocked(int tier) const;
+  // Per-member spawn chance for a tier right now (0 while the tier is shut).
+  [[nodiscard]] float tierSpawnChance(int tier) const;
+  // Decaying "handling" score for a tier (elite/champion scores drive the
+  // next tier's gate).
+  [[nodiscard]] float tierPressure(int tier) const {
+    return tier >= 0 && tier < 4 ? tierPressure_[tier] : 0.0F;
+  }
+  // Test hook: feed the director directly, so the champion/overlord gates can be
+  // tested without simulating minutes of real kills.
+  void testAddTierPressure(int tier, float amount) {
+    if (tier > 0 && tier < 4) tierPressure_[tier] += amount;
+  }
+  void testSetTierOpen(int tier, bool open) {
+    if (tier > 0 && tier < 4) tierOpen_[tier] = open;
+  }
   // --- Enemy-type retirement -------------------------------------------------
   // When an overlord of a given enemy type spawns, that type is "retired": it
   // no longer spawns, which stops the same overlord from repeating forever.
@@ -566,6 +598,12 @@ private:
   // HP/shield top-up). Shared by the level-up picker and the test item list.
   bool applyUpgradeAt(int upgradeIndex);
   void reroll();
+  // Consumes the pending level-up (spends its XP, advances the level and either
+  // queues the next one or resumes play). Shared by every kind of pick.
+  void completeLevelUp();
+  // True when the card can actually be applied right now. Weapon-specific
+  // cards are unusable while their weapon is not equipped.
+  [[nodiscard]] bool upgradeIsUsable(int upgradeIndex) const;
   void addWeapon(int defIndex);
   void syncOrbitBlades(int slot); // add orbit blades up to the current count
   void syncHaloBeams(int slot);   // add halo beams up to the current count
@@ -590,6 +628,14 @@ private:
   // out-heal the fight; see the definition for the full rationale.
   void tryLifestealOnKill(entt::entity source);
   void applyKnockback(entt::entity e, float angle, float force);
+  // Knockback resistance AT THIS MOMENT. Tier/trait resistance is stored when
+  // the enemy spawns, but the time-based part keeps growing for enemies that
+  // were already on the field when the run started scaling.
+  [[nodiscard]] float displacementResistance(entt::entity e) const;
+  // Continuous fields (Void Gyre drag, Black Hole) use the same resistance but
+  // keep a small floor, so a maxed enemy is hard to pin rather than immune to
+  // crowd control outright.
+  [[nodiscard]] float continuousPullScale(entt::entity e) const;
   // Repulsion Field unique: shove an enemy that just damaged the player.
   void retaliateKnockback(entt::entity attacker);
   void explodeBomb(entt::entity bomb, const BombProjectile& bp, float x, float y);
@@ -649,8 +695,37 @@ private:
   WeaponSlot savedWeapons_[kMaxWeapons];
   // Enemies already on the field when the sandbox opened. Everything spawned
   // after that is sandbox fodder and is removed on exit; the original horde is
-  // kept so the run is not handed back a suspiciously empty arena.
-  std::vector<entt::entity> savedEnemies_;
+  // kept so the run is not handed back a suspiciously empty arena. The full
+  // component state is stored too: a sandbox weapon can kill, damage, displace
+  // or knock the tier off a real enemy, and the run has to come back untouched.
+  struct SavedEnemyState {
+    entt::entity entity = entt::null;
+    Transform transform{};
+    Velocity velocity{};
+    Radius radius{};
+    Health health{};
+    Enemy enemy{};
+    EnemyTraits traits{};
+    Sprite sprite{};
+    Xp xp{};
+  };
+  std::vector<SavedEnemyState> savedEnemies_;
+  // Every entity that existed when the sandbox opened. Anything else that
+  // appears (XP orbs, drops, enemy shots, effect entities) is sandbox-only and
+  // is deleted on exit instead of leaking into the real run.
+  std::vector<entt::entity> savedEntityIds_;
+  // Per-enemy spawn bookkeeping so a real enemy killed inside the sandbox can be
+  // recreated with its original stats instead of simply vanishing.
+  struct SavedSpawnState {
+    int def = 0;
+    int tier = 0;
+    float hpMul = 1.0F;
+    float touchMul = 1.0F;
+    float speedMul = 1.0F;
+    float xpMul = 1.0F;
+    std::uint32_t traitFlags = TraitNone;
+  };
+  std::vector<SavedSpawnState> savedEnemySpawns_;
   float savedPlayerX_ = 0.0F;
   float savedPlayerY_ = 0.0F;
   PlayerStats savedStats_;
@@ -673,7 +748,40 @@ private:
   int savedStrongestTier_ = 0;
   int savedStrongestDef_ = -1;
   std::uint8_t savedTierKillMask_ = 0;
+  float savedTierPressure_[4] = {0.0F, 0.0F, 0.0F, 0.0F};
+  bool savedTierOpen_[4] = {false, true, false, false};
+  float savedTierGrace_[4] = {0.0F, 0.0F, 0.0F, 0.0F};
+  std::string savedTierBanner_;
+  float savedTierBannerT_ = 0.0F;
   std::vector<PendingSpawn> pending_;
+  std::vector<PendingSpawn> savedPending_;
+  // --- Rest of the run state that also mutates inside the sandbox ----------
+  float savedSpawnTimer_ = 0.0F;
+  float savedHordeTimer_ = 0.0F;
+  bool savedStarterChoicePending_ = false;
+  float savedLastStandCd_ = 0.0F;
+  std::vector<std::uint8_t> savedRetiredTypes_;
+  std::vector<std::uint8_t> savedRecentTypes_;
+  int savedRerollsUsed_ = 0;
+  bool savedMilestoneOffer_ = false;
+  std::vector<Choice> savedChoices_;
+  float savedPoison_ = 0.0F;
+  int savedChainCounter_ = 0;
+  int savedBloodKills_ = 0;
+  float savedBlackHoleTimer_ = 8.0F;
+  float savedAdrenalineCd_ = 0.0F;
+  bool savedAdrenalineActive_ = false;
+  bool savedBestiaryOpen_ = false;
+  UnlockMask savedSyncedUnlocks_ = 0;
+  bool savedProfileDirty_ = false;
+  float savedMoveX_ = 0.0F;
+  float savedMoveY_ = 0.0F;
+  float savedCamX_ = 0.0F;
+  float savedCamY_ = 0.0F;
+  float savedZoom_ = 48.0F;
+  std::vector<Particle> savedParticles_;
+  std::size_t savedParticleCursor_ = 0;
+  std::mt19937 savedRng_{};
 
   const Content& content_;
   entt::registry registry_;
@@ -710,6 +818,33 @@ private:
   int strongestKilledDef_ = -1;
   // Bit per tier (1<<tier) of tiers killed at least once this run.
   std::uint8_t tierKillMask_ = 0;
+
+  // --- Adaptive tribunal director --------------------------------------------
+  // The heavy tiers are NOT on a timer: champions only start showing up once the
+  // player is handling ELITES easily, and overlords once champions are routine.
+  // `tierPressure_` is a decaying "how well is this tier being handled" score:
+  // every kill of that tier adds weight, the score bleeds away over
+  // kPressureWindow seconds, and the next tier is gated on the current one.
+  static constexpr float kPressureWindow = 30.0F;
+  // Elite kills (weighted 1.0) needed inside the window to call elites routine.
+  static constexpr float kChampionPressure = 7.0F;
+  // Champion kills needed inside the window to call champions routine.
+  static constexpr float kOverlordPressure = 6.0F;
+  // Even a great player waits this long: the first minute is for the build.
+  static constexpr float kChampionMinTime = 90.0F;
+  static constexpr float kOverlordMinTime = 240.0F;
+  // Once earned, a tier stays open for a while so the director does not
+  // flicker on and off between two kills.
+  static constexpr float kTierGrace = 20.0F;
+  float tierPressure_[4] = {0.0F, 0.0F, 0.0F, 0.0F};
+  bool tierOpen_[4] = {false, true, false, false};
+  float tierGrace_[4] = {0.0F, 0.0F, 0.0F, 0.0F};
+  // Transient HUD banner for "a new tribunal opened", with its own timer.
+  std::string tierBanner_;
+  float tierBannerT_ = 0.0F;
+
+  // Per-tick update of the director (decay + open/close with hysteresis).
+  void updateTierDirector();
 
   // --- Profile / main menu state ---------------------------------------------
   // Not owned: main() owns the Profile and keeps it alive. Null in tests that

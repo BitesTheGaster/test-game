@@ -277,7 +277,7 @@ max_stacks = 3
 [[upgrade]]
 id = "leech_soul"
 name = "Soulfeed"
-desc = "+6% lifesteal (on kill)"
+desc = "+6% lifesteal"
 effect = "lifesteal_add"
 value = 6
 max_stacks = 2

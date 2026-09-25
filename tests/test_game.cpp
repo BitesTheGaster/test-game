@@ -4,6 +4,7 @@
 #include "game/game.hpp"
 #include "game/content.hpp"
 #include "game/profile.hpp"
+#include "core/input/key_repeat.hpp"
 #include "core/sim/spatial_hash.hpp"
 #include "core/sim/fixed_timestep.hpp"
 
@@ -2686,4 +2687,270 @@ TEST_CASE("Test sandbox rerolls have no budget") {
   close.testModeToggle = true;
   g.advance(1.0F / 60.0F, close);
   REQUIRE(g.state() == game::RunState::Playing);
+}
+
+// --- Round 11: menu repeat, max-all soft-lock, displacement resistance -------
+
+TEST_CASE("Menu key repeat fires once per press, then paces itself") {
+  core::input::KeyRepeat up;
+
+  // A fresh press acts immediately, so a single tap never feels laggy.
+  REQUIRE(up.update(true, true, 1.0F / 60.0F));
+
+  // Holding does nothing for the initial delay: this is the "arrows skip three
+  // rows the instant you touch them" fix.
+  float held = 0.0F;
+  while (held < core::input::KeyRepeat::kInitialDelay - 0.01F) {
+    REQUIRE_FALSE(up.update(true, false, 0.02F));
+    held += 0.02F;
+  }
+
+  // Past the delay it repeats, but at the slow cadence, not once per frame.
+  int fired = 0;
+  for (int i = 0; i < 50; ++i) {
+    if (up.update(true, false, 0.02F)) ++fired;
+  }
+  REQUIRE(fired > 1);
+  // 1.0s of extra holding at a 0.11s cadence: at most ~10, never 50.
+  REQUIRE(fired <= 12);
+
+  // One action per poll even after a huge frame hitch: a 5 s stall must not
+  // replay ~45 queued steps and teleport the cursor down the list.
+  core::input::KeyRepeat hitched;
+  REQUIRE(hitched.update(true, true, 0.016F));
+  int burst = 0;
+  for (int i = 0; i < 5; ++i) {
+    if (hitched.update(true, false, 5.0F)) ++burst;
+  }
+  REQUIRE(burst == 5); // exactly one per poll, never a catch-up storm
+
+  // Letting go resets it: the key must be pressed again, and holding it once
+  // more starts the delay from scratch.
+  core::input::KeyRepeat released;
+  released.update(true, true, 0.016F);
+  REQUIRE_FALSE(released.update(false, false, 1.0F));
+  REQUIRE_FALSE(released.update(true, false, 0.1F));
+  REQUIRE(released.update(true, true, 0.016F));
+}
+
+TEST_CASE("A maxed-out build still finishes its level-up") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 111};
+  g.testDisableWaves();
+  g.testClearWeapons();
+  g.testAddWeapon(0); // one weapon: every other weapon's cards stay unapplyable
+  game::FrameInput in{};
+  g.advance(1.0F / 60.0F, in);
+
+  game::FrameInput open{};
+  open.testModeToggle = true;
+  g.advance(1.0F / 60.0F, open);
+  REQUIRE(g.testMode());
+  g.testMaxAllItems();
+
+  // The reported bug: "after max all the game hangs while offering the one
+  // upgrade it has left". Level up repeatedly and never be offered a card that
+  // cannot be applied.
+  g.grantXp(1000.0F);
+  g.advance(1.0F / 60.0F, in);
+  REQUIRE(g.state() == game::RunState::LevelUp);
+
+  int levels = 0;
+  for (int guard = 0; guard < 200 && g.state() == game::RunState::LevelUp; ++guard) {
+    for (const auto& c : g.upgradeChoices()) {
+      if (c.kind == game::Choice::Kind::Skip) continue;
+      REQUIRE(c.kind == game::Choice::Kind::Upgrade);
+      const auto& def = content.upgrades[static_cast<std::size_t>(c.index)];
+      if (!def.weapon.empty()) {
+        CAPTURE(def.id);
+        // A weapon card for a weapon the player does not own would be a dead
+        // pick: choosing it used to consume nothing and brick the run.
+        bool armed = false;
+        for (const auto& id : g.armedWeaponIds()) armed = armed || id == def.weapon;
+        REQUIRE(armed);
+      }
+    }
+    game::FrameInput pick{};
+    pick.choose1 = true;
+    g.advance(1.0F / 60.0F, pick);
+    ++levels;
+  }
+  // The queue of level-ups granted by the big XP dump is fully consumed: the run
+  // is playable again instead of stuck on the card screen.
+  REQUIRE(g.state() == game::RunState::Playing);
+  REQUIRE(levels > 1);
+
+  // A picker roll in that state still produces a usable card, not a dead one.
+  g.grantXp(100000.0F);
+  g.advance(1.0F / 60.0F, in);
+  REQUIRE(g.state() == game::RunState::LevelUp);
+  REQUIRE_FALSE(g.upgradeChoices().empty());
+}
+
+TEST_CASE("Void Gyre drag and shove both shrink against enemy resistance") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  int gyre = -1;
+  for (std::size_t i = 0; i < content.weapons.size(); ++i) {
+    if (content.weapons[i].id == "vortex") gyre = static_cast<int>(i);
+  }
+  REQUIRE(gyre >= 0);
+
+  // Identical runs, only the target's knockback resistance differs.
+  const auto dragged = [&content, gyre](float res) {
+    game::Game g{content, 58};
+    g.testDisableWaves();
+    g.testClearWeapons();
+    g.testAddWeapon(gyre);
+    g.testSpawnEnemyAt(2.2F, 0.0F); // stationary target, no self-movement
+    g.testSetFirstEnemyKnockbackRes(res);
+    game::FrameInput in{};
+    for (int i = 0; i < 120; ++i) g.advance(1.0F / 60.0F, in);
+    return g.testFirstEnemyDistToVortex();
+  };
+  const float soft = dragged(0.0F);
+  const float tough = dragged(1.0F);
+  REQUIRE(soft > 0.0F);
+  REQUIRE(tough > 0.0F);
+  // A fully resistant enemy is dragged in far less: the aura can no longer
+  // corkscrew a boss on its own, which is what made the super dominant.
+  REQUIRE(tough > soft + 0.3F);
+
+  // The time-based ramp exists and reaches its cap: enemies get harder to
+  // displace as a run goes on, and old spawns are lifted with it.
+  REQUIRE(game::enemyKnockbackResistance(0.0F, 0, false) == Catch::Approx(0.0F));
+  REQUIRE(game::enemyKnockbackResistance(400.0F, 0, false) ==
+          Catch::Approx(400.0F / 750.0F).margin(0.001F));
+  REQUIRE(game::enemyKnockbackResistance(525.0F, 0, false) == Catch::Approx(0.7F));
+  REQUIRE(game::enemyKnockbackResistance(2000.0F, 0, false) == Catch::Approx(0.7F));
+  REQUIRE(game::enemyKnockbackResistance(2000.0F, 3, true) == Catch::Approx(1.0F));
+}
+
+TEST_CASE("Test sandbox rolls back the state it used to leak") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 76};
+  g.testDisableWaves();
+  g.testClearWeapons();
+  g.testAddWeapon(0);
+  g.testSpawnEnemyAt(3.0F, 0.0F);
+  g.testSpawnEnemyAt(-3.0F, 0.0F);
+  game::FrameInput in{};
+  g.advance(1.0F / 60.0F, in);
+
+  const float entryTime = g.simTime();
+  const std::size_t entryEnemies = g.enemyCount();
+  const float entryHp = g.playerHp();
+  const std::vector<float> entryEnemyHp = g.testEnemyHps();
+
+  game::FrameInput open{};
+  open.testModeToggle = true;
+  g.advance(1.0F / 60.0F, open);
+  REQUIRE(g.testMode());
+
+  // Do a bit of everything the sandbox allows: hurt, kill, weapon swap, max all
+  // items, fast-forward the clock and open the item picker.
+  g.toggleTestInvuln(); // the injected fodder would otherwise maul the player
+  g.testHurtPlayer(35.0F);
+  g.testMaxAllItems();
+  g.testKillFirstEnemy();
+  g.setTestWeapon(3);
+  game::FrameInput fast{};
+  fast.testTime = true;
+  g.advance(1.0F / 60.0F, fast);
+  game::FrameInput shop{};
+  shop.testShop = true;
+  g.advance(1.0F / 60.0F, shop);
+  REQUIRE(g.testShopOpen());
+  for (int i = 0; i < 20; ++i) g.advance(1.0F / 60.0F, in);
+  REQUIRE(g.state() != game::RunState::GameOver);
+  REQUIRE(g.simTime() > entryTime + 0.5F);
+
+  game::FrameInput close{};
+  close.testModeToggle = true;
+  g.advance(1.0F / 60.0F, close);
+  REQUIRE_FALSE(g.testMode());
+
+  // The clock goes back to the moment the sandbox was opened (plus the one tick
+  // that frame already ran), not to the fast-forwarded sandbox time.
+  REQUIRE(g.simTime() == Catch::Approx(entryTime + 1.0F / 60.0F).margin(0.02F));
+  // Enemies that were on the field are back: same count, same HP, and one that
+  // the sandbox killed is rebuilt instead of vanishing.
+  REQUIRE(g.enemyCount() == entryEnemies);
+  const std::vector<float> after = g.testEnemyHps();
+  REQUIRE(after.size() == entryEnemyHp.size());
+  for (std::size_t i = 0; i < after.size(); ++i) {
+    REQUIRE(after[i] == Catch::Approx(entryEnemyHp[i]));
+  }
+  // Player HP, weapons, XP and the unique-item state are all rolled back.
+  REQUIRE(g.playerHp() == Catch::Approx(entryHp));
+  REQUIRE(g.armedWeaponIds().size() == 1);
+  REQUIRE(g.armedWeaponIds().front() == content.weapons[0].id);
+  REQUIRE(g.xp() == Catch::Approx(0.0F));
+  REQUIRE(g.rerollsUsed() == 0);
+  REQUIRE_FALSE(g.milestoneOffer());
+  // Nothing sandbox-only survives: no injected fodder, no stray projectiles.
+  REQUIRE(g.debugCounts().projectiles == 0);
+  REQUIRE(g.testTimeScale() == 1);
+}
+
+TEST_CASE("Champions wait for elites to be easy, overlords for champions") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 120};
+  g.testDisableWaves();
+  g.testClearWeapons();
+  game::FrameInput in{};
+  g.advance(1.0F / 60.0F, in);
+
+  // Nothing about a clock alone opens the heavy tiers: past the old 180 s mark
+  // with a clean sheet, champions are still shut.
+  g.testSetSimTime(200.0F);
+  g.advance(1.0F / 60.0F, in);
+  REQUIRE(g.tierUnlocked(1));
+  REQUIRE_FALSE(g.tierUnlocked(2));
+  REQUIRE(g.tierSpawnChance(2) == 0.0F);
+  REQUIRE_FALSE(g.tierUnlocked(3));
+  REQUIRE(g.tierSpawnChance(3) == 0.0F);
+
+  // Clearing an elite is what actually counts.
+  g.testSpawnTieredEnemyAt(4.0F, 0.0F, 1);
+  g.testKillFirstEnemy();
+  g.advance(1.0F / 60.0F, in);
+  REQUIRE(g.tierPressure(1) > 0.0F);
+  REQUIRE_FALSE(g.tierUnlocked(2));
+
+  // Handle enough of them and the champion tribunal opens by itself.
+  g.testAddTierPressure(1, 8.0F);
+  g.advance(1.0F / 60.0F, in);
+  REQUIRE(g.tierUnlocked(2));
+  REQUIRE(g.tierSpawnChance(2) > 0.0F);
+  // The better the player does, the more champions show up.
+  const float champChance = g.tierSpawnChance(2);
+  g.testAddTierPressure(1, 20.0F);
+  g.advance(1.0F / 60.0F, in);
+  REQUIRE(g.tierSpawnChance(2) > champChance);
+
+  // Overlords are gated on CHAMPIONS, not on the clock.
+  g.testSetSimTime(300.0F);
+  g.advance(1.0F / 60.0F, in);
+  REQUIRE_FALSE(g.tierUnlocked(3));
+  g.testAddTierPressure(2, 7.0F);
+  g.advance(1.0F / 60.0F, in);
+  REQUIRE(g.tierUnlocked(3));
+  REQUIRE(g.tierSpawnChance(3) > 0.0F);
+
+  // And it is reversible: the form evaporates, the score falls back under the
+  // line and the gate shuts again once the grace window runs out.
+  game::Game fading{content, 121};
+  fading.testDisableWaves();
+  fading.testClearWeapons();
+  fading.advance(1.0F / 60.0F, in);
+  fading.testSetSimTime(200.0F);
+  fading.testAddTierPressure(1, 7.5F);
+  fading.advance(1.0F / 60.0F, in);
+  REQUIRE(fading.tierUnlocked(2));
+  fading.testAddTierPressure(1, -8.0F); // form is gone
+  REQUIRE(fading.tierPressure(1) < 7.0F);
+  REQUIRE(fading.tierUnlocked(2));      // still inside the grace window
+  for (int i = 0; i < 24 * 60; ++i) fading.advance(1.0F / 60.0F, in);
+  REQUIRE_FALSE(fading.tierUnlocked(2));
+  REQUIRE_FALSE(fading.tierUnlocked(3));
 }

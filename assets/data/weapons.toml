@@ -256,7 +256,7 @@ id = "halo"
 name = "Radiant Halo"
 desc = "Dagger + Lance. Blades of light orbit you, reaping all they touch."
 attack_type = "halo"
-damage = 55.0
+damage = 40.0
 cooldown = 1.00
 projectiles = 2
 proj_speed = 0.0
@@ -276,9 +276,9 @@ beam_width = 0.5
 [[weapon]]
 id = "vortex"
 name = "Void Gyre"
-desc = "Dagger + Scythe + Void Orb. Suction zones circle you and drag prey into their cores. More projectiles = more AND bigger zones."
+desc = "Dagger + Scythe + Void Orb. Suction zones circle you and drag prey into their cores. More projectiles = more AND bigger zones (up to a cap)."
 attack_type = "vortex"
-damage = 55.0
+damage = 40.0
 cooldown = 1.00
 projectiles = 3
 proj_speed = 0.0
@@ -289,11 +289,12 @@ proj_color = [0.62, 0.36, 1.0, 1.0]
 requires = ["dagger", "scythe", "orb"]
 vortex_radius = 1.4
 vortex_reach = 2.8
-# Deliberately stronger than the zone's own tangential speed
-# (orbit 2.8 * spin 1.9 = 5.3 u/s): prey must be held, not leaked at the edge.
-vortex_pull = 6.0
+# Slightly stronger than the zone's own tangential speed (2.8 * 1.7 = 4.8
+# u/s) so early-game prey is held, while the growing knockback resistance over
+# a run makes late enemies slip through instead of being pinned forever.
+vortex_pull = 5.0
 vortex_orbit = 2.8
-vortex_orbit_speed = 1.9
+vortex_orbit_speed = 1.7
 vortex_tick_rate = 0.1
 
 [[weapon]]
@@ -301,16 +302,16 @@ id = "prism"
 name = "Prism Array"
 desc = "Sprayer + Lance + Crossbow. One locked beam per projectile, each on a different enemy — a crowd gets shredded from several angles at once."
 attack_type = "prism"
-damage = 60.0
-cooldown = 0.90
+damage = 42.0
+cooldown = 1.05
 projectiles = 4
 proj_speed = 0.0
 proj_life = 0.0
-pierce = 3
+pierce = 2
 spread = 0.0
 proj_color = [0.60, 0.95, 1.0, 1.0]
 requires = ["flame", "beam", "crossbow"]
 prism_range = 11.0
 prism_width = 0.5
-prism_max_targets = 6
+prism_max_targets = 5
 beam_duration = 0.18

@@ -257,9 +257,9 @@ struct Vortex {
   int pierce = 0;          // reduces crowd damage falloff
   float radius = 1.3F;     // damage core radius
   float reach = 2.6F;      // outer edge where the pull starts
-  float pull = 4.0F;       // inward drag, world units per second
+  float pull = 5.0F;       // inward drag, world units per second
   float orbitRadius = 2.6F;// distance from the player
-  float spin = 1.8F;       // radians per second
+  float spin = 1.7F;       // radians per second
   float angle = 0.0F;      // current position on the orbit
   float tickRate = 0.1F;   // damage ticks per second
   float tickTimer = 0.0F;

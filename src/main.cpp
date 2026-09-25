@@ -1,3 +1,4 @@
+#include "core/input/key_repeat.hpp"
 #include "core/platform/window.hpp"
 #include "core/render/batcher.hpp"
 #include "game/game.hpp"
@@ -57,8 +58,28 @@ std::filesystem::path findDataDir() {
       "project directory — the game resolves assets relative to the binary.");
 }
 
-game::FrameInput pollInput(bool& quit) {
+struct MenuRepeatState {
+  core::input::KeyRepeat up;
+  core::input::KeyRepeat down;
+  core::input::KeyRepeat left;
+  core::input::KeyRepeat right;
+
+  void reset() {
+    up.reset();
+    down.reset();
+    left.reset();
+    right.reset();
+  }
+};
+
+game::FrameInput pollInput(bool& quit, float deltaSeconds, bool menuActive,
+                          MenuRepeatState& repeats) {
   game::FrameInput in{};
+
+  bool menuUpPressed = false;
+  bool menuDownPressed = false;
+  bool menuLeftPressed = false;
+  bool menuRightPressed = false;
 
   SDL_Event event;
   while (SDL_PollEvent(&event)) {
@@ -83,11 +104,17 @@ game::FrameInput pollInput(bool& quit) {
         case SDLK_K: in.testKill = true; break;
         case SDLK_H: in.heal = true; break;
         case SDLK_B: in.bestiary = true; break;
-        // Main menu navigation + confirm.
-        case SDLK_UP: in.menuUp = true; break;
-        case SDLK_DOWN: in.menuDown = true; break;
-        case SDLK_LEFT: in.menuLeft = true; break;
-        case SDLK_RIGHT: in.menuRight = true; break;
+        // Main menu navigation + confirm.  Directional presses are converted
+        // to repeat events below; the edge is kept separate from the held
+        // state so a quick tap cannot be lost between frames.
+        case SDLK_UP:
+        case SDLK_W: menuUpPressed = true; break;
+        case SDLK_DOWN:
+        case SDLK_S: menuDownPressed = true; break;
+        case SDLK_LEFT:
+        case SDLK_A: menuLeftPressed = true; break;
+        case SDLK_RIGHT:
+        case SDLK_D: menuRightPressed = true; break;
         case SDLK_RETURN:
         case SDLK_KP_ENTER:
         case SDLK_SPACE: in.menuConfirm = true; break;
@@ -105,11 +132,20 @@ game::FrameInput pollInput(bool& quit) {
   if (keys[SDL_SCANCODE_S] || keys[SDL_SCANCODE_DOWN]) y -= 1.0F;
   in.moveX = x;
   in.moveY = y;
-  // W/A/S/D double as menu arrows so the game is fully mouse/keyboard-less.
-  if (y > 0.0F) in.menuUp = true;
-  if (y < 0.0F) in.menuDown = true;
-  if (x < 0.0F) in.menuLeft = true;
-  if (x > 0.0F) in.menuRight = true;
+
+  if (menuActive) {
+    // W/A/S/D double as menu arrows so the game is fully keyboard-less.  A
+    // held arrow fires once immediately, waits 350 ms, then repeats every
+    // 110 ms instead of racing through the menu at the frame rate.
+    in.menuUp = repeats.up.update(y > 0.0F, menuUpPressed, deltaSeconds);
+    in.menuDown = repeats.down.update(y < 0.0F, menuDownPressed, deltaSeconds);
+    in.menuLeft = repeats.left.update(x < 0.0F, menuLeftPressed, deltaSeconds);
+    in.menuRight = repeats.right.update(x > 0.0F, menuRightPressed, deltaSeconds);
+  } else {
+    // Do not let a movement key held while the overlay was closed cause a
+    // surprise navigation jump on the next frame.
+    repeats.reset();
+  }
   return in;
 }
 
@@ -144,6 +180,7 @@ int main() {
 
     std::uint64_t previous = SDL_GetPerformanceCounter();
     bool quit = false;
+    MenuRepeatState menuRepeats;
 
     while (!quit) {
       const std::uint64_t now = SDL_GetPerformanceCounter();
@@ -152,7 +189,8 @@ int main() {
       previous = now;
       if (dt > 0.1F) dt = 0.1F;
 
-      const game::FrameInput input = pollInput(quit);
+      const game::FrameInput input = pollInput(
+          quit, dt, g.menuOpen() || g.testShopOpen(), menuRepeats);
       g.advance(dt, input);
       // Persist the profile whenever a kill unlocked an outline or the menu
       // changed a selection. consumeProfileDirty() clears the flag.
