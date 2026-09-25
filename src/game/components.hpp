@@ -247,4 +247,24 @@ struct HaloBeam {
   core::render::Color color{1.0F, 1.0F, 0.75F, 1.0F};
 };
 
+// Vortex evolution: a heavy suction zone anchored at a fixed distance from the
+// player, circling them. It is NOT a damage pool like Nova/Zone — its whole
+// identity is the inward drag: anything caught in `reach` is hauled toward the
+// core, and anything that reaches the core itself is cut up. Several of these
+// orbit at once, so a crowd gets corkscrewed into a kill box.
+struct Vortex {
+  float damage = 30.0F;    // damage per second once an enemy is inside the core
+  int pierce = 0;          // reduces crowd damage falloff
+  float radius = 1.3F;     // damage core radius
+  float reach = 2.6F;      // outer edge where the pull starts
+  float pull = 4.0F;       // inward drag, world units per second
+  float orbitRadius = 2.6F;// distance from the player
+  float spin = 1.8F;       // radians per second
+  float angle = 0.0F;      // current position on the orbit
+  float tickRate = 0.1F;   // damage ticks per second
+  float tickTimer = 0.0F;
+  int weaponIndex = -1;    // owning weapon slot (-1 = orphaned)
+  core::render::Color color{0.6F, 0.4F, 1.0F, 1.0F};
+};
+
 } // namespace game

@@ -14,6 +14,8 @@
 #   nova        - expanding ring from player (evolution)
 #   inferno     - circle reap + burning ground (evolution)
 #   pulsar      - boomerang that drags a damage trail (evolution)
+#   vortex      - rotating suction zones that drag enemies inward (super)
+#   prism       - N locked beams, one per target (super)
 #
 # - starter = true: one of these is rolled as the run-start weapon.
 # - requires = [a, b]: evolution weapon, offered as a level-up grant once you
@@ -268,40 +270,47 @@ beam_range = 6.0
 beam_width = 0.5
 
 # --- Super evolutions (A+B+C = super) ----------------------------------------
+# Supers are deliberately NOT stat-bumps of an existing evolution: each one
+# introduces a mechanic nothing else in the pool has.
 
 [[weapon]]
-id = "aether"
-name = "Aetherstorm"
-desc = "Wand + Crossbow + Shuriken. A storm of returning light-blades dragging searing trails."
-attack_type = "pulsar"
-damage = 26.0
-cooldown = 0.65
+id = "vortex"
+name = "Void Gyre"
+desc = "Dagger + Scythe + Void Orb. Suction zones circle you and drag prey into their cores. More projectiles = more AND bigger zones."
+attack_type = "vortex"
+damage = 55.0
+cooldown = 1.00
 projectiles = 3
-proj_speed = 24.0
-proj_life = 2.6
-pierce = 6
-spread = 0.14
-proj_color = [0.70, 0.90, 1.00, 1.0]
-requires = ["wand", "crossbow", "shuriken"]
-boomerang_range = 9.0
-boomerang_return_speed = 2.8
-beam_width = 0.8
+proj_speed = 0.0
+proj_life = 0.0
+pierce = 4
+spread = 0.0
+proj_color = [0.62, 0.36, 1.0, 1.0]
+requires = ["dagger", "scythe", "orb"]
+vortex_radius = 1.4
+vortex_reach = 2.8
+# Deliberately stronger than the zone's own tangential speed
+# (orbit 2.8 * spin 1.9 = 5.3 u/s): prey must be held, not leaked at the edge.
+vortex_pull = 6.0
+vortex_orbit = 2.8
+vortex_orbit_speed = 1.9
+vortex_tick_rate = 0.1
 
 [[weapon]]
-id = "helios"
-name = "Helios Wheel"
-desc = "Dagger + Lance + Hammer. Four blades of sunlight orbit you, crushing and hurling all they touch."
-attack_type = "halo"
-damage = 90.0
-cooldown = 0.80
+id = "prism"
+name = "Prism Array"
+desc = "Sprayer + Lance + Crossbow. One locked beam per projectile, each on a different enemy — a crowd gets shredded from several angles at once."
+attack_type = "prism"
+damage = 60.0
+cooldown = 0.90
 projectiles = 4
 proj_speed = 0.0
 proj_life = 0.0
-pierce = 6
+pierce = 3
 spread = 0.0
-proj_color = [1.00, 0.85, 0.35, 1.0]
-requires = ["dagger", "beam", "hammer"]
-orbit_speed = 3.2
-beam_range = 8.0
-beam_width = 0.6
-halo_knockback = 5.0
+proj_color = [0.60, 0.95, 1.0, 1.0]
+requires = ["flame", "beam", "crossbow"]
+prism_range = 11.0
+prism_width = 0.5
+prism_max_targets = 6
+beam_duration = 0.18

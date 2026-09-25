@@ -41,6 +41,11 @@ struct FrameInput {
   bool restart = false;
   bool togglePause = false;
   bool testModeToggle = false; // T: open/close the weapon test mode
+  bool testShop = false;       // E: open/close the sandbox item picker
+  bool testInvuln = false;     // I: toggle sandbox immortality
+  bool testKill = false;       // K: kill the player on demand
+  bool testTime = false;       // F: cycle the sandbox difficulty timer
+  // Note: `restart` (R) is repurposed INSIDE the sandbox as "max every item".
   bool heal = false;           // H: guaranteed 50% max-HP heal (cooldown-gated)
   bool bestiary = false;       // B: toggle the bestiary while paused
   // --- Main menu --------------------------------------------------------------
@@ -103,6 +108,9 @@ struct PlayerStats {
   float aimJitter = 0.0F;
   int extraChoice = 0;    // +N level-up cards
   int rerollCharges = 0;  // +N extra rerolls (the base budget is already 1)
+  // Extra weapon slots. The arsenal starts at kBaseWeapons (4) and the
+  // "Arsenal Core" card adds one slot per stack, up to 3 stacks => 7 total.
+  int weaponSlots = 0;
   float thornsDmg = 0.0F; // AoE burst around player on hit
   int adrenaline = 0;     // speed burst when HP is low
   int blackHole = 0;      // periodic enemy pull
@@ -193,6 +201,11 @@ public:
   [[nodiscard]] bool milestoneOffer() const { return milestoneOffer_; }
   // True while the weapon test mode is open (T). Exposed for tests.
   [[nodiscard]] bool testMode() const { return testMode_; }
+  // Sandbox switches.
+  [[nodiscard]] bool testInvulnerable() const { return testMode_ && testInvuln_; }
+  [[nodiscard]] int testTimeScale() const { return testMode_ ? testTimeScale_ : 1; }
+  [[nodiscard]] bool testShopOpen() const { return testMode_ && testShopOpen_; }
+  [[nodiscard]] int testShopCursor() const { return testShopCursor_; }
   // True while the opening 3-weapon pick is being offered.
   [[nodiscard]] bool choosingStarter() const { return choosingStarter_; }
   // True while the bestiary overlay is open (paused).
@@ -263,8 +276,23 @@ public:
   // Test helper: number of set trait flags for every live Enemy. Order
   // unspecified.
   [[nodiscard]] std::vector<int> testEnemyTraitCounts() const;
-  // Test helper: freeze wave spawning so tests control the enemy pool exactly.
+  // Test hook: freeze wave spawning so tests control the enemy pool exactly.
   void testDisableWaves() { wavesEnabled_ = false; }
+  // --- Weapon test sandbox (T) — public controls, used by input + tests ------
+  void enterTestMode();
+  void exitTestMode();
+  void setTestWeapon(int defIndex);
+  void toggleTestBoost() { toggleTestBoost_(); }
+  void toggleTestInvuln() { testInvuln_ = !testInvuln_; }
+  // Difficulty-timer presets: 1x, 4x, 10x, 20x, then back to 1x.
+  void cycleTestTimeScale();
+  void toggleTestShop();
+  // Test hook: grant one stack of an upgrade straight into the sandbox.
+  bool testGrantUpgrade(int index) { return grantTestUpgrade(index); }
+  // Test hook: the sandbox "max everything" cheat.
+  void testMaxAllItems();
+  // Test hook: put the player at death's door through the normal damage path.
+  void testKillPlayer();
   // Test helper: apply a per-weapon upgrade (same path as weapon Focus cards).
   void testAddWeaponUpgrade(int slot, std::string_view effect, float value) {
     applyWeaponEffect(slot, effect, value);
@@ -284,6 +312,10 @@ public:
   void testDamageFirstEnemy(float dmg);
   // Test helper: distance from the player to the first Enemy (-1 if none).
   [[nodiscard]] float testFirstEnemyDistToPlayer() const;
+  // Test helper: distance from the first Enemy to the NEAREST live Vortex zone
+  // (-1 if there is no enemy or no zone). This is what proves the suction zones
+  // actually drag prey into their cores.
+  [[nodiscard]] float testFirstEnemyDistToVortex() const;
   // Test helper: current speed (velocity magnitude) of every live Enemy.
   [[nodiscard]] std::vector<float> testEnemySpeeds() const;
   // Test helper: current HP of every live Enemy (order unspecified — use for
@@ -360,6 +392,7 @@ public:
     std::size_t zones = 0;
     std::size_t chains = 0;
     std::size_t novas = 0;
+    std::size_t vortices = 0;
   };
   [[nodiscard]] DebugCounts debugCounts() const;
   [[nodiscard]] std::size_t debugEnemyCount() const;
@@ -454,8 +487,24 @@ private:
     // Weapon-unique modifiers.
     float uniqueHeal = 0.0F; // scythe "Reaper's Harvest": heal HP per kill
     int beamSplit = 0;       // beam "Prism Lance": beam count multiplier
+
+    // Vortex (evolution): rotating suction zones around the player.
+    float vortexRadius = 1.3F;   // damage core radius
+    float vortexReach = 2.6F;    // how far out enemies start getting pulled in
+    float vortexPull = 4.0F;     // pull strength (world units / sec)
+    float vortexOrbit = 2.6F;    // distance of the zone from the player
+    float vortexOrbitSpeed = 1.8F;
+    float vortexTickRate = 0.1F;
+
+    // Prism (evolution): one locked beam per projectile, up to a hard cap.
+    float prismRange = 9.0F;
+    float prismWidth = 0.45F;
+    int prismMaxTargets = 6;
   };
-  static constexpr int kMaxWeapons = 5;
+  // The arsenal starts at 4 weapons; each "Arsenal Core" stack adds one more
+  // (max 3 stacks), so the storage array must hold the fully-stacked total.
+  static constexpr int kBaseWeapons = 4;
+  static constexpr int kMaxWeapons = kBaseWeapons + 3;
 
   // Pending spawn telegraphs (enemies walk in after a short warning).
   struct PendingSpawn {
@@ -481,6 +530,9 @@ private:
   };
 
   void fixedUpdate();
+  // One simulation step. fixedUpdate() may run this several times per frame
+  // when the test sandbox's difficulty clock is fast-forwarded.
+  void fixedStep();
   void spawnWave();
   void processPendingSpawns();
   void fireWeapons();
@@ -489,6 +541,7 @@ private:
   void updateProjectiles();
   void updateOrbitBlades();
   void updateHaloBeams();
+  void updateVortices();
   void updateBombProjectiles();
   void updateBoomerangProjectiles();
   void updateBounceProjectiles();
@@ -509,10 +562,17 @@ private:
   void buildStarterChoices();
   void buildChoices();
   void chooseUpgrade(int slot);
+  // Applies one upgrade card to the run (stats, stack count, per-weapon cards,
+  // HP/shield top-up). Shared by the level-up picker and the test item list.
+  bool applyUpgradeAt(int upgradeIndex);
   void reroll();
   void addWeapon(int defIndex);
   void syncOrbitBlades(int slot); // add orbit blades up to the current count
   void syncHaloBeams(int slot);   // add halo beams up to the current count
+  void syncVortices(int slot);    // add vortex zones up to the current count
+  // Base arsenal size + any "+1 weapon slot" stacks. Weapons cannot be added
+  // past this, and the level-up offer stops appearing once it is full.
+  [[nodiscard]] int weaponCap() const { return kBaseWeapons + stats_.weaponSlots; }
   void applyWeaponEffect(int slotIndex, std::string_view effect, float value);
   int findWeaponSlot(std::string_view weaponId) const;
   bool ownsWeapon(int defIndex) const;
@@ -554,21 +614,65 @@ private:
   [[nodiscard]] float iframeDuration(float base) const;
   // Weapon test mode (T): cycle every weapon incl. evolutions, apply a boosted
   // build to see stat couplings, toggle waves, close to restore the run.
-  void enterTestMode();
-  void exitTestMode();
-  void setTestWeapon(int defIndex);
-  void toggleTestBoost();
+  // The entry/exit bodies are private; the thin public wrappers live with the
+  // other test hooks above.
+  void enterTestModeImpl();
+  void exitTestModeImpl();
+  void toggleTestBoost_();
   void spawnTestFodder();
+  // Test sandbox: the "pick any item" list ([E], arrows, Enter).
+  void updateTestShop(const FrameInput& input);
+  void renderTestShop(core::render::Batcher& b, float px, float py);
+  // Test sandbox: grant one stack of an upgrade without going through the
+  // level-up roll. Returns false when the item is already maxed.
+  bool grantTestUpgrade(int upgradeIndex);
 
   WeaponSlot weapons_[kMaxWeapons];
   int weaponCount_ = 0;
   // Weapon test mode state: snapshot of the real run while testing.
   bool testMode_ = false;
   bool testBoosted_ = false;
+  // Stats snapshot taken the moment the "max build" boost was switched on, so
+  // switching it back off only undoes the boost and keeps any item picks.
+  PlayerStats testBoostBase_;
   int testWeaponIdx_ = 0;
+  // --- Sandbox switches (all reset when the mode is left) --------------------
+  bool testInvuln_ = false;   // immortality: incoming damage is ignored
+  int testTimeScale_ = 1;     // difficulty-timer multiplier (1 / 4 / 10 / 20)
+  bool testShopOpen_ = false; // the "pick any item" list
+  int testShopCursor_ = 0;    // highlighted row in that list
+  int testShopScroll_ = 0;    // first visible row (list is longer than the screen)
+  // Full snapshot of the run. The sandbox is completely hermetic: anything that
+  // happens inside it (XP, levels, kills, bestiary entries, outline unlocks,
+  // item stacks, HP/shield) is rolled back when the mode is closed.
   int savedWeaponCount_ = 0;
   WeaponSlot savedWeapons_[kMaxWeapons];
+  // Enemies already on the field when the sandbox opened. Everything spawned
+  // after that is sandbox fodder and is removed on exit; the original horde is
+  // kept so the run is not handed back a suspiciously empty arena.
+  std::vector<entt::entity> savedEnemies_;
+  float savedPlayerX_ = 0.0F;
+  float savedPlayerY_ = 0.0F;
   PlayerStats savedStats_;
+  std::vector<int> savedStacks_;
+  std::vector<int> savedBestiaryKills_;
+  std::vector<std::uint8_t> savedBestiaryTiers_;
+  float savedXp_ = 0.0F;
+  float savedXpNext_ = 0.0F;
+  int savedLevel_ = 1;
+  int savedKills_ = 0;
+  float savedHp_ = 0.0F;
+  float savedHpMax_ = 0.0F;
+  float savedShield_ = 0.0F;
+  float savedShieldDelay_ = 0.0F;
+  float savedIframes_ = 0.0F;
+  float savedHealCd_ = 0.0F;
+  float savedSimTime_ = 0.0F;
+  bool savedWaves_ = true;
+  bool savedChoosingStarter_ = false;
+  int savedStrongestTier_ = 0;
+  int savedStrongestDef_ = -1;
+  std::uint8_t savedTierKillMask_ = 0;
   std::vector<PendingSpawn> pending_;
 
   const Content& content_;

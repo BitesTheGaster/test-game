@@ -48,7 +48,7 @@ curves. Tables of all content are generated into
 | Fire rate | **Dagger orbit spin** — blades rotate at `orbitSpeed · max(0.5, 1 + fireRateBonus)` |
 | Projectiles | **Cone range** (+25%/proj), **Bomb arc height** (+25%), **Beam count & width** (each projectile is a parallel beam; width +5%/proj), **Halo spokes** (+1 spoke), **Scythe arc radius** (+15%), **Nova radius** (+10%), **Zone radius** (+20%) |
 | Pierce | **Bomb blast radius** (+15%), **Bounce bounces**, **Chain jumps** (one more each), **Zone DPS** (+2) |
-| Knockback | **Impact** cards multiply every knockback the player deals — bombs, scythe/inferno bursts, Radiant Halo / Helios spokes and Repulsion Field retaliation |
+| Knockback | **Impact** cards multiply every knockback the player deals — bombs, scythe/inferno bursts, Radiant Halo spokes and Repulsion Field retaliation |
 
 ### Fire rate (additive, never zero)
 
@@ -97,22 +97,31 @@ large hits.
 - **H** triggers a **guaranteed heal for 50% of max HP** on a 30 s cooldown
   (shown next to the HP bar as `[H] HEAL READY` / `[H] HEAL nS`). This replaces
   the old single-use heal cards, which are no longer in the loot pool.
-- **Lifesteal is chance-based**: a damaging hit with lifesteal `L` has an
-  `L%` chance to heal **1 HP** (capped at max HP). At `L ≥ 100` the first
-  point is guaranteed and the excess `(L − 100)%` rolls for a **second**
-  point — so 150 lifesteal means 100% for 1 HP and 50% for another.
+- **Lifesteal is kill-based**: every enemy **you kill** has an `L%` chance to
+  heal **1 HP** (capped at max HP). At `L ≥ 100` the first point is guaranteed
+  and the excess `(L − 100)%` rolls for a **second** point — so 150 lifesteal
+  means 100% for 1 HP and 50% for another. It deliberately does *not* roll on
+  ordinary hits: at high fire rates per-hit vampirism healed faster than any
+  enemy could die, which made the stat a flat auto-heal instead of a reward for
+  finishing things off.
+- The raw numbers are **deliberately small** — `+4`, `+6` and `+8` per card
+  rather than the `+8` / `+12` / `+16` they used to be. Lifesteal is a nice
+  bonus for a kill-heavy build, not a replacement for avoiding damage.
 - **Enemy lifesteal resistance** scales the chance down: the proc chance is
   multiplied by `1 − resistance`. Resistance grows with run time, is higher for
   tougher tiers, and the `resistant` trait adds a large chunk (a 50% resistance
   halves the chance).
 - The **Vampiric Heart** unique makes every lifesteal proc heal **2 HP**
-  instead of 1.
+  instead of 1. This is the one card left at full strength — it scales the
+  *flat* heal rather than the chance, and halving it would just duplicate the
+  default behaviour.
 - Regen adds flat HP every fixed tick (0.0556 HP/s per point).
 
 ## Weapons
 
-- Up to **5 weapon slots** (`kMaxWeapons`). Each slot runs its own cooldown,
-  damage, projectile count/speed/life/pierce/spread and projectile tint.
+- **4 weapon slots** to begin with, **7** at full Arsenal Core stacks. Each slot
+  runs its own cooldown, damage, projectile count/speed/life/pierce/spread and
+  projectile tint.
 - Every weapon fires `projectiles` bolts in a fan of `spread` radians around
   the aim direction. The fan angle caps at a reasonable maximum so extra
   spread never wraps around backward.
@@ -176,14 +185,33 @@ weapon grant:
   beams that orbit you**, reaping everything they sweep through — the beam's
   damage re-expressed as an always-on ring rather than a brief flash.
 - **Three-ingredient super evolutions** (tag `SUPER EVOLUTION! (A+B+C)`):
-  `aether` (**Aetherstorm**: Arcane Wand + Heavy Crossbow + Storm Shuriken) and
-  `helios` (**Helios Wheel**: Throwing Dagger + Solar Lance + Runic Hammer).
-  Helios is a four-spoke halo that also **hurls** what it touches outward;
-  Aetherstorm is a storm of returning light-blades dragging searing trails.
+  `vortex` (**Void Gyre**: Throwing Dagger + Soul Scythe + Void Orb) and
+  `prism` (**Prism Array**: Ember Sprayer + Solar Lance + Heavy Crossbow).
+  Neither is a re-skin of an existing evolution — each introduces a mechanic
+  nothing else in the pool has:
+  - **Void Gyre** spawns **suction zones** that circle the player. Anything
+    caught in a zone's outer reach is **dragged inward** toward its core every
+    tick, and only takes damage once it has been hauled inside. Both the
+    **number** and the **size** of the zones scale with your projectile count:
+    every `+1 projectile` adds a whole new zone *and* fattens the existing ones,
+    so a late build is a corkscrew of overlapping crushers rather than more
+    circles.
+  - **Prism Array** does not fire one beam at one target. It locks a
+    **separate beam onto each of the N nearest enemies** (up to 6), so a crowd
+    is chewed from several angles at once and one big brute no longer eats
+    every shot.
 - Evolutions and supers are **not** added to the normal weapon pool before the
   prerequisites are met.
 - Picking one grants the evolved weapon **in addition to** the ingredients'
-  slot usage (it occupies one of the 5 slots; you never lose the ingredients).
+  slot usage (it occupies one of the 4 slots; you never lose the ingredients).
+
+## Weapon slots
+
+The arsenal starts at **4** weapon slots. That is a hard cap for most of a run:
+the level-up offer stops appearing for weapons once you are full.
+
+**Arsenal Core** (`+1 weapon slot`, **max 3 stacks**) is the only way past it.
+Each stack adds one slot, so a fully-stacked build can hold **7** weapons.
 
 ## Level-ups
 
@@ -277,20 +305,41 @@ content for it behaves like a normal level-up.
 
 ### Weapon test mode
 
-Press **T** during a live run to open the weapon sandbox (your run's weapons
-and stats are snapshotted and restored when you leave):
+Press **T** during a live run to open the weapon sandbox. The sandbox is a
+**hermetic** sandbox: it snapshots the entire run — weapons, stats, item
+stacks, XP, level, kills, bestiary entries, HP, shield, iframes and the
+difficulty clock — and rolls **all** of it back when you leave. Nothing you do
+inside can leak out, so you cannot farm XP, unlock an outline, or buff your
+real build by testing.
 
 | Key | Action |
 |-----|--------|
-| `T` | Toggle test mode on/off |
-| `1` / `2` | Previous / next weapon — **all 16 including evolutions and supers** (`storm`, `nova`, `inferno`, `pulsar`, `halo`, `aether`, `helios`) |
-| `3` | Apply a **max build** boost: +100% damage, +4 projectiles, +3 pierce, +80% fire rate |
+| `T` | Toggle test mode on/off (also works from a level-up screen) |
+| `1` / `2` | Previous / next weapon — **all 16 including evolutions and supers** (`storm`, `nova`, `inferno`, `pulsar`, `halo`, `vortex`, `prism`) |
+| `3` | Apply a **max build** boost: +100% damage, +4 projectiles, +3 pierce, +80% fire rate. Toggling it off keeps your item picks — it only undoes the boost |
 | `4` | Toggle enemy waves (fodder bats spawn so every weapon has a target) |
 | `5` | Exit back to the untouched run |
+| `E` | Open/close the **item picker** |
+| `I` | Toggle **immortality** (all incoming damage ignored, so you can stand in a horde) |
+| `F` | Cycle the **difficulty clock**: 1× → 4× → 10× → 20× |
+| `K` | **Kill the player** on demand (works through immortality — that is the point of a death switch) |
+| `R` | **Max every item** instantly (milestones excluded) |
 
-While active, each weapon switch spawns a handful of weak test bats and the
-overlay shows the current weapon, whether it is an evolution, and the boost /
-waves state. Level-ups are suppressed so the sandbox never interrupts a run.
+In the item picker, `↑`/`↓` (or `←`/`→`, or `W`/`S`) move the highlight and
+`Enter` takes the highlighted card — one stack per press, up to the card's own
+cap. The list shows each card's current stacks and flags cards that are
+`[MAX]` or `[NOT ARMED]`.
+
+Other sandbox rules worth knowing:
+
+- **Level-ups work** in the sandbox (that is how the card flow gets exercised)
+  but only **item** cards are offered — never weapons, because testing *one*
+  weapon is the entire point. Rerolls are **unlimited** there.
+- Switching weapons re-seeds a herd of weak test bats.
+- Leaving the sandbox removes the sandbox's injected fodder (enemies that were
+  already on the field are kept) and puts you back exactly where you stood.
+- Dying inside the sandbox with `K` drops you on the normal game-over screen;
+  `R` there restarts the run as usual.
 
 ## Enemies
 
@@ -401,8 +450,8 @@ knockbackRes = min(0.70, t/900)  + tierBonus + (resistant ? 0.5 : 0)
 ```
 
 - The 30-second grace period keeps the opening minute free of mitigation.
-- **Knockback** from bombs, the scythe reap, inferno, Radiant Halo / Helios
-  spokes and Repulsion Field retaliation is scaled by `1 − knockbackRes`, so
+- **Knockback** from bombs, the scythe reap, inferno, Radiant Halo spokes
+  and Repulsion Field retaliation is scaled by `1 − knockbackRes`, so
   late/elite enemies get pushed around less and less. Every shove is stored as
   a decaying impulse on the enemy (`kbX`/`kbY`, ×0.82 per tick) that is added
   on top of its steering velocity, so the push actually lands before the AI

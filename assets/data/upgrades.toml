@@ -269,17 +269,17 @@ max_stacks = 2
 [[upgrade]]
 id = "leech_gold"
 name = "Gilded Fangs"
-desc = "+8% lifesteal"
+desc = "+4% lifesteal"
 effect = "lifesteal_add"
-value = 8
+value = 4
 max_stacks = 3
 
 [[upgrade]]
 id = "leech_soul"
 name = "Soulfeed"
-desc = "+12% lifesteal (on kill)"
+desc = "+6% lifesteal (on kill)"
 effect = "lifesteal_add"
-value = 12
+value = 6
 max_stacks = 2
 
 # --- Armor pierce tree --------------------------------------------------------
@@ -458,6 +458,16 @@ effect = "reroll_add"
 value = 1
 max_stacks = 1
 kind = "unique"
+
+# The arsenal is 4 weapons wide to begin with. This is the only way past that:
+# one extra slot per stack, three stacks at most (so 7 weapons in a full build).
+[[upgrade]]
+id = "u_arsenal_core"
+name = "Arsenal Core"
+desc = "+1 weapon slot (3 stacks max)"
+effect = "weapon_slot_add"
+value = 1
+max_stacks = 3
 
 [[upgrade]]
 id = "u_adrenaline"
@@ -678,9 +688,9 @@ level = 4
 [[upgrade]]
 id = "m4_pact"
 name = "Blood Pact"
-desc = "MILESTONE: +12% lifesteal"
+desc = "MILESTONE: +6% lifesteal"
 effect = "lifesteal_add"
-value = 12
+value = 6
 max_stacks = 1
 kind = "milestone"
 level = 4
@@ -728,9 +738,9 @@ level = 8
 [[upgrade]]
 id = "m16_crown"
 name = "Crimson Crown"
-desc = "MILESTONE: +16% lifesteal"
+desc = "MILESTONE: +8% lifesteal"
 effect = "lifesteal_add"
-value = 16
+value = 8
 max_stacks = 1
 kind = "milestone"
 level = 16

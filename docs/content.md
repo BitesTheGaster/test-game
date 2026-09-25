@@ -36,8 +36,8 @@ python3 tools/gendocs.py
 | Inferno | inferno | flame + scythe | 60 | 1.6 | 1 | 0 | 0 | Sprayer + Scythe. Reaps a circle and leaves burning ground. |
 | Pulsar | pulsar | beam + shuriken | 12 | 0.9 | 1 | 2 | 0 | Shuriken + Lance. Light-chakram dragging a burning laser trail. |
 | Radiant Halo | halo | dagger + beam | 55 | 1 | 2 | 4 | 0 | Dagger + Lance. Blades of light orbit you, reaping all they touch. |
-| Aetherstorm | aether | wand + crossbow + shuriken | 26 | 0.65 | 3 | 6 | 0 | Wand + Crossbow + Shuriken. A storm of returning light-blades dragging searing trails. |
-| Helios Wheel | helios | dagger + beam + hammer | 90 | 0.8 | 4 | 6 | 0 | Dagger + Lance + Hammer. Four blades of sunlight orbit you, crushing and hurling all they touch. |
+| Void Gyre | vortex | dagger + scythe + orb | 55 | 1 | 3 | 4 | 0 | Dagger + Scythe + Void Orb. Suction zones circle you and drag prey into their cores. More projectiles = more AND bigger zones. |
+| Prism Array | prism | flame + beam + crossbow | 60 | 0.9 | 4 | 3 | 0 | Sprayer + Lance + Crossbow. One locked beam per projectile, each on a different enemy — a crowd gets shredded from several angles at once. |
 
 ---
 
@@ -103,8 +103,8 @@ python3 tools/gendocs.py
 | Iron Conviction | conviction | defense_add | 25 | 2 |  |  | +25 defense |
 | Minor Ward | ward_small | shield_add | 15 | 3 |  |  | +15 regenerating shield |
 | Runic Ward | ward_great | shield_add | 30 | 2 |  |  | +30 regenerating shield |
-| Gilded Fangs | leech_gold | lifesteal_add | 8 | 3 |  |  | +8% lifesteal |
-| Soulfeed | leech_soul | lifesteal_add | 12 | 2 |  |  | +12% lifesteal (on kill) |
+| Gilded Fangs | leech_gold | lifesteal_add | 4 | 3 |  |  | +4% lifesteal |
+| Soulfeed | leech_soul | lifesteal_add | 6 | 2 |  |  | +6% lifesteal (on kill) |
 | Sunder Edge | sunder | armor_pierce_add | 15 | 4 |  |  | +15 armor pierce |
 | Keen Sunder | sunder_great | armor_pierce_add | 40 | 2 |  |  | +40 armor pierce |
 | Armor-Cracker | armor_cracker | armor_pierce_add | 80 | 1 |  |  | +80 armor pierce |
@@ -120,6 +120,7 @@ python3 tools/gendocs.py
 | Hammer Wrath | w_hammer_pierce | w_pierce_add | 3 | 2 | hammer |  | Runic Hammer: +3 pierce |
 | Shuriken Storm | w_shuriken_power | w_damage_add | 5 | 3 | shuriken |  | Storm Shuriken: +5 damage |
 | Shuriken Cyclone | w_shuriken_speed | w_fire_rate | 0.19 | 2 | shuriken |  | Storm Shuriken: +19% fire rate |
+| Arsenal Core | u_arsenal_core | weapon_slot_add | 1 | 3 |  |  | +1 weapon slot (3 stacks max) |
 
 ### Unique items (one-time, rule-changing)
 
@@ -156,12 +157,12 @@ python3 tools/gendocs.py
 | Name | ID | Effect | Value | Max stacks | Weapon | Level | Description |
 |---|---|---|---|---|---|---|---|
 | Aegis | m4_aegis | shield_add | 45 | 1 |  | 4 | MILESTONE: +45 regenerating shield |
-| Blood Pact | m4_pact | lifesteal_add | 12 | 1 |  | 4 | MILESTONE: +12% lifesteal |
+| Blood Pact | m4_pact | lifesteal_add | 6 | 1 |  | 4 | MILESTONE: +6% lifesteal |
 | Tempest | m4_tempest | proj_add | 2 | 1 |  | 4 | MILESTONE: +2 projectiles to every weapon |
 | Stone Mantle | m8_mantle | defense_add | 60 | 1 |  | 8 | MILESTONE: +60 defense |
 | Frenzy | m8_frenzy | fire_rate | 0.5 | 1 |  | 8 | MILESTONE: +50% fire rate to every weapon |
 | Reaper's Grasp | m8_grasp | pierce_add | 3 | 1 |  | 8 | MILESTONE: +3 pierce to every weapon |
-| Crimson Crown | m16_crown | lifesteal_add | 16 | 1 |  | 16 | MILESTONE: +16% lifesteal |
+| Crimson Crown | m16_crown | lifesteal_add | 8 | 1 |  | 16 | MILESTONE: +8% lifesteal |
 | Titan Heart | m16_titan | max_hp_add | 120 | 1 |  | 16 | MILESTONE: +120 max HP and heal 120 |
 | Overload | m16_overload | damage_mul | 0.6 | 1 |  | 16 | MILESTONE: +60% damage |
 | Void Symbiosis | m32_void | damage_mul | 0.9 | 1 |  | 32 | MILESTONE: +90% damage |
@@ -174,7 +175,7 @@ python3 tools/gendocs.py
 | Starlight Ward | m128_starlight | shield_add | 500 | 1 |  | 128 | MILESTONE: +500 regenerating shield |
 | Overdrive | m128_overdrive | damage_mul | 2 | 1 |  | 128 | MILESTONE: +200% damage |
 
-**Totals:** 91 upgrades (48 normal, 25 unique, 18 milestones).
+**Totals:** 92 upgrades (49 normal, 25 unique, 18 milestones).
 
 
 ---

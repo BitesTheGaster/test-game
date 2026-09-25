@@ -76,6 +76,11 @@ game::FrameInput pollInput(bool& quit) {
         case SDLK_5: in.choose5 = true; break;
         case SDLK_R: in.restart = true; break;
         case SDLK_T: in.testModeToggle = true; break;
+        // Weapon test sandbox (only read while the sandbox is open).
+        case SDLK_E: in.testShop = true; break;
+        case SDLK_I: in.testInvuln = true; break;
+        case SDLK_F: in.testTime = true; break;
+        case SDLK_K: in.testKill = true; break;
         case SDLK_H: in.heal = true; break;
         case SDLK_B: in.bestiary = true; break;
         // Main menu navigation + confirm.

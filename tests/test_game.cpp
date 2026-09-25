@@ -944,19 +944,30 @@ TEST_CASE("Weapon attack types are loaded correctly") {
   REQUIRE(halo->prereqs.size() == 2);
 
   // Super evolutions: three prerequisites (A+B+C), the marquee build payoff.
-  const auto* aether = content.weapon("aether");
-  REQUIRE(aether != nullptr);
-  REQUIRE(aether->attackType == game::AttackType::Pulsar);
-  REQUIRE(aether->prereqs.size() == 3);
-  REQUIRE(aether->damage > 0.0F);
-  REQUIRE(aether->projectiles >= 3);
+  // Each one introduces a mechanic no other weapon has.
+  const auto* gyre = content.weapon("vortex");
+  REQUIRE(gyre != nullptr);
+  REQUIRE(gyre->attackType == game::AttackType::Vortex);
+  REQUIRE(gyre->prereqs.size() == 3);
+  REQUIRE(gyre->damage > 0.0F);
+  REQUIRE(gyre->projectiles >= 3);
+  // The defining numbers of a suction zone: it must actually drag enemies in.
+  REQUIRE(gyre->vortexPull > 0.0F);
+  REQUIRE(gyre->vortexReach > gyre->vortexRadius);
 
-  const auto* helios = content.weapon("helios");
-  REQUIRE(helios != nullptr);
-  REQUIRE(helios->attackType == game::AttackType::Halo);
-  REQUIRE(helios->prereqs.size() == 3);
-  REQUIRE(helios->projectiles >= 4);
-  REQUIRE(helios->haloKnockback > 0.0F);
+  const auto* prism = content.weapon("prism");
+  REQUIRE(prism != nullptr);
+  REQUIRE(prism->attackType == game::AttackType::Prism);
+  REQUIRE(prism->prereqs.size() == 3);
+  REQUIRE(prism->projectiles >= 4);
+  REQUIRE(prism->prismRange > 0.0F);
+  REQUIRE(prism->prismMaxTargets >= 2);
+
+  // Supers must be genuinely distinct from the plain evolutions they build on:
+  // no super may reuse another weapon's attack type.
+  REQUIRE(gyre->attackType != game::AttackType::Halo);
+  REQUIRE(prism->attackType != game::AttackType::Beam);
+  REQUIRE(gyre->attackType != prism->attackType);
 }
 
 TEST_CASE("Orbit weapon creates blades on acquisition") {
@@ -1607,31 +1618,31 @@ TEST_CASE("Impact multiplies the knockback the player deals") {
 
 TEST_CASE("Super evolutions require three weapons") {
   const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
-  const auto* aether = content.weapon("aether");
-  const auto* helios = content.weapon("helios");
-  REQUIRE(aether != nullptr);
-  REQUIRE(helios != nullptr);
-  REQUIRE(aether->prereqs ==
-          std::vector<std::string>{"wand", "crossbow", "shuriken"});
-  REQUIRE(helios->prereqs ==
-          std::vector<std::string>{"dagger", "beam", "hammer"});
+  const auto* gyre = content.weapon("vortex");
+  const auto* prism = content.weapon("prism");
+  REQUIRE(gyre != nullptr);
+  REQUIRE(prism != nullptr);
+  REQUIRE(gyre->prereqs ==
+          std::vector<std::string>{"dagger", "scythe", "orb"});
+  REQUIRE(prism->prereqs ==
+          std::vector<std::string>{"flame", "beam", "crossbow"});
 
-  // Helios is a halo super: it spawns four spokes and a "+1 projectile" card
-  // adds a fifth.
-  int heliosIdx = -1;
+  // Void Gyre is a vortex super: it spawns three suction zones and a
+  // "+1 projectile" card adds a fourth.
+  int gyreIdx = -1;
   for (std::size_t i = 0; i < content.weapons.size(); ++i) {
-    if (content.weapons[i].id == "helios") heliosIdx = static_cast<int>(i);
+    if (content.weapons[i].id == "vortex") gyreIdx = static_cast<int>(i);
   }
-  REQUIRE(heliosIdx >= 0);
+  REQUIRE(gyreIdx >= 0);
   game::Game g{content, 17};
   g.testDisableWaves();
   g.testClearWeapons();
-  g.testAddWeapon(heliosIdx);
+  g.testAddWeapon(gyreIdx);
   game::FrameInput in{};
   g.advance(1.0F / 60.0F, in);
-  REQUIRE(g.debugCounts().halos == 4);
+  REQUIRE(g.debugCounts().vortices == 3);
   g.testAddWeaponUpgrade(0, "w_proj_add", 1.0F);
-  REQUIRE(g.debugCounts().halos == 5);
+  REQUIRE(g.debugCounts().vortices == 4);
 }
 
 TEST_CASE("A hit that covers the remaining HP always kills") {
@@ -1828,8 +1839,8 @@ TEST_CASE("Every weapon creates its attack-type entities") {
       {"inferno", &game::Game::DebugCounts::sweeps},
       {"pulsar", &game::Game::DebugCounts::boomerangs},
       {"halo", &game::Game::DebugCounts::halos},
-      {"aether", &game::Game::DebugCounts::boomerangs},
-      {"helios", &game::Game::DebugCounts::halos},
+      {"vortex", &game::Game::DebugCounts::vortices},
+      {"prism", &game::Game::DebugCounts::beams},
   };
   for (const auto& c : cases) {
     CAPTURE(c.id);
@@ -1859,7 +1870,7 @@ TEST_CASE("Damage multiplier scales exactly once per attack type") {
 
   const char* ids[] = {"wand", "flame", "hammer", "shuriken",
                        "orb", "beam", "scythe", "storm", "nova",
-                       "inferno", "pulsar", "halo", "aether", "helios"};
+                       "inferno", "pulsar", "halo", "vortex", "prism"};
   for (const char* id : ids) {
     CAPTURE(id);
     const int wi = idx(id);
@@ -2257,4 +2268,422 @@ TEST_CASE("Outline unlocks persist across runs (they are not run-local)") {
   g2.testDisableWaves();
   REQUIRE((profile.unlocks & game::kUnlockElite) != 0u);
   REQUIRE(profile.canUseOutline(1));
+}
+
+// --- Round 10: lifesteal nerf, arsenal slots, new supers, sandbox ----------
+
+TEST_CASE("Lifesteal values are halved and the kill trigger is kept") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  const auto value = [&content](const char* id) {
+    for (const auto& u : content.upgrades) {
+      if (u.id == id) return u.value;
+    }
+    return -1.0F;
+  };
+  // The user's ask: everything that grants vampirism is twice as weak, and the
+  // healing still only rolls on a kill (not per hit).
+  REQUIRE(value("leech_gold") == Catch::Approx(4.0F));
+  REQUIRE(value("leech_soul") == Catch::Approx(6.0F));
+  REQUIRE(value("m4_pact") == Catch::Approx(6.0F));
+  REQUIRE(value("m16_crown") == Catch::Approx(8.0F));
+  for (const auto& u : content.upgrades) {
+    if (u.effect != "lifesteal_add") continue;
+    CAPTURE(u.id);
+    REQUIRE(u.value <= 8.0F);
+  }
+
+  // Still kill-triggered: hitting an enemy many times must not heal at all.
+  game::Game g{content, 91};
+  g.testDisableWaves();
+  g.testClearWeapons();
+  g.testAddWeapon(0);
+  REQUIRE(game::applyUpgrade(g.stats(), "lifesteal_add", 100.0F).valid);
+  g.testHurtPlayer(40.0F);
+  const float wounded = g.playerHp();
+  g.testSpawnEnemyAt(1.0F, 0.0F);
+  g.advance(1.0F / 60.0F, game::FrameInput{});
+  REQUIRE(g.kills() == 0);
+  REQUIRE(g.playerHp() == Catch::Approx(wounded)); // no hit, no heal
+  g.testKillFirstEnemy();
+  REQUIRE(g.playerHp() > wounded); // the kill healed
+}
+
+TEST_CASE("Arsenal is 4 weapons wide until Arsenal Core is stacked (max 3)") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  int coreIdx = -1;
+  int coreMax = 0;
+  for (std::size_t i = 0; i < content.upgrades.size(); ++i) {
+    if (content.upgrades[i].id == "u_arsenal_core") {
+      coreIdx = static_cast<int>(i);
+      coreMax = content.upgrades[i].maxStacks;
+    }
+  }
+  REQUIRE(coreIdx >= 0);
+  REQUIRE(coreMax == 3);
+
+  game::Game g{content, 61};
+  g.testDisableWaves();
+  g.testClearWeapons();
+  const int n = static_cast<int>(content.weapons.size());
+  REQUIRE(n >= 4);
+
+  // Four base slots, and a fifth is refused.
+  for (int i = 0; i < 4; ++i) g.testAddWeapon(i);
+  REQUIRE(g.armedWeaponIds().size() == 4);
+  g.testAddWeapon(4);
+  REQUIRE(g.armedWeaponIds().size() == 4);
+  REQUIRE(g.stats().weaponSlots == 0);
+
+  // Each Arsenal Core stack opens exactly one more slot.
+  for (int k = 0; k < coreMax; ++k) {
+    REQUIRE(g.testGrantUpgrade(coreIdx));
+    g.testAddWeapon(4);
+  }
+  REQUIRE(g.stats().weaponSlots == 3);
+  REQUIRE(g.armedWeaponIds().size() == 7);
+  // Maxed out: no more slots, no more stacks.
+  REQUIRE_FALSE(g.testGrantUpgrade(coreIdx));
+}
+
+TEST_CASE("Void Gyre zones drag enemies inward and scale with projectiles") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  int gyre = -1;
+  for (std::size_t i = 0; i < content.weapons.size(); ++i) {
+    if (content.weapons[i].id == "vortex") gyre = static_cast<int>(i);
+  }
+  REQUIRE(gyre >= 0);
+
+  // Differential test: an idle target is never touched without the weapon, and
+  // is physically shoved around with it. That is the whole identity of the
+  // super — the zones MOVE enemies into their cores, they are not damage pools.
+  const auto run = [&content, gyre](bool armed) {
+    game::Game g{content, 55};
+    g.testDisableWaves();
+    g.testClearWeapons();
+    if (armed) g.testAddWeapon(gyre);
+    g.testSpawnEnemyAt(2.2F, 0.0F);
+    const float before = g.testFirstEnemyDistToPlayer();
+    game::FrameInput in{};
+    for (int i = 0; i < 90; ++i) g.advance(1.0F / 60.0F, in);
+    return std::pair<float, float>(before, g.testFirstEnemyDistToPlayer());
+  };
+  const auto [idleBefore, idleAfter] = run(false);
+  REQUIRE(idleBefore > 0.0F);
+  REQUIRE(idleAfter == Catch::Approx(idleBefore)); // control: stands still
+  const auto [armedBefore, armedAfter] = run(true);
+  REQUIRE(std::abs(armedAfter - armedBefore) > 0.1F); // suction drags it
+
+  // The prey is HELD, not leaked: for the whole run it never escapes a zone's
+  // pull envelope, even though the zones are sweeping around it.
+  game::Game glued{content, 57};
+  glued.testDisableWaves();
+  glued.testClearWeapons();
+  glued.testAddWeapon(gyre);
+  glued.testSpawnEnemyAt(2.2F, 0.0F);
+  game::FrameInput spin{};
+  float worst = 0.0F;
+  for (int i = 0; i < 180; ++i) {
+    glued.advance(1.0F / 60.0F, spin);
+    worst = std::max(worst, glued.testFirstEnemyDistToVortex());
+  }
+  REQUIRE(worst > 0.0F);
+  REQUIRE(worst <= 2.8F); // dragged into reach and kept there
+
+  // Count and size both track the projectile stat.
+  game::Game g{content, 56};
+  g.testDisableWaves();
+  g.testClearWeapons();
+  g.testAddWeapon(gyre);
+  REQUIRE(g.debugCounts().vortices == 3);
+  g.testAddWeaponUpgrade(0, "w_proj_add", 2.0F);
+  REQUIRE(g.debugCounts().vortices == 5);
+}
+
+TEST_CASE("Prism Array locks one beam per projectile onto separate targets") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  int prism = -1;
+  for (std::size_t i = 0; i < content.weapons.size(); ++i) {
+    if (content.weapons[i].id == "prism") prism = static_cast<int>(i);
+  }
+  REQUIRE(prism >= 0);
+
+  game::Game g{content, 64};
+  g.testDisableWaves();
+  g.testClearWeapons();
+  g.stats().fireRateBonus = 100.0F; // fire every tick
+  // Four targets in a row, all well inside the lock range. Four projectiles
+  // means four locks, so the crowd is split across separate beams.
+  for (int i = 0; i < 4; ++i) {
+    g.testSpawnEnemyAt(3.0F + static_cast<float>(i) * 0.8F, 0.0F);
+  }
+  g.testAddWeapon(prism);
+  game::FrameInput in{};
+  g.advance(1.0F / 60.0F, in);
+  // Four projectiles => four independent locked beams, not one fat beam.
+  REQUIRE(g.debugCounts().beams == 4);
+
+  // Every one of them does real work: all four separate targets lose HP, which
+  // a single-target beam could never manage.
+  for (int i = 0; i < 30; ++i) g.advance(1.0F / 60.0F, in);
+  const auto hps = g.testEnemyHps();
+  REQUIRE(hps.size() == 4);
+  int damaged = 0;
+  for (const float hp : hps) {
+    if (hp < 100000.0F) ++damaged;
+  }
+  REQUIRE(damaged == 4);
+}
+
+TEST_CASE("Test sandbox rolls back XP, items, kills and bestiary on exit") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 71};
+  g.testDisableWaves();
+  g.testClearWeapons();
+  g.testAddWeapon(0);
+  game::FrameInput in{};
+  g.advance(1.0F / 60.0F, in); // settle out of the opening pick
+
+  const float xp0 = g.xp();
+  const int kills0 = g.kills();
+  const int level0 = g.level();
+  const float time0 = g.simTime();
+  const float hp0 = g.playerHp();
+  g.testHurtPlayer(10.0F);
+  const float hp1 = g.playerHp();
+  REQUIRE(hp1 < hp0);
+
+  game::FrameInput open{};
+  open.testModeToggle = true;
+  g.advance(1.0F / 60.0F, open);
+  REQUIRE(g.testMode());
+
+  // Cheat inside the sandbox: stack every item, farm XP and a tier kill, and
+  // fast-forward the difficulty clock.
+  game::FrameInput clock{};
+  clock.testTime = true;
+  g.advance(1.0F / 60.0F, clock);
+  REQUIRE(g.testTimeScale() == 4);
+  for (int i = 0; i < 60; ++i) g.advance(1.0F / 60.0F, in);
+  REQUIRE(g.simTime() > time0 + 3.0F); // the clock really ran fast
+
+  game::FrameInput fill{};
+  fill.restart = true;
+  g.advance(1.0F / 60.0F, fill);
+  REQUIRE(g.stats().damageMul > 1.0F);
+  g.grantXp(500.0F);
+  g.testSpawnTieredEnemyAt(2.0F, 0.0F, 1);
+  g.testKillFirstEnemy();
+  REQUIRE(g.kills() > kills0);
+  REQUIRE(g.xp() > xp0);
+  REQUIRE(g.testBestiaryKills(0) > 0);
+
+  // Leaving rolls the whole run back: no leaked XP, items, kills or HP.
+  game::FrameInput close{};
+  close.testModeToggle = true;
+  g.advance(1.0F / 60.0F, close);
+  REQUIRE_FALSE(g.testMode());
+  REQUIRE(g.xp() == Catch::Approx(xp0));
+  REQUIRE(g.kills() == kills0);
+  REQUIRE(g.level() == level0);
+  // The clock resumes from where it stood when the sandbox opened; the frame
+  // that closed the sandbox is the next normal-speed tick.
+  REQUIRE(g.simTime() == Catch::Approx(time0 + 1.0F / 60.0F).margin(0.02F));
+  REQUIRE(g.stats().damageMul == Catch::Approx(1.0F));
+  REQUIRE(g.playerHp() == Catch::Approx(hp1));
+  REQUIRE(g.testBestiaryKills(0) == 0);
+  REQUIRE(g.testTimeScale() == 1);
+}
+
+TEST_CASE("Test sandbox keeps the real horde but drops its own injected fodder") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 76};
+  g.testDisableWaves();
+  g.testClearWeapons();
+  g.testAddWeapon(0);
+  game::FrameInput in{};
+  g.advance(1.0F / 60.0F, in);
+
+  // One enemy standing before the sandbox opens.
+  g.testSpawnEnemyAt(4.0F, 0.0F);
+  REQUIRE(g.enemyCount() == 1);
+
+  game::FrameInput open{};
+  open.testModeToggle = true;
+  g.advance(1.0F / 60.0F, open);
+  REQUIRE(g.testMode());
+  // setTestWeapon() seeds a herd of fodder for the weapon under test. It is
+  // telegraphed first, so let the markers resolve into real enemies.
+  for (int i = 0; i < 30; ++i) g.advance(1.0F / 60.0F, in);
+  REQUIRE(g.enemyCount() > 1);
+
+  game::FrameInput close{};
+  close.testModeToggle = true;
+  g.advance(1.0F / 60.0F, close);
+  // The injected fodder is gone; the run's own enemy survived the visit.
+  REQUIRE(g.enemyCount() == 1);
+  REQUIRE(g.testFirstEnemyDistToPlayer() > 0.0F);
+}
+
+TEST_CASE("Test sandbox item picker grants on demand and max-all fills it") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 72};
+  g.testDisableWaves();
+  g.testClearWeapons();
+  g.testAddWeapon(0);
+  game::FrameInput in{};
+  g.advance(1.0F / 60.0F, in);
+
+  game::FrameInput open{};
+  open.testModeToggle = true;
+  g.advance(1.0F / 60.0F, open);
+  REQUIRE(g.testMode());
+
+  game::FrameInput shop{};
+  shop.testShop = true;
+  g.advance(1.0F / 60.0F, shop);
+  REQUIRE(g.testShopOpen());
+
+  // Walk the cursor to a card with a visible effect and take it. Index 0 is
+  // where the list opens, so the number of steps is known up front.
+  int hpCard = -1;
+  for (std::size_t i = 0; i < content.upgrades.size(); ++i) {
+    if (content.upgrades[i].effect == "max_hp_add" && content.upgrades[i].weapon.empty()) {
+      hpCard = static_cast<int>(i);
+      break;
+    }
+  }
+  REQUIRE(hpCard >= 0);
+  game::FrameInput move{};
+  move.menuDown = true;
+  for (int i = 0; i < hpCard; ++i) g.advance(1.0F / 60.0F, move);
+  REQUIRE(g.testShopCursor() == hpCard);
+
+  const float hpBefore = g.playerHp();
+  const float maxBefore = g.playerMaxHp();
+  game::FrameInput take{};
+  take.menuConfirm = true;
+  g.advance(1.0F / 60.0F, take);
+  REQUIRE(g.upgradeStacks(static_cast<std::size_t>(hpCard)) == 1);
+  // The card really applied: a bigger pool, topped up by its own heal.
+  REQUIRE(g.playerMaxHp() > maxBefore);
+  REQUIRE(g.playerHp() > hpBefore);
+  // Taking it again is allowed (it is a stacking card), maxed at its own cap.
+  for (int i = 0; i < 8; ++i) g.advance(1.0F / 60.0F, take);
+  REQUIRE(g.upgradeStacks(static_cast<std::size_t>(hpCard)) ==
+          content.upgrades[static_cast<std::size_t>(hpCard)].maxStacks);
+
+  // R maxes every item in the sandbox.
+  game::FrameInput fill{};
+  fill.restart = true;
+  g.advance(1.0F / 60.0F, fill);
+  int maxed = 0;
+  for (std::size_t i = 0; i < content.upgrades.size(); ++i) {
+    if (content.upgrades[i].kind == "milestone") continue;
+    if (g.upgradeStacks(i) == content.upgrades[i].maxStacks) ++maxed;
+  }
+  REQUIRE(maxed > static_cast<int>(content.upgrades.size()) / 2);
+}
+
+TEST_CASE("Test sandbox immortality and on-demand death") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 73};
+  g.testDisableWaves();
+  g.testClearWeapons();
+  g.testAddWeapon(0);
+  game::FrameInput in{};
+  g.advance(1.0F / 60.0F, in);
+
+  // Without the switch a hit hurts.
+  g.testHurtPlayer(20.0F);
+  const float hurt = g.playerHp();
+  REQUIRE(hurt < 100.0F);
+
+  game::FrameInput open{};
+  open.testModeToggle = true;
+  g.advance(1.0F / 60.0F, open);
+
+  game::FrameInput god{};
+  god.testInvuln = true;
+  g.advance(1.0F / 60.0F, god);
+  REQUIRE(g.testInvulnerable());
+  const float before = g.playerHp();
+  g.testHurtPlayer(500.0F);
+  REQUIRE(g.playerHp() == Catch::Approx(before));
+  REQUIRE(g.state() != game::RunState::GameOver);
+
+  // K still works through immortality: that is the point of a death switch.
+  game::FrameInput kill{};
+  kill.testKill = true;
+  g.advance(1.0F / 60.0F, kill);
+  REQUIRE(g.state() == game::RunState::GameOver);
+}
+
+TEST_CASE("Test sandbox difficulty clock only speeds up the sandbox") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 74};
+  g.testDisableWaves();
+  g.testClearWeapons();
+  g.testAddWeapon(0);
+  game::FrameInput in{};
+  REQUIRE(g.testTimeScale() == 1);
+  const float plain = g.simTime();
+  for (int i = 0; i < 60; ++i) g.advance(1.0F / 60.0F, in);
+  REQUIRE(g.simTime() == Catch::Approx(plain + 1.0F).margin(0.02F));
+
+  game::FrameInput open{};
+  open.testModeToggle = true;
+  g.advance(1.0F / 60.0F, open);
+  game::FrameInput fast{};
+  fast.testTime = true;
+  g.advance(1.0F / 60.0F, fast);
+  REQUIRE(g.testTimeScale() == 4);
+  // Measure from here: the frame that flipped the switch already ran at 4x.
+  const float before = g.simTime();
+  for (int i = 0; i < 30; ++i) g.advance(1.0F / 60.0F, in);
+  // 30 frames at 4x = 2 simulated seconds.
+  REQUIRE(g.simTime() == Catch::Approx(before + 2.0F).margin(0.02F));
+
+  // Back to normal speed, and the snapshot's clock is restored on exit: the run
+  // resumes from the moment the sandbox was opened, not from the fast-forwarded
+  // difficulty clock.
+  g.cycleTestTimeScale();
+  g.cycleTestTimeScale();
+  g.cycleTestTimeScale();
+  REQUIRE(g.testTimeScale() == 1);
+  const float entryTime = plain + 1.0F; // the frame that pressed T
+  game::FrameInput close{};
+  close.testModeToggle = true;
+  g.advance(1.0F / 60.0F, close);
+  REQUIRE(g.simTime() == Catch::Approx(entryTime + 1.0F / 60.0F).margin(0.02F));
+}
+
+TEST_CASE("Test sandbox rerolls have no budget") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 75};
+  g.testDisableWaves();
+  g.testClearWeapons();
+  g.testAddWeapon(0);
+  game::FrameInput in{};
+  g.advance(1.0F / 60.0F, in);
+
+  game::FrameInput open{};
+  open.testModeToggle = true;
+  g.advance(1.0F / 60.0F, open);
+  REQUIRE(g.testMode());
+
+  // Level up in the sandbox, then reroll far past the normal single charge.
+  g.grantXp(1000.0F);
+  g.advance(1.0F / 60.0F, in);
+  REQUIRE(g.state() == game::RunState::LevelUp);
+  for (int i = 0; i < 12; ++i) {
+    game::FrameInput roll{};
+    roll.restart = true;
+    g.advance(1.0F / 60.0F, roll);
+    REQUIRE(g.state() == game::RunState::LevelUp);
+  }
+  // Leaving the sandbox clears the pending level-up, so the run is playable.
+  game::FrameInput close{};
+  close.testModeToggle = true;
+  g.advance(1.0F / 60.0F, close);
+  REQUIRE(g.state() == game::RunState::Playing);
 }

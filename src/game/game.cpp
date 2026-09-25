@@ -12,6 +12,8 @@ namespace {
 
 constexpr float kPi = 3.14159265358979F;
 constexpr std::size_t kMaxEnemies = 8000;
+// Visible rows in the test sandbox's item list.
+constexpr int kTestShopRows = 14;
 constexpr float kSpawnDist = 11.0F;
 constexpr float kSpawnTelegraph = 0.6F; // seconds a spawn marker is visible
 constexpr float kPickupDist = 0.45F;
@@ -155,6 +157,11 @@ UpgradeEffectResult applyUpgrade(PlayerStats& stats, std::string_view effect, fl
   }
   if (effect == "reroll_add") {
     stats.rerollCharges += static_cast<int>(value);
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "weapon_slot_add") {
+    // Arsenal Core: one more weapon slot per stack (3 stacks max in content).
+    stats.weaponSlots += static_cast<int>(value);
     return {true, 0.0F, 0.0F};
   }
   if (effect == "fan") {
@@ -500,20 +507,31 @@ void Game::advance(float frameDt, const FrameInput& input) {
     reset();
     return;
   }
-  // Weapon test mode: T opens/closes it, then 1-5 drive the sandbox.
-  if (state_ == RunState::Playing && input.testModeToggle) {
+  // Weapon test mode: T opens/closes it, then the sandbox keys take over.
+  if ((state_ == RunState::Playing || state_ == RunState::LevelUp) &&
+      input.testModeToggle) {
     if (testMode_) {
       exitTestMode();
-    } else {
+    } else if (state_ == RunState::Playing) {
       enterTestMode();
     }
   }
-  if (state_ == RunState::Playing && testMode_) {
-    if (input.choose1) setTestWeapon(testWeaponIdx_ - 1);
-    else if (input.choose2) setTestWeapon(testWeaponIdx_ + 1);
-    else if (input.choose3) toggleTestBoost();
-    else if (input.choose4) wavesEnabled_ = !wavesEnabled_;
-    else if (input.choose5) exitTestMode();
+  if (testMode_) {
+    // Sandbox switches work even while a level-up card screen is open.
+    if (input.testShop) toggleTestShop();
+    if (input.testInvuln) toggleTestInvuln();
+    if (input.testTime) cycleTestTimeScale();
+    if (input.testKill && state_ == RunState::Playing) testKillPlayer();
+    if (input.restart) testMaxAllItems();
+    if (testShopOpen_) {
+      updateTestShop(input);
+    } else if (state_ == RunState::Playing) {
+      if (input.choose1) setTestWeapon(testWeaponIdx_ - 1);
+      else if (input.choose2) setTestWeapon(testWeaponIdx_ + 1);
+      else if (input.choose3) toggleTestBoost();
+      else if (input.choose4) wavesEnabled_ = !wavesEnabled_;
+      else if (input.choose5) exitTestMode();
+    }
   }
   // H: guaranteed heal for 50% of max HP on a cooldown (replaces the old
   // single-use heal cards, which are no longer in the loot pool).
@@ -534,14 +552,21 @@ void Game::advance(float frameDt, const FrameInput& input) {
     else if (input.choose3 && n >= 3) chooseUpgrade(2);
     else if (input.choose4 && n >= 4) chooseUpgrade(3);
     else if (input.choose5 && n >= 5) chooseUpgrade(4);
-    // R is *always* the reroll key on level-up (even with 4+ cards).
-    if (input.restart && state_ == RunState::LevelUp) {
+    // R is *always* the reroll key on level-up (even with 4+ cards) — except
+    // inside the sandbox, where it is the "max every item" cheat.
+    if (input.restart && !testMode_) {
       reroll();
     }
   }
 
   moveX_ = input.moveX;
   moveY_ = input.moveY;
+  if (testMode_ && testShopOpen_) {
+    // The item list is driven by the same keys as movement, so stand still
+    // while it is open instead of walking off with the cursor.
+    moveX_ = 0.0F;
+    moveY_ = 0.0F;
+  }
   if (state_ == RunState::Playing) {
     timestep_.advance(frameDt, [&] { fixedUpdate(); });
   } else {
@@ -558,6 +583,17 @@ void Game::advance(float frameDt, const FrameInput& input) {
 }
 
 void Game::fixedUpdate() {
+  // The test sandbox can fast-forward the difficulty clock, which means running
+  // the whole simulation step several times per rendered frame. Outside the
+  // sandbox this is always exactly one step, so gameplay is untouched.
+  if (!testMode_ || testTimeScale_ <= 1) {
+    fixedStep();
+    return;
+  }
+  for (int i = 0; i < testTimeScale_; ++i) fixedStep();
+}
+
+void Game::fixedStep() {
   simTime_ += 1.0F / 60.0F;
   if (iframes_ > 0.0F) {
     iframes_ -= 1.0F / 60.0F;
@@ -576,6 +612,7 @@ void Game::fixedUpdate() {
   updateProjectiles();
   updateOrbitBlades();
   updateHaloBeams();
+  updateVortices();
   updateBombProjectiles();
   updateBoomerangProjectiles();
   updateBounceProjectiles();
@@ -617,8 +654,9 @@ void Game::fixedUpdate() {
     p.vy *= 0.92F;
   }
 
-  // Level-up check (suspended while the weapon test sandbox is open).
-  if (state_ == RunState::Playing && !testMode_ && xp_ >= xpNext_) {
+  // Level-up check. The sandbox DOES level up (that is how the item picker and
+  // rerolls get exercised); everything it earns is rolled back on exit.
+  if (state_ == RunState::Playing && xp_ >= xpNext_) {
     enterLevelUp();
   }
 }
@@ -1417,6 +1455,66 @@ void Game::fireWeapons() {
         w.timer = cooldown;
         break;
       }
+      case AttackType::Vortex: {
+        // Vortex zones are persistent entities created in addWeapon()/
+        // syncVortices and steered in updateVortices(); firing paces the
+        // cooldown. Both the COUNT and the SIZE come from the projectile stat
+        // (see syncVortices), so "+1 projectile" visibly thickens the ring.
+        w.timer = cooldown;
+        break;
+      }
+      case AttackType::Prism: {
+        // Prism Array: instead of one beam toward one target, lock a SEPARATE
+        // beam onto each of the N closest enemies. Every line is an independent
+        // damage corridor, so a crowd is chewed from N angles at once.
+        const int maxTargets = std::max(1, w.prismMaxTargets);
+        const int beams = std::min(maxTargets, count);
+        // Collect candidates by distance, then keep the closest `beams` of them.
+        std::vector<std::pair<float, entt::entity>> cands;
+        cands.reserve(static_cast<std::size_t>(beams));
+        for (const auto e : registry_.view<Transform, Enemy>()) {
+          const auto& et = registry_.get<Transform>(e);
+          const float dx = et.x - pt.x;
+          const float dy = et.y - pt.y;
+          const float d2 = dx * dx + dy * dy;
+          if (d2 > w.prismRange * w.prismRange) continue;
+          cands.emplace_back(d2, e);
+        }
+        std::sort(cands.begin(), cands.end(),
+                  [](const auto& a, const auto& b) { return a.first < b.first; });
+        const std::size_t n = std::min<std::size_t>(cands.size(),
+                                                     static_cast<std::size_t>(beams));
+        for (std::size_t k = 0; k < n; ++k) {
+          const auto& et = registry_.get<Transform>(cands[k].second);
+          const auto beam = registry_.create();
+          registry_.emplace<Transform>(beam, pt.x, pt.y, pt.x, pt.y);
+          // Split the prism's colour across its beams so the fan reads as
+          // separate shafts instead of one thick smear.
+          const float hueMix = static_cast<float>(k) / static_cast<float>(std::max<std::size_t>(1, n));
+          registry_.emplace<Radius>(beam, w.prismWidth * 0.5F);
+          Sprite s{};
+          s.color = w.color;
+          s.color.g = std::clamp(w.color.g * (1.0F - 0.45F * hueMix), 0.0F, 1.0F);
+          s.color.b = std::clamp(w.color.b + 0.35F * hueMix, 0.0F, 1.0F);
+          s.circle = false;
+          registry_.emplace<Sprite>(beam, s);
+          BeamEffect be{};
+          be.damage = w.damage; // base; updateBeamEffects scales by damageMul
+          be.pierce = pierce;
+          be.range = w.prismRange;
+          be.width = w.prismWidth;
+          be.duration = w.beamDuration;
+          be.timer = w.beamDuration;
+          be.startX = pt.x;
+          be.startY = pt.y;
+          be.endX = et.x;
+          be.endY = et.y;
+          be.color = s.color;
+          registry_.emplace<BeamEffect>(beam, be);
+        }
+        w.timer = cooldown;
+        break;
+      }
     }
   }
 }
@@ -1877,6 +1975,83 @@ void Game::updateHaloBeams() {
         applyKnockback(hits[hi], hb.angle, knockback * dt);
       }
       spawnParticles(hx[hi], hy[hi], {1.0F, 1.0F, 0.75F, 1.0F}, 2, 2.0F);
+    }
+  }
+}
+
+// Vortex evolution: the suction zones circle the player and haul anything they
+// touch toward their own core. Pull is applied EVERY tick (it is the defining
+// mechanic); the damage only lands once the prey has been dragged inside the
+// core radius, so the zones read as crushers rather than plain damage pools.
+void Game::updateVortices() {
+  if (player_ == entt::null || !registry_.valid(player_)) return;
+  const auto& pt = registry_.get<Transform>(player_);
+  const float dt = 1.0F / 60.0F;
+  auto view = registry_.view<Transform, Vortex>();
+  for (const auto e : view) {
+    auto& t = registry_.get<Transform>(e);
+    auto& vx = registry_.get<Vortex>(e);
+
+    // Live values come from the owning weapon so upgrades apply as they land.
+    const bool owned = vx.weaponIndex >= 0 && vx.weaponIndex < weaponCount_;
+    auto& w = weapons_[owned ? vx.weaponIndex : 0];
+    const float damage = (owned ? w.damage : vx.damage) * stats_.damageMul;
+    const int pierce = (owned ? w.pierce : vx.pierce) + stats_.pierceAdd;
+    const float pull = owned ? w.vortexPull : vx.pull;
+
+    t.px = t.x;
+    t.py = t.y;
+    // Attack speed also whips the zones around faster, like the dagger ring.
+    vx.angle += vx.spin * std::max(0.5F, 1.0F + stats_.fireRateBonus) * dt;
+    t.x = pt.x + std::cos(vx.angle) * vx.orbitRadius;
+    t.y = pt.y + std::sin(vx.angle) * vx.orbitRadius;
+
+    // --- Inward drag ---------------------------------------------------------
+    auto enemyView = registry_.view<Transform, Health, Radius, Enemy>();
+    std::vector<entt::entity> caught;
+    for (const auto en : enemyView) {
+      auto& et = registry_.get<Transform>(en);
+      auto* eh = registry_.try_get<Health>(en);
+      if (eh == nullptr || eh->hp <= 0.0F) continue;
+      const float dx = t.x - et.x;
+      const float dy = t.y - et.y;
+      const float d2 = dx * dx + dy * dy;
+      if (d2 > vx.reach * vx.reach || d2 < 1e-6F) continue;
+      const float d = std::sqrt(d2);
+      // Drag scales down at the very edge of the reach so enemies are nudged
+      // in rather than teleported, and clamp so nobody overshoots the core.
+      const float edge = std::clamp(1.0F - (d - vx.radius) / std::max(0.001F, vx.reach - vx.radius), 0.35F, 1.0F);
+      const float step = std::min(pull * edge * dt, std::max(0.0F, d - vx.radius * 0.15F));
+      et.x += (dx / d) * step;
+      et.y += (dy / d) * step;
+      caught.push_back(en);
+    }
+
+    // --- Core damage ---------------------------------------------------------
+    vx.tickTimer -= dt;
+    if (vx.tickTimer > 0.0F) continue;
+    vx.tickTimer = 1.0F / std::max(0.02F, vx.tickRate);
+
+    std::vector<entt::entity> inside;
+    for (const auto en : caught) {
+      if (!registry_.valid(en)) continue;
+      auto* eh = registry_.try_get<Health>(en);
+      if (eh == nullptr || eh->hp <= 0.0F) continue;
+      const auto& et = registry_.get<Transform>(en);
+      const float dx = et.x - t.x;
+      const float dy = et.y - t.y;
+      if (dx * dx + dy * dy > vx.radius * vx.radius) continue;
+      inside.push_back(en);
+    }
+    const float vortexMul = aoeFalloff(static_cast<int>(inside.size()), pierce);
+    const float tickDamage = damage * std::max(0.02F, vx.tickRate) * vortexMul;
+    for (const auto en : inside) {
+      if (!registry_.valid(en)) continue;
+      applyEnemyDamage(en, tickDamage);
+      if (static_cast<int>(inside.size()) <= 4) {
+        const auto& et = registry_.get<Transform>(en);
+        spawnParticles(et.x, et.y, vx.color, 2, 2.5F);
+      }
     }
   }
 }
@@ -2576,11 +2751,15 @@ void Game::updateUniqueEffects() {
   // Venomous contact poison: a small defenseless DoT.
   if (poison_ > 0.0F && player_ != entt::null && registry_.valid(player_)) {
     poison_ -= 1.0F / 60.0F;
-    auto& hp = registry_.get<Health>(player_);
-    hp.hp -= 3.0F / 60.0F;
-    if (hp.hp <= 0.0F) {
-      hp.hp = 0.0F;
-      state_ = RunState::GameOver;
+    if (testMode_ && testInvuln_) {
+      // Immortal: the DoT keeps its timer but does no damage.
+    } else {
+      auto& hp = registry_.get<Health>(player_);
+      hp.hp -= 3.0F / 60.0F;
+      if (hp.hp <= 0.0F) {
+        hp.hp = 0.0F;
+        state_ = RunState::GameOver;
+      }
     }
   }
 }
@@ -2998,15 +3177,18 @@ void Game::buildChoices() {
   const int baseChoices = 3 + stats_.extraChoice;
 
   // Weapon offers are rarer now, but arrive as a CHOICE OF SEVERAL (2 up to
-  // the number of free slots) instead of a single card.
-  if (weaponCount_ < kMaxWeapons) {
+  // the number of free slots) instead of a single card. The sandbox skips them
+  // entirely: its whole point is testing ONE weapon, and a second one would
+  // pollute every observation.
+  const int cap = weaponCap();
+  if (!testMode_ && weaponCount_ < cap) {
     const float grantChance =
-        (1.0F - static_cast<float>(weaponCount_) / static_cast<float>(kMaxWeapons)) * 0.32F;
+        (1.0F - static_cast<float>(weaponCount_) / static_cast<float>(cap)) * 0.32F;
     if (unit(rng_) < grantChance) {
       std::vector<int> grants = collectWeaponGrants();
       if (!grants.empty()) {
         int offerN = 2 + (unit(rng_) < 0.5F ? 1 : 0);
-        offerN = std::min(offerN, kMaxWeapons - weaponCount_);
+        offerN = std::min(offerN, cap - weaponCount_);
         offerN = std::min<int>(offerN, static_cast<int>(grants.size()));
         for (int k = 0; k < offerN; ++k) {
           choices_.push_back({Choice::Kind::Weapon, grants[static_cast<std::size_t>(k)]});
@@ -3079,42 +3261,7 @@ void Game::chooseUpgrade(int slot) {
   if (choice.kind == Choice::Kind::Weapon) {
     addWeapon(choice.index);
   } else {
-    const auto& def = content_.upgrades[static_cast<std::size_t>(choice.index)];
-
-    UpgradeEffectResult result{false, 0.0F, 0.0F};
-    if (def.weapon.empty()) {
-      result = applyUpgrade(stats_, def.effect, def.value);
-      if (!result.valid) return;
-    } else {
-      // Weapon-targeted upgrade (e.g. a weapon's personal Focus card).
-      const int weaponSlot = findWeaponSlot(def.weapon);
-      if (weaponSlot < 0) return;
-      applyWeaponEffect(weaponSlot, def.effect, def.value);
-      result.valid = true;
-    }
-    ++stacks_[static_cast<std::size_t>(choice.index)];
-
-    // Global "+1 projectile" upgrades also add orbit blades / halo spokes.
-    if (def.effect == "proj_add") {
-      for (int s = 0; s < weaponCount_; ++s) {
-        if (weapons_[s].attackType == AttackType::Orbit) {
-          syncOrbitBlades(s);
-        } else if (weapons_[s].attackType == AttackType::Halo) {
-          syncHaloBeams(s);
-        }
-      }
-    }
-
-    if (player_ != entt::null && registry_.valid(player_)) {
-      auto& hp = registry_.get<Health>(player_);
-      hp.max = stats_.maxHp;
-      if (result.heal > 0.0F) {
-        hp.hp = std::min(hp.max, hp.hp + result.heal);
-      }
-    }
-    if (result.shield > 0.0F) {
-      shield_ = stats_.shieldMax; // refill on pickup
-    }
+    if (!applyUpgradeAt(choice.index)) return;
   }
 
   xp_ -= xpNext_;
@@ -3128,16 +3275,67 @@ void Game::chooseUpgrade(int slot) {
   }
 }
 
+// Applies one upgrade card. Returns false when the effect is unknown or when a
+// weapon-targeted card's weapon is no longer equipped (in both cases the level
+// up is left pending rather than silently consumed).
+bool Game::applyUpgradeAt(int upgradeIndex) {
+  if (upgradeIndex < 0 || static_cast<std::size_t>(upgradeIndex) >= content_.upgrades.size()) {
+    return false;
+  }
+  const auto& def = content_.upgrades[static_cast<std::size_t>(upgradeIndex)];
+
+  UpgradeEffectResult result{false, 0.0F, 0.0F};
+  if (def.weapon.empty()) {
+    result = applyUpgrade(stats_, def.effect, def.value);
+    if (!result.valid) return false;
+  } else {
+    // Weapon-targeted upgrade (e.g. a weapon's personal Focus card).
+    const int weaponSlot = findWeaponSlot(def.weapon);
+    if (weaponSlot < 0) return false;
+    applyWeaponEffect(weaponSlot, def.effect, def.value);
+    result.valid = true;
+  }
+  ++stacks_[static_cast<std::size_t>(upgradeIndex)];
+
+  // Global "+1 projectile" upgrades also add orbit blades / halo spokes /
+  // vortex zones.
+  if (def.effect == "proj_add") {
+    for (int s = 0; s < weaponCount_; ++s) {
+      if (weapons_[s].attackType == AttackType::Orbit) {
+        syncOrbitBlades(s);
+      } else if (weapons_[s].attackType == AttackType::Halo) {
+        syncHaloBeams(s);
+      } else if (weapons_[s].attackType == AttackType::Vortex) {
+        syncVortices(s);
+      }
+    }
+  }
+
+  if (player_ != entt::null && registry_.valid(player_)) {
+    auto& hp = registry_.get<Health>(player_);
+    hp.max = stats_.maxHp;
+    if (result.heal > 0.0F) {
+      hp.hp = std::min(hp.max, hp.hp + result.heal);
+    }
+  }
+  if (result.shield > 0.0F) {
+    shield_ = stats_.shieldMax; // refill on pickup
+  }
+  return true;
+}
+
 void Game::reroll() {
   if (state_ != RunState::LevelUp) return;
   if (choosingStarter_) return; // no rerolls on the opening weapon pick
-  if (rerollsUsed_ >= 1 + stats_.rerollCharges) return;
+  // The sandbox rolls without a budget so a tester can hunt for a specific
+  // card as long as they like. Outside it, the normal charges apply.
+  if (!testMode_ && rerollsUsed_ >= 1 + stats_.rerollCharges) return;
   ++rerollsUsed_;
   buildChoices();
 }
 
 void Game::addWeapon(int defIndex) {
-  if (weaponCount_ >= kMaxWeapons) return;
+  if (weaponCount_ >= weaponCap()) return;
   if (defIndex < 0 || static_cast<std::size_t>(defIndex) >= content_.weapons.size()) return;
   const auto& def = content_.weapons[static_cast<std::size_t>(defIndex)];
   auto& w = weapons_[weaponCount_++];
@@ -3215,6 +3413,19 @@ void Game::addWeapon(int defIndex) {
   w.novaTimer = 0.0F;
   w.novaActive = false;
 
+  // Vortex
+  w.vortexRadius = def.vortexRadius;
+  w.vortexReach = def.vortexReach;
+  w.vortexPull = def.vortexPull;
+  w.vortexOrbit = def.vortexOrbit;
+  w.vortexOrbitSpeed = def.vortexOrbitSpeed;
+  w.vortexTickRate = def.vortexTickRate;
+
+  // Prism
+  w.prismRange = def.prismRange;
+  w.prismWidth = def.prismWidth;
+  w.prismMaxTargets = def.prismMaxTargets;
+
   // General projectile fields
   w.area = 0.0F;
   w.strength = 0.0F;
@@ -3235,6 +3446,11 @@ void Game::addWeapon(int defIndex) {
   // Halo evolution: persistent rotating beams, count tracks projectiles.
   if (w.attackType == AttackType::Halo && player_ != entt::null && registry_.valid(player_)) {
     syncHaloBeams(weaponCount_ - 1);
+  }
+  // Vortex evolution: persistent suction zones, count AND size track
+  // projectiles (see syncVortices).
+  if (w.attackType == AttackType::Vortex && player_ != entt::null && registry_.valid(player_)) {
+    syncVortices(weaponCount_ - 1);
   }
 }
 
@@ -3371,6 +3587,86 @@ void Game::syncHaloBeams(int slot) {
   }
 }
 
+// The Vortex ring mirrors the Halo ring, except that its COUNT and SIZE both
+// come from the projectile stat: every extra projectile adds a whole new
+// suction zone AND fattens the existing ones, so the ring thickens as the
+// build scales instead of just adding more circles.
+void Game::syncVortices(int slot) {
+  if (slot < 0 || slot >= weaponCount_) return;
+  if (player_ == entt::null || !registry_.valid(player_)) return;
+  auto& w = weapons_[slot];
+  if (w.attackType != AttackType::Vortex) return;
+
+  const int desired = std::max(1, w.projectiles + stats_.projAdd);
+
+  std::vector<entt::entity> zones;
+  float phase = 0.0F;
+  bool havePhase = false;
+  for (const auto e : registry_.view<Vortex>()) {
+    auto& vx = registry_.get<Vortex>(e);
+    if (vx.weaponIndex == slot) {
+      if (!havePhase) {
+        phase = vx.angle;
+        havePhase = true;
+      }
+      zones.push_back(e);
+    }
+  }
+
+  const float scale = 1.0F + 0.18F * static_cast<float>(desired - 1);
+  const float core = w.vortexRadius * scale;
+  const float orbit = w.vortexOrbit * (1.0F + 0.12F * static_cast<float>(desired - 1));
+
+  while (static_cast<int>(zones.size()) < desired) {
+    const auto z = registry_.create();
+    registry_.emplace<Transform>(z, 0.0F, 0.0F, 0.0F, 0.0F);
+    registry_.emplace<Radius>(z, core);
+    Sprite s{};
+    s.color = w.color;
+    s.color.a = 0.22F;
+    s.circle = true;
+    registry_.emplace<Sprite>(z, s);
+    Vortex vx{};
+    vx.damage = w.damage;
+    vx.pierce = w.pierce;
+    vx.radius = core;
+    vx.reach = w.vortexReach * scale;
+    vx.pull = w.vortexPull;
+    vx.orbitRadius = orbit;
+    vx.spin = w.vortexOrbitSpeed;
+    vx.angle = 0.0F;
+    vx.tickRate = w.vortexTickRate;
+    vx.tickTimer = 0.0F;
+    vx.weaponIndex = slot;
+    vx.color = w.color;
+    registry_.emplace<Vortex>(z, vx);
+    zones.push_back(z);
+  }
+  while (static_cast<int>(zones.size()) > desired) {
+    destroyQueue_.push_back(zones.back());
+    zones.pop_back();
+  }
+
+  // Re-space evenly around the player, keeping the ring's phase.
+  const float step = 2.0F * kPi / static_cast<float>(desired);
+  phase = std::round(phase / step) * step;
+  const auto& pt = registry_.get<Transform>(player_);
+  for (int i = 0; i < desired; ++i) {
+    const auto e = zones[static_cast<std::size_t>(i)];
+    auto& vx = registry_.get<Vortex>(e);
+    vx.angle = phase + static_cast<float>(i) * step;
+    vx.radius = core;
+    vx.reach = w.vortexReach * scale;
+    vx.orbitRadius = orbit;
+    if (auto* rr = registry_.try_get<Radius>(e); rr != nullptr) rr->r = core;
+    auto& t = registry_.get<Transform>(e);
+    t.px = pt.x;
+    t.py = pt.y;
+    t.x = pt.x;
+    t.y = pt.y;
+  }
+}
+
 void Game::applyWeaponEffect(int slotIndex, std::string_view effect, float value) {
   if (slotIndex < 0 || slotIndex >= weaponCount_) return;
   auto& w = weapons_[slotIndex];
@@ -3382,6 +3678,8 @@ void Game::applyWeaponEffect(int slotIndex, std::string_view effect, float value
       syncOrbitBlades(slotIndex);
     } else if (w.attackType == AttackType::Halo) {
       syncHaloBeams(slotIndex);
+    } else if (w.attackType == AttackType::Vortex) {
+      syncVortices(slotIndex);
     }
   } else if (effect == "w_pierce_add") {
     w.pierce += static_cast<int>(value);
@@ -3479,6 +3777,9 @@ float Game::iframeDuration(float base) const {
 
 void Game::hurtPlayer(float amount) {
   if (player_ == entt::null || !registry_.valid(player_)) return;
+  // Sandbox immortality: incoming damage is dropped entirely, so a tester can
+  // park themselves in a horde and watch a weapon work.
+  if (testMode_ && testInvuln_) return;
   auto& php = registry_.get<Health>(player_);
   if (php.hp <= 0.0F) return;
 
@@ -3534,6 +3835,7 @@ void Game::hurtPlayer(float amount) {
 // Used by continuous damage auras so they don't fire thorns every frame.
 void Game::damagePlayerDirect(float amount) {
   if (player_ == entt::null || !registry_.valid(player_)) return;
+  if (testMode_ && testInvuln_) return;
   auto& php = registry_.get<Health>(player_);
   if (php.hp <= 0.0F) return;
   float dmg = mitigateDamage(amount, stats_.defense);
@@ -3606,6 +3908,9 @@ void Game::testClearWeapons() {
   for (auto e : registry_.view<HaloBeam>()) {
     registry_.destroy(e);
   }
+  for (auto e : registry_.view<Vortex>()) {
+    registry_.destroy(e);
+  }
   // Drop every live projectile/effect so the eternal orb or in-flight blades
   // never linger into the next test (or the restored run) after a swap.
   for (auto e : registry_.view<Projectile>()) registry_.destroy(e);
@@ -3636,30 +3941,129 @@ void Game::testKillFirstEnemy() {
   }
 }
 
-void Game::enterTestMode() {
+void Game::enterTestMode() { enterTestModeImpl(); }
+void Game::exitTestMode() { exitTestModeImpl(); }
+void Game::cycleTestTimeScale() {
+  testTimeScale_ = testTimeScale_ >= 20 ? 1 : (testTimeScale_ == 1 ? 4 : (testTimeScale_ == 4 ? 10 : 20));
+}
+void Game::toggleTestShop() {
+  testShopOpen_ = !testShopOpen_;
+  if (testShopOpen_) {
+    testShopCursor_ = 0;
+    testShopScroll_ = 0;
+  }
+}
+
+void Game::enterTestModeImpl() {
   if (state_ != RunState::Playing) return;
+  // Snapshot the ENTIRE run. The sandbox is hermetic: everything that happens
+  // inside it is rolled back on exit, so grinding fodder for XP, picking
+  // items, fast-forwarding the clock or farming tier kills can never leak back
+  // into the real run.
   savedWeaponCount_ = weaponCount_;
   for (int i = 0; i < savedWeaponCount_; ++i) savedWeapons_[i] = weapons_[i];
+  savedEnemies_.clear();
+  for (const auto e : registry_.view<Enemy>()) savedEnemies_.push_back(e);
+  if (player_ != entt::null && registry_.valid(player_)) {
+    const auto& t = registry_.get<Transform>(player_);
+    savedPlayerX_ = t.x;
+    savedPlayerY_ = t.y;
+  }
   savedStats_ = stats_;
+  savedStacks_ = stacks_;
+  savedBestiaryKills_ = bestiaryKills_;
+  savedBestiaryTiers_ = bestiaryTiers_;
+  savedXp_ = xp_;
+  savedXpNext_ = xpNext_;
+  savedLevel_ = level_;
+  savedKills_ = kills_;
+  savedShield_ = shield_;
+  savedShieldDelay_ = shieldDelay_;
+  savedIframes_ = iframes_;
+  savedHealCd_ = healCd_;
+  savedSimTime_ = simTime_;
+  savedWaves_ = wavesEnabled_;
+  savedChoosingStarter_ = choosingStarter_;
+  savedStrongestTier_ = strongestKilledTier_;
+  savedStrongestDef_ = strongestKilledDef_;
+  savedTierKillMask_ = tierKillMask_;
+  if (player_ != entt::null && registry_.valid(player_)) {
+    const auto& h = registry_.get<Health>(player_);
+    savedHp_ = h.hp;
+    savedHpMax_ = h.max;
+  }
   testBoosted_ = false;
+  testInvuln_ = false;
+  testTimeScale_ = 1;
+  testShopOpen_ = false;
+  testShopCursor_ = 0;
+  testShopScroll_ = 0;
   testMode_ = true;
   setTestWeapon(0); // starts on the first weapon (wand)
 }
 
-void Game::exitTestMode() {
+void Game::exitTestModeImpl() {
   if (!testMode_) return;
-  testClearWeapons(); // drop the sandbox weapon + its orbit blades
+  // Nothing may stay paused in LevelUp when the run takes over again.
+  state_ = RunState::Playing;
+  testClearWeapons(); // drop the sandbox weapon + its persistent entities
+  // The sandbox's own fodder is not part of the real run either: leaving a
+  // herd of injected test spawns behind would be the last bit of cheat
+  // leakage, and they would immediately maul the restored player. Destroyed
+  // eagerly (not via destroyQueue_) so no contact tick can land this frame.
+  // Enemies that were already on the field when the sandbox opened are kept.
+  std::vector<entt::entity> sandboxFodder;
+  for (const auto e : registry_.view<Enemy>()) {
+    if (std::find(savedEnemies_.begin(), savedEnemies_.end(), e) == savedEnemies_.end()) {
+      sandboxFodder.push_back(e);
+    }
+  }
+  for (const auto e : sandboxFodder) registry_.destroy(e);
+  pending_.clear();
   weaponCount_ = savedWeaponCount_;
   for (int i = 0; i < weaponCount_; ++i) weapons_[i] = savedWeapons_[i];
   stats_ = savedStats_;
+  stacks_ = savedStacks_;
+  bestiaryKills_ = savedBestiaryKills_;
+  bestiaryTiers_ = savedBestiaryTiers_;
+  xp_ = savedXp_;
+  xpNext_ = savedXpNext_;
+  level_ = savedLevel_;
+  kills_ = savedKills_;
+  shield_ = savedShield_;
+  shieldDelay_ = savedShieldDelay_;
+  iframes_ = savedIframes_;
+  healCd_ = savedHealCd_;
+  simTime_ = savedSimTime_;
+  wavesEnabled_ = savedWaves_;
+  choosingStarter_ = savedChoosingStarter_;
+  starterChoicePending_ = savedChoosingStarter_;
+  strongestKilledTier_ = savedStrongestTier_;
+  strongestKilledDef_ = savedStrongestDef_;
+  tierKillMask_ = savedTierKillMask_;
+  if (player_ != entt::null && registry_.valid(player_)) {
+    auto& h = registry_.get<Health>(player_);
+    h.max = savedHpMax_;
+    h.hp = savedHp_;
+    auto& t = registry_.get<Transform>(player_);
+    t.px = savedPlayerX_;
+    t.py = savedPlayerY_;
+    t.x = savedPlayerX_;
+    t.y = savedPlayerY_;
+  }
   testMode_ = false;
   testBoosted_ = false;
-  // Rebuild persistent orbit blades for the restored arsenal.
+  testInvuln_ = false;
+  testTimeScale_ = 1;
+  testShopOpen_ = false;
+  // Rebuild persistent entities for the restored arsenal.
   for (int s = 0; s < weaponCount_; ++s) {
     if (weapons_[s].attackType == AttackType::Orbit) {
       syncOrbitBlades(s);
     } else if (weapons_[s].attackType == AttackType::Halo) {
       syncHaloBeams(s);
+    } else if (weapons_[s].attackType == AttackType::Vortex) {
+      syncVortices(s);
     }
   }
 }
@@ -3673,24 +4077,28 @@ void Game::setTestWeapon(int defIndex) {
   spawnTestFodder(); // fresh targets so every weapon has something to hit
 }
 
-void Game::toggleTestBoost() {
+void Game::toggleTestBoost_() {
   if (!testMode_) return;
   if (!testBoosted_) {
     // A buffed build that makes every stat coupling obvious at a glance.
     testBoosted_ = true;
+    testBoostBase_ = stats_;
     stats_.damageMul += 1.0F;
     stats_.projAdd += 4;
     stats_.pierceAdd += 3;
     stats_.fireRateBonus += 0.8F;
   } else {
     testBoosted_ = false;
-    stats_ = savedStats_;
+    // Only the boost comes off — items picked in the sandbox stay put.
+    stats_ = testBoostBase_;
   }
   for (int s = 0; s < weaponCount_; ++s) {
     if (weapons_[s].attackType == AttackType::Orbit) {
       syncOrbitBlades(s);
     } else if (weapons_[s].attackType == AttackType::Halo) {
       syncHaloBeams(s);
+    } else if (weapons_[s].attackType == AttackType::Vortex) {
+      syncVortices(s);
     }
   }
 }
@@ -3700,8 +4108,7 @@ void Game::spawnTestFodder() {
   if (player_ == entt::null || !registry_.valid(player_)) return;
   const auto& pt = registry_.get<Transform>(player_);
   std::uniform_real_distribution<float> unit(0.0F, 1.0F);
-  constexpr int kHerd = 10;
-  for (int m = 0; m < kHerd; ++m) {
+  constexpr int kHerd = 10;  for (int m = 0; m < kHerd; ++m) {
     const float angle =
         (static_cast<float>(m) / static_cast<float>(kHerd)) * 2.0F * kPi +
         (unit(rng_) - 0.5F) * 0.5F;
@@ -3717,6 +4124,117 @@ void Game::spawnTestFodder() {
     pending.traits = TraitNone;
     pending.tier = 0;
     pending_.push_back(pending);
+  }
+}
+
+// --- Test sandbox: item picker, immortality, difficulty clock, suicide -----
+
+// Grants one stack of an upgrade. This is the shared "take this card" path: the
+// level-up picker uses it, and so does the sandbox's item list — so a tester
+// can grab any card at all and see exactly what a real pick would do.
+bool Game::grantTestUpgrade(int upgradeIndex) {
+  if (upgradeIndex < 0 || static_cast<std::size_t>(upgradeIndex) >= content_.upgrades.size()) {
+    return false;
+  }
+  if (stacks_[static_cast<std::size_t>(upgradeIndex)] >=
+      content_.upgrades[static_cast<std::size_t>(upgradeIndex)].maxStacks) {
+    return false;
+  }
+  return applyUpgradeAt(upgradeIndex);
+}
+
+// The sandbox "max everything" cheat: keeps granting stacks until every item
+// is full. Milestone cards are excluded because they are level-gated rewards,
+// not something a tester can meaningfully stack.
+void Game::testMaxAllItems() {
+  if (!testMode_) return;
+  for (int pass = 0; pass < 64; ++pass) {
+    bool progressed = false;
+    for (std::size_t i = 0; i < content_.upgrades.size(); ++i) {
+      if (content_.upgrades[i].kind == "milestone") continue;
+      progressed |= grantTestUpgrade(static_cast<int>(i));
+    }
+    if (!progressed) break;
+  }
+}
+
+void Game::testKillPlayer() {
+  if (player_ == entt::null || !registry_.valid(player_)) return;
+  registry_.get<Health>(player_).hp = 0.0F;
+  state_ = RunState::GameOver;
+}
+
+void Game::updateTestShop(const FrameInput& input) {
+  if (!testMode_ || !testShopOpen_) return;
+  const int n = static_cast<int>(content_.upgrades.size());
+  if (n <= 0) return;
+  if (input.menuUp) {
+    testShopCursor_ = (testShopCursor_ - 1 + n) % n;
+  } else if (input.menuDown) {
+    testShopCursor_ = (testShopCursor_ + 1) % n;
+  }
+  if (input.menuLeft) {
+    testShopCursor_ = (testShopCursor_ - 1 + n) % n;
+  } else if (input.menuRight) {
+    testShopCursor_ = (testShopCursor_ + 1) % n;
+  }
+  // Keep the highlighted row inside the visible window.
+  if (testShopCursor_ < testShopScroll_) testShopScroll_ = testShopCursor_;
+  if (testShopCursor_ >= testShopScroll_ + kTestShopRows) {
+    testShopScroll_ = testShopCursor_ - kTestShopRows + 1;
+  }
+  if (input.menuConfirm) grantTestUpgrade(testShopCursor_);
+}
+
+void Game::renderTestShop(core::render::Batcher& b, float px, float py) {
+  using core::render::Color;
+  const Color panel{0.07F, 0.06F, 0.11F, 0.97F};
+  const Color edge{0.45F, 0.35F, 0.85F, 1.0F};
+  const Color dim{0.75F, 0.75F, 0.85F, 1.0F};
+  const Color hot{1.0F, 0.88F, 0.45F, 1.0F};
+  const Color maxed{0.45F, 0.45F, 0.55F, 1.0F};
+
+  const float panelW = std::min(720.0F, px * 0.9F);
+  const float panelH = std::min(py * 0.86F, 60.0F + static_cast<float>(kTestShopRows) * 19.0F);
+  const float x0 = px * 0.5F - panelW * 0.5F;
+  const float y0 = py * 0.5F - panelH * 0.5F;
+  b.rectTopLeft(x0, y0, panelW, panelH, panel);
+  b.rectTopLeft(x0, y0, panelW, 3.0F, edge);
+
+  const std::string title = "TEST ITEMS - [E] CLOSE   [R] MAX EVERYTHING";
+  b.text(x0 + 18.0F, y0 + 14.0F, 2.4F, hot, title);
+  const std::string sub = "UP/DOWN SELECT   ENTER TAKE ONE STACK   (ALL CHANGES ARE ROLLED BACK ON EXIT)";
+  b.text(x0 + 18.0F, y0 + 36.0F, 1.4F, maxed, sub);
+
+  const float rowH = 19.0F;
+  const float listY = y0 + 54.0F;
+  for (int r = 0; r < kTestShopRows; ++r) {
+    const int idx = testShopScroll_ + r;
+    if (idx < 0 || static_cast<std::size_t>(idx) >= content_.upgrades.size()) break;
+    const auto& def = content_.upgrades[static_cast<std::size_t>(idx)];
+    const int have = stacks_[static_cast<std::size_t>(idx)];
+    const bool full = have >= def.maxStacks;
+    const bool sel = idx == testShopCursor_;
+    const float y = listY + static_cast<float>(r) * rowH;
+    if (sel) {
+      b.rectTopLeft(x0 + 10.0F, y - 2.0F, panelW - 20.0F, rowH, Color{0.22F, 0.19F, 0.36F, 1.0F});
+    }
+    const Color col = full ? maxed : (sel ? hot : dim);
+    // Weapon-specific Focus cards are only usable while that weapon is armed.
+    bool usable = true;
+    if (!def.weapon.empty() && findWeaponSlot(def.weapon) < 0) usable = false;
+    std::string tag = usable ? "" : " [NOT ARMED]";
+    if (full) tag = " [MAX]";
+    const std::string label = def.name + "  " + std::to_string(have) + "/" +
+                              std::to_string(def.maxStacks) + tag;
+    b.text(x0 + 20.0F, y + 1.0F, 1.6F, col, label);
+    // A short hint of what the card actually does, right-aligned.
+    const std::string hint = def.desc;
+    const float hw = b.textWidth(1.2F, hint);
+    if (hw < panelW * 0.5F) {
+      b.text(x0 + panelW - 20.0F - hw, y + 3.0F, 1.2F,
+             usable ? Color{0.55F, 0.55F, 0.65F, 1.0F} : maxed, hint);
+    }
   }
 }
 
@@ -3793,6 +4311,7 @@ Game::DebugCounts Game::debugCounts() const {
   c.zones = registry_.view<ZoneEffect>().size();
   c.chains = registry_.view<ChainLightning>().size();
   c.novas = registry_.view<NovaRing>().size();
+  c.vortices = registry_.view<Vortex>().size();
   return c;
 }
 
@@ -3829,6 +4348,23 @@ float Game::testFirstEnemyDistToPlayer() const {
     const float dx = t.x - pt.x;
     const float dy = t.y - pt.y;
     return std::sqrt(dx * dx + dy * dy);
+  }
+  return -1.0F;
+}
+
+float Game::testFirstEnemyDistToVortex() const {
+  auto enemyView = registry_.view<Transform, Enemy>();
+  for (const auto en : enemyView) {
+    const auto& et = registry_.get<Transform>(en);
+    float best = -1.0F;
+    for (const auto vz : registry_.view<Transform, Vortex>()) {
+      const auto& zt = registry_.get<Transform>(vz);
+      const float dx = et.x - zt.x;
+      const float dy = et.y - zt.y;
+      const float d = std::sqrt(dx * dx + dy * dy);
+      if (best < 0.0F || d < best) best = d;
+    }
+    return best;
   }
   return -1.0F;
 }
@@ -3981,6 +4517,8 @@ static const char* attackTypeName(AttackType t) {
     case AttackType::Inferno: return "inferno";
     case AttackType::Pulsar: return "pulsar";
     case AttackType::Halo: return "halo";
+    case AttackType::Vortex: return "vortex";
+    case AttackType::Prism: return "prism";
   }
   return "?";
 }
@@ -4038,6 +4576,10 @@ void Game::renderPlayerStats(core::render::Batcher& b, float px, float py) {
   if (stats_.rerollCharges > 1) {
     rows.push_back("+1 REROLL PER LEVEL-UP");
   }
+  if (stats_.weaponSlots > 0) {
+    rows.push_back("ARSENAL CORE X" + std::to_string(stats_.weaponSlots) +
+                   "  (+" + std::to_string(stats_.weaponSlots) + " SLOT)");
+  }
   // What the player is currently wearing, so the persistent cosmetics are
   // discoverable from inside a run (and not only on the main menu).
   if (profile_ != nullptr) {
@@ -4054,7 +4596,7 @@ void Game::renderPlayerStats(core::render::Batcher& b, float px, float py) {
 
   rows.push_back(""); // spacer
   rows.push_back("WEAPONS " + std::to_string(weaponCount_) + "/" +
-                 std::to_string(kMaxWeapons) + ":");
+                 std::to_string(weaponCap()) + ":");
   for (int i = 0; i < weaponCount_; ++i) {
     const auto& w = weapons_[i];
     const auto& def = content_.weapons[static_cast<std::size_t>(w.def)];
@@ -4679,6 +5221,48 @@ void Game::render(core::render::Batcher& b, float alpha) {
     }
   }
 
+  // Vortex zones (super evolution): a hazy suction disc with a bright core and
+  // a ring of orbiting debris, so the pull direction reads at a glance.
+  {
+    auto view = registry_.view<Transform, Vortex>();
+    for (const auto e : view) {
+      const auto& t = view.get<Transform>(e);
+      const auto& vx = view.get<Vortex>(e);
+      const float x = t.px + (t.x - t.px) * lerp;
+      const float y = t.py + (t.y - t.py) * lerp;
+      // Outer "reach" halo: where the drag starts.
+      Color reach = vx.color;
+      reach.a = 0.07F;
+      b.circle(x, y, vx.reach, reach);
+      // Damage core.
+      Color core = vx.color;
+      core.a = 0.16F;
+      b.circle(x, y, vx.radius, core);
+      // Inward-spiralling motes: each one is drawn on a shrinking radius with a
+      // counter-rotating angle, which reads as suction.
+      constexpr int kMotes = 10;
+      for (int k = 0; k < kMotes; ++k) {
+        const float f = static_cast<float>(k) / static_cast<float>(kMotes);
+        const float a = vx.angle * 1.7F - f * 4.2F;
+        const float rr = vx.radius * (1.0F - f * 0.85F);
+        Color mote = vx.color;
+        mote.a = 0.30F + 0.45F * (1.0F - f);
+        b.circle(x + std::cos(a) * rr, y + std::sin(a) * rr, 0.07F, mote);
+      }
+      // Bright centre.
+      Color eye = vx.color;
+      eye.a = 0.85F;
+      b.circle(x, y, 0.13F, eye);
+      Color rim = vx.color;
+      rim.a = 0.45F;
+      constexpr int kRim = 18;
+      for (int k = 0; k < kRim; ++k) {
+        const float a = 2.0F * kPi * static_cast<float>(k) / static_cast<float>(kRim);
+        b.circle(x + std::cos(a) * vx.radius, y + std::sin(a) * vx.radius, 0.06F, rim);
+      }
+    }
+  }
+
   // Bombs (hammer): body + faint shadow beneath to sell the arc.
   {
     auto view = registry_.view<Transform, BombProjectile, Radius>();
@@ -5080,18 +5664,27 @@ void Game::render(core::render::Batcher& b, float alpha) {
     const std::string title =
         "WEAPON TEST " + std::to_string(testWeaponIdx_ + 1) + "/" +
         std::to_string(content_.weapons.size()) + " - " + wname + wtag;
-    b.text(px * 0.5F - b.textWidth(3.0F, title) * 0.5F, py * 0.78F, 3.0F, gold, title);
+    b.text(px * 0.5F - b.textWidth(3.0F, title) * 0.5F, py * 0.70F, 3.0F, gold, title);
     const std::string boost = testBoosted_ ? "BOOST ON" : "BOOST OFF";
     const std::string waves = wavesEnabled_ ? "WAVES ON" : "WAVES OFF";
-    const std::string status = boost + "   " + waves;
-    b.text(px * 0.5F - b.textWidth(2.0F, status) * 0.5F, py * 0.82F, 2.0F,
+    const std::string god = testInvuln_ ? "GOD ON" : "GOD OFF";
+    const std::string clock = "CLOCK X" + std::to_string(testTimeScale_);
+    const std::string status = boost + "   " + waves + "   " + god + "   " + clock;
+    b.text(px * 0.5F - b.textWidth(2.0F, status) * 0.5F, py * 0.74F, 2.0F,
            Color{0.75F, 0.85F, 1.0F, 1.0F}, status);
-    const std::string hint = "[1] PREV   [2] NEXT   [3] MAX BUILD   [4] WAVES   [5] CLOSE";
-    b.text(px * 0.5F - b.textWidth(1.8F, hint) * 0.5F, py * 0.86F, 1.8F,
-           Color{0.8F, 0.8F, 0.85F, 1.0F}, hint);
-    const std::string note = "KILLS FEED XP - LEVEL UPS RESUME AFTER CLOSING";
-    b.text(px * 0.5F - b.textWidth(1.4F, note) * 0.5F, py * 0.89F, 1.4F,
+    // Split over two rows so the whole keymap fits even in a narrow window.
+    const Color key{0.8F, 0.8F, 0.85F, 1.0F};
+    const std::string rowA =
+        "[1] PREV   [2] NEXT   [3] MAX BUILD   [4] WAVES   [5] CLOSE";
+    b.text(px * 0.5F - b.textWidth(1.6F, rowA) * 0.5F, py * 0.775F, 1.6F, key, rowA);
+    const std::string rowB =
+        "[E] ITEMS   [I] GOD   [F] CLOCK   [K] KILL   [R] MAX ALL";
+    b.text(px * 0.5F - b.textWidth(1.6F, rowB) * 0.5F, py * 0.805F, 1.6F, key, rowB);
+    const std::string note =
+        "SANDBOX: XP / ITEMS / KILLS / HP ARE ROLLED BACK WHEN YOU CLOSE";
+    b.text(px * 0.5F - b.textWidth(1.4F, note) * 0.5F, py * 0.84F, 1.4F,
            Color{0.6F, 0.6F, 0.7F, 1.0F}, note);
+    if (testShopOpen_) renderTestShop(b, px, py);
   }
 
   b.flush();

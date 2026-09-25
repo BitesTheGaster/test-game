@@ -179,7 +179,11 @@ Headless Catch2 tests in `tests/test_game.cpp` construct a `Game` directly
 - Knockback: Repulsion Field retaliation and the Impact multiplier, plus the
   decaying-impulse push landing on the enemy
 - Opening 3-weapon pick, defense-scaled iframes, Last Stand low-HP iframes
-- Halo spokes (Radiant Halo / Helios Wheel) and super-evolution prerequisites
+- Halo spokes (Radiant Halo) and super-evolution prerequisites
+- Void Gyre suction zones (count/size track the projectile stat) and the
+  Prism Array multi-target beam locks
+- The weapon test sandbox: full run snapshot/restore, the item picker, unlimited
+  rerolls, immortality and the difficulty-clock multiplier
 - The lethal-hit rule (a hit covering the remaining HP always kills)
 - Bestiary kill/tier tracking and the B overlay toggle
 - Milestone offering at level 5

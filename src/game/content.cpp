@@ -65,6 +65,8 @@ AttackType parseAttackType(const toml::table& t, const std::string& where) {
   if (s == "inferno") return AttackType::Inferno;
   if (s == "pulsar") return AttackType::Pulsar;
   if (s == "halo") return AttackType::Halo;
+  if (s == "vortex") return AttackType::Vortex;
+  if (s == "prism") return AttackType::Prism;
   throw std::runtime_error(where + ": unknown attack_type \"" + s + "\"");
 }
 
@@ -197,6 +199,19 @@ Content loadContent(const std::filesystem::path& dir) {
       def.novaExpandSpeed = (*t)["nova_expand_speed"].value_or(3.0F);
       def.novaDamagePerTick = (*t)["nova_damage_per_tick"].value_or(25.0F);
       def.novaTickRate = (*t)["nova_tick_rate"].value_or(0.15F);
+
+      // Vortex
+      def.vortexRadius = (*t)["vortex_radius"].value_or(1.3F);
+      def.vortexReach = (*t)["vortex_reach"].value_or(2.6F);
+      def.vortexPull = (*t)["vortex_pull"].value_or(4.0F);
+      def.vortexOrbit = (*t)["vortex_orbit"].value_or(2.6F);
+      def.vortexOrbitSpeed = (*t)["vortex_orbit_speed"].value_or(1.8F);
+      def.vortexTickRate = (*t)["vortex_tick_rate"].value_or(0.1F);
+
+      // Prism
+      def.prismRange = (*t)["prism_range"].value_or(9.0F);
+      def.prismWidth = (*t)["prism_width"].value_or(0.45F);
+      def.prismMaxTargets = static_cast<int>((*t)["prism_max_targets"].value_or(6));
 
       content.weapons.push_back(std::move(def));
     }
