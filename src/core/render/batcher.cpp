@@ -147,6 +147,17 @@ const Glyph& glyphFor(char c) {
 
 } // namespace
 
+bool fontSupports(std::string_view s) {
+  for (const char c : s) {
+    unsigned char u = static_cast<unsigned char>(c);
+    if (u >= 'a' && u <= 'z') {
+      u = static_cast<unsigned char>(u - 'a' + 'A');
+    }
+    if (u < 32 || u > 96) return false;
+  }
+  return true;
+}
+
 bool Batcher::init() {
   const unsigned vs = compile(GL_VERTEX_SHADER, kVertexShader);
   const unsigned fs = compile(GL_FRAGMENT_SHADER, kFragmentShader);

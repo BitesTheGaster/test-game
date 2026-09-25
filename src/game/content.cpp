@@ -1,5 +1,7 @@
 #include "game/content.hpp"
 
+#include "core/render/batcher.hpp"
+
 #include <toml++/toml.hpp>
 
 #include <stdexcept>
@@ -94,6 +96,15 @@ const EnemyDef* Content::enemy(std::string_view id) const {
   for (const auto& e : enemies) {
     if (e.id == id) {
       return &e;
+    }
+  }
+  return nullptr;
+}
+
+const ManualPage* Content::manualPage(std::string_view id) const {
+  for (const auto& p : manual) {
+    if (p.id == id) {
+      return &p;
     }
   }
   return nullptr;
@@ -288,6 +299,70 @@ Content loadContent(const std::filesystem::path& dir) {
       def.weapon = (*t)["weapon"].value<std::string>().value_or("");
       def.level = static_cast<int>((*t)["level"].value_or(0));
       content.upgrades.push_back(std::move(def));
+    }
+  }
+
+  // --- manual.toml (optional) -------------------------------------------------
+  // The in-game manual. Missing file => no manual (the screen degrades to a
+  // "not available in this build" note), because a stripped distribution should
+  // still run. Present but malformed, or containing text the bitmap font cannot
+  // draw, IS an error: a screen full of question marks is worse than a failed
+  // load, and only a test can catch the difference.
+  {
+    const auto file = dir / "manual.toml";
+    if (std::filesystem::exists(file)) {
+      const toml::table tbl = parseTable(file);
+      const auto* arr = tbl["page"].as_array();
+      if (arr == nullptr) {
+        throw std::runtime_error(file.string() + ": missing [[page]] array");
+      }
+      for (const auto& node : *arr) {
+        const auto* t = node.as_table();
+        if (t == nullptr) {
+          throw std::runtime_error(file.string() + ": [[page]] entry is not a table");
+        }
+        ManualPage page;
+        page.id = requireString(*t, "id", file.string());
+        page.title = requireString(*t, "title", file.string());
+        const auto* lines = t->get("lines");
+        const auto* lineArr = lines != nullptr ? lines->as_array() : nullptr;
+        if (lineArr == nullptr) {
+          throw std::runtime_error(file.string() + ": page \"" + page.id +
+                                   "\" has no \"lines\" array");
+        }
+        std::size_t lineNo = 0;
+        for (const auto& ln : *lineArr) {
+          const auto s = ln.value<std::string>();
+          if (!s) {
+            throw std::runtime_error(file.string() + ": page \"" + page.id +
+                                     "\" line entries must be strings");
+          }
+          ++lineNo;
+          // The font is ASCII 32..96 with lowercase folded onto uppercase. A
+          // typographic dash or a curly quote would silently draw as '?', so it
+          // is rejected here where the file and line number are known.
+          if (!core::render::fontSupports(*s)) {
+            throw std::runtime_error(file.string() + ": page \"" + page.id + "\" line " +
+                                     std::to_string(lineNo) +
+                                     " contains a character the in-game font cannot "
+                                     "draw (allowed: ASCII 32..96)");
+          }
+          page.lines.push_back(*s);
+        }
+        if (page.lines.empty()) {
+          throw std::runtime_error(file.string() + ": page \"" + page.id + "\" is empty");
+        }
+        content.manual.push_back(std::move(page));
+      }
+      // Two pages with the same id would make the page-jump list ambiguous.
+      for (std::size_t i = 0; i < content.manual.size(); ++i) {
+        for (std::size_t k = i + 1; k < content.manual.size(); ++k) {
+          if (content.manual[i].id == content.manual[k].id) {
+            throw std::runtime_error(file.string() + ": duplicate manual page id \"" +
+                                     content.manual[i].id + "\"");
+          }
+        }
+      }
     }
   }
 

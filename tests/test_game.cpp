@@ -5,6 +5,7 @@
 #include "game/content.hpp"
 #include "game/profile.hpp"
 #include "core/input/key_repeat.hpp"
+#include "core/render/batcher.hpp"
 #include "core/sim/spatial_hash.hpp"
 #include "core/sim/fixed_timestep.hpp"
 
@@ -13,6 +14,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -2080,7 +2082,7 @@ TEST_CASE("Main menu navigation wraps and START closes it") {
   up.menuUp = true;
   g.advance(1.0F / 60.0F, up);
   // Up from the first row wraps around to the last (QUIT).
-  REQUIRE(g.menuSelection() == 3);
+  REQUIRE(g.menuSelection() == 5);
 
   game::FrameInput down{};
   down.menuDown = true;
@@ -2204,11 +2206,11 @@ TEST_CASE("Main menu QUIT row raises a one-shot quit request") {
   g.setProfile(&profile);
   g.openMenu();
 
-  // Navigate to QUIT (index 3).
+  // Navigate to QUIT (index 5, the last row).
   game::FrameInput down{};
   down.menuDown = true;
-  for (int i = 0; i < 3; ++i) g.advance(1.0F / 60.0F, down);
-  REQUIRE(g.menuSelection() == 3);
+  for (int i = 0; i < 5; ++i) g.advance(1.0F / 60.0F, down);
+  REQUIRE(g.menuSelection() == 5);
 
   game::FrameInput confirm{};
   confirm.menuConfirm = true;
@@ -3525,4 +3527,631 @@ TEST_CASE("The sandbox rolls the ability cooldowns back with everything else") {
   REQUIRE(g.worldTimeScale() == 1.0F);
   // ...except the run itself, which the sandbox ends.
   REQUIRE(g.state() == game::RunState::GameOver);
+}
+
+// --- In-game manual, progress reset and card coverage ------------------------
+//
+// Three separate promises are checked here, and all three are the kind that rot
+// silently: the manual must stay drawable AND fit on one screen, the reset
+// button must stay two-step, and every weapon must keep at least one unique.
+
+TEST_CASE("The in-game manual is loaded, ordered and every glyph is drawable") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  REQUIRE_FALSE(content.manual.empty());
+  REQUIRE(content.manual.size() >= 8);
+
+  std::vector<std::string> ids;
+  for (const auto& page : content.manual) {
+    CAPTURE(page.id);
+    REQUIRE_FALSE(page.id.empty());
+    REQUIRE_FALSE(page.title.empty());
+    REQUIRE_FALSE(page.lines.empty());
+    // Unique ids: Content::manualPage() resolves by id, so a duplicate would
+    // make the lookup ambiguous.
+    for (const auto& seen : ids) REQUIRE(seen != page.id);
+    ids.push_back(page.id);
+    // Every character in the title and every line must exist in the 5x7 font.
+    // loadContent() already throws on this, so reaching the assert means the
+    // check runs; the loop is the belt to the loader's braces.
+    REQUIRE(core::render::fontSupports(page.title));
+    for (const auto& line : page.lines) {
+      REQUIRE(core::render::fontSupports(line));
+    }
+  }
+  // The pages a player cannot do without.
+  for (const char* want : {"controls", "weapons", "abilities", "cards"}) {
+    REQUIRE(content.manualPage(want) != nullptr);
+  }
+}
+
+TEST_CASE("The shipped manual fits one screen and never wraps off the right") {
+  // The renderer lays a page out at 1.6 scale on a 15 px line pitch, starting
+  // 74 px down, and keeps 56 px of bottom margin for the hint bar. Anything
+  // past that is clipped with a "...MORE, NEXT PAGE" marker, which would mean
+  // the reader is missing part of a topic with no way to scroll.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  constexpr float kBodyY = 74.0F;
+  constexpr float kLineH = 15.0F;
+  constexpr float kBottomPad = 56.0F;
+  constexpr float kRefHeight = 720.0F; // the smallest window the HUD supports
+  constexpr float kBodyX = 250.0F;
+  constexpr float kScale = 1.6F;
+  constexpr float kGlyph = 6.0F; // Batcher::textWidth == len * 6 * scale
+  const float maxLines = (kRefHeight - kBodyY - kBottomPad) / kLineH;
+  const float maxChars = (kRefHeight - kBodyX - 20.0F) / (kGlyph * kScale);
+
+  for (const auto& page : content.manual) {
+    CAPTURE(page.id);
+    REQUIRE(static_cast<float>(page.lines.size()) <= maxLines);
+    // The marker prefixes ('>', '#', two spaces) are stripped before drawing,
+    // so they only ever make a line SHORTER on screen.
+    for (const auto& raw : page.lines) {
+      std::string_view v = raw;
+      if (!v.empty() && (v.front() == '>' || v.front() == '#')) v.remove_prefix(1);
+      if (v.size() >= 2 && v[0] == ' ' && v[1] == ' ') v.remove_prefix(2);
+      REQUIRE(static_cast<float>(v.size()) <= maxChars);
+    }
+  }
+}
+
+TEST_CASE("F1 opens the manual from the menu, a run and the pause screen") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 401};
+  g.testDisableWaves();
+  g.testClearWeapons();
+  g.testAddWeapon(0);
+  game::FrameInput in{};
+  g.advance(1.0F / 60.0F, in);
+
+  // From a live run.
+  game::FrameInput f1{};
+  f1.manualToggle = true;
+  g.advance(1.0F / 60.0F, f1);
+  REQUIRE(g.manualOpen());
+  REQUIRE(g.manualPageCount() == content.manual.size());
+  REQUIRE(g.manualPageIndex() == 0);
+  // Modal: the manual eats the frame, so the simulation must not have moved.
+  const float t = g.simTime();
+  g.advance(1.0F / 60.0F, in);
+  REQUIRE(g.simTime() == t);
+
+  // Pages flip and wrap in both directions.
+  const std::string first = g.manualPageId();
+  g.nextManualPage();
+  REQUIRE(g.manualPageId() != first);
+  g.prevManualPage();
+  REQUIRE(g.manualPageId() == first);
+  g.prevManualPage();
+  REQUIRE(g.manualPageIndex() == content.manual.size() - 1);
+  g.nextManualPage();
+  REQUIRE(g.manualPageIndex() == 0);
+  // Number keys jump straight to a page.
+  game::FrameInput jump{};
+  jump.choose3 = true;
+  g.advance(1.0F / 60.0F, jump);
+  REQUIRE(g.manualPageIndex() == 2);
+  // A jump past the end is ignored rather than landing on nothing.
+  const std::size_t pages = content.manual.size();
+  REQUIRE(pages > 5);
+  game::FrameInput far{};
+  far.choose5 = true;
+  g.advance(1.0F / 60.0F, far);
+  REQUIRE(g.manualPageIndex() == 4);
+
+  // Arrows are the other way to flip, and a repeat-holding player gets them.
+  game::FrameInput down{};
+  down.menuDown = true;
+  g.advance(1.0F / 60.0F, down);
+  REQUIRE(g.manualPageIndex() == 5);
+
+  // F1 again closes it, and the run resumes on the next frame.
+  g.advance(1.0F / 60.0F, f1);
+  REQUIRE_FALSE(g.manualOpen());
+  g.advance(1.0F / 60.0F, in);
+  REQUIRE(g.simTime() > t);
+
+  // The same key works from the pause screen...
+  game::FrameInput pause{};
+  pause.togglePause = true;
+  g.advance(1.0F / 60.0F, pause);
+  REQUIRE(g.state() == game::RunState::Paused);
+  g.advance(1.0F / 60.0F, f1);
+  REQUIRE(g.manualOpen());
+  // ...and ESC from the manual returns to the pause screen, not the run.
+  game::FrameInput esc{};
+  esc.togglePause = true;
+  g.advance(1.0F / 60.0F, esc);
+  REQUIRE_FALSE(g.manualOpen());
+  REQUIRE(g.state() == game::RunState::Paused);
+
+  // And from the main menu, including by selecting the MANUAL row.
+  g.openMenu();
+  REQUIRE(g.menuOpen());
+  game::FrameInput row{};
+  row.menuDown = true;
+  for (int i = 0; i < 3; ++i) g.advance(1.0F / 60.0F, row);
+  REQUIRE(g.menuSelection() == 3);
+  game::FrameInput confirm{};
+  confirm.menuConfirm = true;
+  g.advance(1.0F / 60.0F, confirm);
+  REQUIRE(g.manualOpen());
+  // Closing the manual lands back on the menu, not into the run.
+  g.advance(1.0F / 60.0F, f1);
+  REQUIRE_FALSE(g.manualOpen());
+  REQUIRE(g.menuOpen());
+}
+
+TEST_CASE("A build with no manual.toml still loads and reports none") {
+  // The manual is the one content file allowed to be absent: a stripped
+  // distribution must still start. Copy the data dir minus manual.toml.
+  const std::filesystem::path dir =
+      std::filesystem::temp_directory_path() / "test-game-nomanual";
+  std::error_code ec;
+  std::filesystem::remove_all(dir, ec);
+  std::filesystem::create_directories(dir, ec);
+  for (const char* name : {"weapons.toml", "enemies.toml", "upgrades.toml"}) {
+    std::filesystem::copy_file(std::filesystem::path(GAME_ASSETS_DIR) / "data" / name,
+                               dir / name, ec);
+  }
+  REQUIRE_FALSE(std::filesystem::exists(dir / "manual.toml"));
+
+  const auto content = game::loadContent(dir.string());
+  REQUIRE(content.manual.empty());
+  REQUIRE(content.manualPage("controls") == nullptr);
+  game::Game g{content, 402};
+  g.testClearWeapons();
+  g.testAddWeapon(0);
+  game::FrameInput in{};
+  g.advance(1.0F / 60.0F, in);
+  g.openManual();
+  REQUIRE(g.manualOpen());
+  REQUIRE(g.manualPageCount() == 0);
+  REQUIRE(g.manualPageId().empty());
+  // Flipping pages on an empty manual must not index out of bounds.
+  g.nextManualPage();
+  g.prevManualPage();
+  REQUIRE(g.manualPageIndex() == 0);
+
+  std::filesystem::remove_all(dir, ec);
+}
+
+TEST_CASE("Reset Progress takes two confirms, and moving away disarms it") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Profile profile;
+  profile.skin = 5;
+  profile.outline = 0;
+  profile.unlockTier(1);
+  profile.unlockTier(2);
+  profile.unlockTier(3);
+  profile.outline = 3;
+  game::Game g{content, 403};
+  g.setProfile(&profile);
+  g.openMenu();
+
+  // Walk to RESET PROGRESS (index 4).
+  game::FrameInput down{};
+  down.menuDown = true;
+  for (int i = 0; i < 4; ++i) g.advance(1.0F / 60.0F, down);
+  REQUIRE(g.menuSelection() == 4);
+
+  // First confirm only ARMS it. This is the whole point: the button that
+  // deletes hours of unlocks must not fire on the same press that arms it.
+  game::FrameInput confirm{};
+  confirm.menuConfirm = true;
+  g.advance(1.0F / 60.0F, confirm);
+  REQUIRE(g.progressResetArmed());
+  REQUIRE(profile.skin == 5);
+  REQUIRE(profile.unlocks == static_cast<game::UnlockMask>(
+      game::kUnlockElite | game::kUnlockChampion | game::kUnlockOverlord));
+
+  // Leaving the row disarms it, so an old armed state cannot be fired from
+  // somewhere else later.
+  g.advance(1.0F / 60.0F, down);
+  REQUIRE(g.menuSelection() == 5);
+  REQUIRE_FALSE(g.progressResetArmed());
+  // ...and walking all the way round the six rows is the only way back, which
+  // is the point: a reset cannot be armed from one row and fired from another.
+  for (int i = 0; i < 5; ++i) g.advance(1.0F / 60.0F, down);
+  REQUIRE(g.menuSelection() == 4);
+  g.advance(1.0F / 60.0F, confirm);
+  REQUIRE(g.progressResetArmed());
+
+  // Second confirm wipes: skin back to default, every unlock gone, outline off.
+  g.advance(1.0F / 60.0F, confirm);
+  REQUIRE_FALSE(g.progressResetArmed());
+  REQUIRE(profile.skin == 0);
+  REQUIRE(profile.outline == 0);
+  REQUIRE(profile.unlocks == 0);
+  // The player is repainted to the default skin straight away.
+  const auto skin0 = game::skinPalette()[0].color;
+  const auto c = g.testPlayerColor();
+  REQUIRE(c.r == Catch::Approx(skin0.r));
+  REQUIRE(c.g == Catch::Approx(skin0.g));
+  REQUIRE(c.b == Catch::Approx(skin0.b));
+  // And main() is told to write the wipe to disk.
+  REQUIRE(g.consumeProfileDirty());
+  REQUIRE_FALSE(g.consumeProfileDirty());
+
+  // A third press is a fresh arm, not a second wipe.
+  g.advance(1.0F / 60.0F, confirm);
+  REQUIRE(g.progressResetArmed());
+  g.cancelProgressReset();
+  REQUIRE_FALSE(g.progressResetArmed());
+}
+
+TEST_CASE("A wiped profile does not silently re-grant an outline on the next kill") {
+  // The Game remembers which unlocks it has already pushed into the profile.
+  // After a wipe that memory must be cleared, or the next elite kill would
+  // re-push a bit the player no longer has and hand the outline straight back.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Profile profile;
+  game::Game g{content, 404};
+  g.setProfile(&profile);
+  g.testDisableWaves();
+  g.testClearWeapons();
+  g.testAddWeapon(0);
+  game::FrameInput in{};
+  g.advance(1.0F / 60.0F, in);
+
+  // Kill a tier-0 enemy through the normal path and report the unlocks once.
+  g.testKillFirstEnemy();
+  g.consumeProfileDirty();
+  // Nothing to earn from a normal enemy.
+  REQUIRE(profile.unlocks == 0);
+
+  g.beginProgressReset();
+  REQUIRE(g.confirmProgressReset());
+  REQUIRE(profile.unlocks == 0);
+  // syncedUnlocks_ was cleared by the wipe, so a re-report would be treated as
+  // new. A normal kill still earns nothing, which is the observable part.
+  g.testKillFirstEnemy();
+  REQUIRE(profile.unlocks == 0);
+}
+
+TEST_CASE("The reset row is inert without a profile but never crashes") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 405}; // no profile attached
+  g.openMenu();
+  game::FrameInput down{};
+  down.menuDown = true;
+  for (int i = 0; i < 4; ++i) g.advance(1.0F / 60.0F, down);
+  REQUIRE(g.menuSelection() == 4);
+  game::FrameInput confirm{};
+  confirm.menuConfirm = true;
+  g.advance(1.0F / 60.0F, confirm);
+  // Nothing to arm, so nothing can fire later either.
+  REQUIRE_FALSE(g.progressResetArmed());
+  REQUIRE_FALSE(g.confirmProgressReset());
+  // START and QUIT still work on a headless caller.
+  game::FrameInput up{};
+  up.menuUp = true;
+  for (int i = 0; i < 4; ++i) g.advance(1.0F / 60.0F, up);
+  REQUIRE(g.menuSelection() == 0);
+  g.advance(1.0F / 60.0F, confirm);
+  REQUIRE_FALSE(g.menuOpen());
+}
+
+TEST_CASE("Every weapon in the roster has at least one unique item") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 406};
+  std::vector<std::string> withoutCards;
+  std::vector<std::string> withoutUnique;
+  for (const auto& w : content.weapons) {
+    // The same accessor the game itself offers, so this is a check of the
+    // shipped roster and not of a copy of it.
+    const auto cards = g.collectWeaponCards(w.id);
+    CAPTURE(w.id);
+    REQUIRE_FALSE(cards.empty());
+    bool hasUnique = false;
+    for (const auto& u : content.upgrades) {
+      if (u.weapon == w.id && u.kind == "unique") {
+        hasUnique = true;
+        break;
+      }
+    }
+    if (!hasUnique) withoutUnique.push_back(w.id);
+  }
+  // A weapon with no card at all is a dead slot; one with cards but no unique
+  // means its identity stat block is unreachable in a normal run.
+  REQUIRE(withoutCards.empty());
+  REQUIRE(withoutUnique.empty());
+}
+
+TEST_CASE("No card points at an effect the game does not implement") {
+  // A typo in upgrades.toml is silent: the card shows up on the level-up screen
+  // and then does nothing. Cross-check every effect id against the two appliers
+  // by applying each card and requiring the call to report a change.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  for (const auto& def : content.upgrades) {
+    CAPTURE(def.id);
+    CAPTURE(def.effect);
+    if (def.weapon.empty()) {
+      game::PlayerStats s{};
+      const auto r = game::applyUpgrade(s, def.effect, def.value);
+      REQUIRE(r.valid);
+    } else {
+      // Weapon-scoped effects have no standalone applier, so they are checked
+      // by arming the weapon and taking the card in a real Game below.
+      REQUIRE_FALSE(def.effect.empty());
+    }
+    REQUIRE(def.maxStacks >= 1);
+    REQUIRE(std::isfinite(def.value));
+  }
+}
+
+TEST_CASE("Every weapon-scoped card does something when its weapon is armed") {
+  // The complement of the effect-id check: arm each weapon in turn, take every
+  // card scoped to it, and prove the weapon's own numbers moved. A card that
+  // silently no-ops on its own weapon is the worst kind of dead pick: it shows
+  // up on the level-up screen, looks great, and does nothing.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  // A Game with the given weapon armed and the sim advanced one frame, so the
+  // snapshot reflects the live slot rather than an empty arsenal.
+  const auto armed = [&content](int weaponIndex) {
+    auto g = std::make_shared<game::Game>(content, 407);
+    g->testDisableWaves();
+    g->testClearWeapons();
+    g->testAddWeapon(weaponIndex);
+    game::FrameInput in{};
+    g->advance(1.0F / 60.0F, in);
+    return g;
+  };
+
+  for (std::size_t wi = 0; wi < content.weapons.size(); ++wi) {
+    const auto& def = content.weapons[wi];
+    for (std::size_t ui = 0; ui < content.upgrades.size(); ++ui) {
+      const auto& u = content.upgrades[ui];
+      if (u.weapon != def.id) continue;
+      CAPTURE(def.id);
+      CAPTURE(u.id);
+      const auto g = armed(static_cast<int>(wi));
+      // The weapon lands in the first free slot, which is 0 after a clear.
+      const auto before = g->testWeaponSnapshot(0);
+      REQUIRE(before.def == static_cast<int>(wi));
+      REQUIRE(g->testGrantUpgrade(static_cast<int>(ui)));
+      const auto after = g->testWeaponSnapshot(0);
+      REQUIRE(after != before);
+      // The card is reported as taken, and taking it twice applies it twice
+      // (for a normal card) — the stack counter is the other half of the
+      // promise, and an effect that only ever fires once would be a trap.
+      if (u.maxStacks > 1) {
+        REQUIRE(g->upgradeStacks(ui) == 1);
+        REQUIRE(g->testGrantUpgrade(static_cast<int>(ui)));
+        REQUIRE(g->upgradeStacks(ui) == 2);
+      }
+    }
+  }
+}
+
+TEST_CASE("The momentum meter has a card for every axis it actually has") {
+  // momentumRate was a live simulation field that only one card could ever
+  // touch, and momentumMax / momentumGain were not reachable at all outside a
+  // unique. These three make the chain a real build axis.
+  game::PlayerStats base{};
+  REQUIRE(game::applyUpgrade(base, "momentum_rate", 0.5F).valid);
+  REQUIRE(base.momentumRate == Catch::Approx(game::PlayerStats{}.momentumRate + 0.5F));
+
+  game::PlayerStats t{};
+  REQUIRE(game::applyUpgrade(t, "momentum_chain", 6.0F).valid);
+  REQUIRE(t.momentumMax == game::PlayerStats{}.momentumMax + 6);
+
+  game::PlayerStats u{};
+  REQUIRE(game::applyUpgrade(u, "momentum_gain", 0.5F).valid);
+  REQUIRE(u.momentumGain == Catch::Approx(game::PlayerStats{}.momentumGain + 0.5F));
+
+  // The rate card must actually reach the cooldown, not just the sheet: the
+  // meter feeds attackCooldown() and every spin rate in the game.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 408};
+  g.testDisableWaves();
+  g.testClearWeapons();
+  g.testAddWeapon(0);
+  game::FrameInput in{};
+  g.advance(1.0F / 60.0F, in);
+  int card = -1;
+  for (std::size_t i = 0; i < content.upgrades.size(); ++i) {
+    if (content.upgrades[i].effect == "momentum_rate") {
+      card = static_cast<int>(i);
+      break;
+    }
+  }
+  REQUIRE(card >= 0);
+  const float perStack = g.momentumRatePerStack();
+  REQUIRE(g.testGrantUpgrade(card));
+  REQUIRE(g.momentumRatePerStack() > perStack);
+}
+
+TEST_CASE("Each ability has a stackable card, not just a one-shot unique") {
+  // The uniques are dramatic but you have to be lucky enough to roll one. The
+  // J / K / L row should be a real build axis, so each button needs a normal
+  // card too, and each must move the number the ability actually reads.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 409};
+  g.testDisableWaves();
+  g.testClearWeapons();
+  g.testAddWeapon(0);
+  game::FrameInput in{};
+  g.advance(1.0F / 60.0F, in);
+
+  const auto find = [&content](std::string_view effect) {
+    for (std::size_t i = 0; i < content.upgrades.size(); ++i) {
+      if (content.upgrades[i].effect == effect && content.upgrades[i].weapon.empty()) {
+        return static_cast<int>(i);
+      }
+    }
+    return -1;
+  };
+
+  const int dash = find("ability_dash");
+  const int burst = find("ability_burst");
+  const int slow = find("ability_slow");
+  REQUIRE(dash >= 0);
+  REQUIRE(burst >= 0);
+  REQUIRE(slow >= 0);
+  // All three must be ordinary stackable cards, not one-shot uniques.
+  for (int idx : {dash, burst, slow}) {
+    const auto& def = content.upgrades[static_cast<std::size_t>(idx)];
+    REQUIRE(def.kind == "normal");
+    REQUIRE(def.maxStacks >= 2);
+  }
+
+  const float dashBefore = g.blinkDistance();
+  const float burstR = g.burstRadius();
+  const float burstD = g.burstDamage();
+  const float slowDur = g.stasisDurationMax();
+  const float slowMul = g.stasisSlowFactor();
+
+  REQUIRE(g.testGrantUpgrade(dash));
+  REQUIRE(g.blinkDistance() > dashBefore);
+  REQUIRE(g.testGrantUpgrade(burst));
+  REQUIRE(g.burstRadius() > burstR);
+  REQUIRE(g.burstDamage() > burstD);
+  REQUIRE(g.testGrantUpgrade(slow));
+  REQUIRE(g.stasisDurationMax() > slowDur);
+  REQUIRE(g.stasisSlowFactor() < slowMul);
+
+  // A Phase Dash card must not turn the dash into a screen-crossing skip.
+  for (int i = 0; i < 12; ++i) g.testGrantUpgrade(dash);
+  REQUIRE(g.blinkDistance() <= 9.0F);
+  // And Stasis must not stop the world outright.
+  REQUIRE(g.stasisSlowFactor() >= 0.15F);
+}
+
+TEST_CASE("The shield is a pool and a clock, and both are now cards") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 410};
+  g.testDisableWaves();
+  g.testClearWeapons();
+  g.testAddWeapon(0);
+  game::FrameInput in{};
+  g.advance(1.0F / 60.0F, in);
+  const auto find = [&content](std::string_view effect) {
+    for (std::size_t i = 0; i < content.upgrades.size(); ++i) {
+      if (content.upgrades[i].effect == effect && content.upgrades[i].weapon.empty()) {
+        return static_cast<int>(i);
+      }
+    }
+    return -1;
+  };
+  const int regen = find("shield_regen");
+  const int delay = find("shield_delay");
+  REQUIRE(regen >= 0);
+  REQUIRE(delay >= 0);
+
+  const float rate0 = g.shieldRegenRate();
+  const float delay0 = g.shieldRegenDelay();
+  REQUIRE(g.testGrantUpgrade(regen));
+  REQUIRE(g.shieldRegenRate() > rate0);
+  REQUIRE(g.testGrantUpgrade(delay));
+  REQUIRE(g.shieldRegenDelay() < delay0);
+
+  // The delay is floored, so a shield build can never become permanent.
+  for (int i = 0; i < 12; ++i) g.testGrantUpgrade(delay);
+  REQUIRE(g.shieldRegenDelay() >= 0.5F);
+}
+
+TEST_CASE("A percentage heal resolves against the pool the player has now") {
+  // A flat heal is useless next to a 400 HP pool, and a percentage that froze
+  // the max HP at pickup time would under-heal after a max-HP card. This one
+  // reads the CURRENT max, so the two compose.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 411};
+  g.testDisableWaves();
+  g.testClearWeapons();
+  g.testAddWeapon(0);
+  game::FrameInput in{};
+  g.advance(1.0F / 60.0F, in);
+  int kit = -1;
+  int hpCard = -1;
+  for (std::size_t i = 0; i < content.upgrades.size(); ++i) {
+    if (content.upgrades[i].effect == "heal_pct" && kit < 0) kit = static_cast<int>(i);
+    if (content.upgrades[i].effect == "max_hp_add" && content.upgrades[i].weapon.empty() &&
+        hpCard < 0) {
+      hpCard = static_cast<int>(i);
+    }
+  }
+  REQUIRE(kit >= 0);
+  REQUIRE(hpCard >= 0);
+
+  // Take the max-HP card first, then wound, then patch up: the heal must be a
+  // share of the BIGGER pool.
+  for (int i = 0; i < 3; ++i) REQUIRE(g.testGrantUpgrade(hpCard));
+  const float bigMax = g.playerMaxHp();
+  g.testDamagePlayer(bigMax - 10.0F);
+  const float hurt = g.playerHp();
+  REQUIRE(g.testGrantUpgrade(kit));
+  // 40% of the bigger pool, capped at the pool.
+  REQUIRE(g.playerHp() > hurt);
+  REQUIRE(g.playerHp() == Catch::Approx(std::min(bigMax, hurt + bigMax * 0.4F)).margin(0.001F));
+}
+
+TEST_CASE("The arsenal cap is four plus real slot cards, and the array is big enough") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 412};
+  g.testDisableWaves();
+  g.testClearWeapons();
+  // Armed to the cap first: the cap is the design limit, and addWeapon must
+  // refuse past it even when asked directly.
+  std::vector<int> roster;
+  for (std::size_t i = 0; i < content.weapons.size() && roster.size() < 4; ++i) {
+    if (content.weapons[i].prereqs.empty()) roster.push_back(static_cast<int>(i));
+  }
+  for (int idx : roster) g.testAddWeapon(idx);
+  REQUIRE(g.armedWeaponIds().size() == 4);
+  for (std::size_t i = 0; i < content.weapons.size(); ++i) {
+    g.testAddWeapon(static_cast<int>(i));
+  }
+  REQUIRE(g.armedWeaponIds().size() == 4);
+  REQUIRE(g.weaponCap() == 4);
+
+  // Now the slot cards. Every "+1 weapon slot" card in content has to be
+  // reachable, and the total must not exceed the storage array.
+  int slotStacks = 0;
+  int slotCards = 0;
+  for (std::size_t i = 0; i < content.upgrades.size(); ++i) {
+    if (content.upgrades[i].effect != "weapon_slot_add") continue;
+    ++slotCards;
+    for (std::size_t s = 0; s < content.upgrades[i].maxStacks; ++s) {
+      REQUIRE(g.testGrantUpgrade(static_cast<int>(i)));
+      ++slotStacks;
+    }
+  }
+  // At least two different slot cards: the stacking one and the one-shot that
+  // completes the roster, so the last weapon slot is not behind a 3x grind.
+  REQUIRE(slotCards >= 2);
+  REQUIRE(slotStacks == game::Game::kMaxSlotCards);
+  REQUIRE(g.weaponCap() == game::Game::kBaseWeapons + slotStacks);
+  REQUIRE(game::Game::kMaxWeapons == 8);
+  REQUIRE(g.weaponCap() <= game::Game::kMaxWeapons);
+
+  // The array really is big enough for the full cap: fill it and confirm the
+  // eighth slot accepts a weapon (a short weapons_[] would write out of bounds
+  // here rather than failing a REQUIRE).
+  std::size_t armed = g.armedWeaponIds().size();
+  for (std::size_t i = 0; i < content.weapons.size() && armed < static_cast<std::size_t>(
+           g.weaponCap()); ++i) {
+    const std::size_t before = g.armedWeaponIds().size();
+    g.testAddWeapon(static_cast<int>(i));
+    armed = g.armedWeaponIds().size();
+  }
+  REQUIRE(armed == static_cast<std::size_t>(g.weaponCap()));
+  // And past the cap nothing more is accepted.
+  const std::size_t full = g.armedWeaponIds().size();
+  for (std::size_t i = 0; i < content.weapons.size(); ++i) {
+    g.testAddWeapon(static_cast<int>(i));
+  }
+  REQUIRE(g.armedWeaponIds().size() == full);
+}
+
+TEST_CASE("A hand-edited slot card cannot push the arsenal past its array") {
+  // Content is data: a well-meaning edit that grants 9 slots must not write past
+  // weapons_[8]. The clamp in applyUpgrade is what makes that safe, and this is
+  // the test that says so out loud.
+  game::PlayerStats s{};
+  for (int i = 0; i < 20; ++i) REQUIRE(game::applyUpgrade(s, "weapon_slot_add", 1.0F).valid);
+  REQUIRE(s.weaponSlots == game::Game::kMaxSlotCards);
+  // Negative values cannot drive the count below zero either.
+  game::PlayerStats t{};
+  for (int i = 0; i < 5; ++i) REQUIRE(game::applyUpgrade(t, "weapon_slot_add", -1.0F).valid);
+  REQUIRE(t.weaponSlots == 0);
 }

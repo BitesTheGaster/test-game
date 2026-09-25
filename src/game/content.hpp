@@ -158,13 +158,29 @@ struct UpgradeDef {
   int level = 0;
 };
 
+// One screen of the in-game manual (assets/data/manual.toml).
+//
+// `lines` are drawn verbatim, one per row. A leading '>' is a highlighted
+// bullet, a leading '#' is a sub-heading, a leading '  ' is an indent
+// continuation of the bullet above. Everything else is body text.
+struct ManualPage {
+  std::string id;
+  std::string title;
+  std::vector<std::string> lines;
+};
+
 struct Content {
   std::vector<WeaponDef> weapons;
   std::vector<EnemyDef> enemies;
   std::vector<UpgradeDef> upgrades;
+  // Empty when manual.toml is missing: the manual screen then says so instead
+  // of crashing, so a stripped build still runs.
+  std::vector<ManualPage> manual;
 
   [[nodiscard]] const WeaponDef* weapon(std::string_view id) const;
   [[nodiscard]] const EnemyDef* enemy(std::string_view id) const;
+  // nullptr when the id is unknown.
+  [[nodiscard]] const ManualPage* manualPage(std::string_view id) const;
 };
 
 Content loadContent(const std::filesystem::path& dir);

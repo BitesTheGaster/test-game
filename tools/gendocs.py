@@ -133,8 +133,30 @@ def upgrades_md() -> str:
     return s + summary
 
 
+def manual_md() -> str:
+    """The in-game manual, rendered as markdown.
+
+    `manual.toml` is the single source of truth: what the game shows on F1 is
+    what this prints, so the in-game docs and the repo docs cannot drift apart
+    without the generator showing it.
+    """
+    with open(DATA / "manual.toml", "rb") as f:
+        pages = tomllib.load(f)["page"]
+    listed = "\n".join(f"- `{p['id']}` — {p['title']} "
+                       f"({len(p['lines'])} lines)" for p in pages)
+    parts = []
+    for p in pages:
+        body = "\n".join("    " + line if line else "" for line in p["lines"])
+        parts.append(f"### {p['title']}\n\n```\n{body}\n```")
+    return (f"Shown in the game with **F1** (main menu, live run, or the pause "
+            f"screen). **{len(pages)} pages:**\n\n{listed}\n\n"
+            + "\n\n".join(parts))
+
+
 def main() -> None:
     ws, es, us = load("weapons.toml"), load("enemies.toml"), load("upgrades.toml")
+    with open(DATA / "manual.toml", "rb") as f:
+        pages = tomllib.load(f)["page"]
     doc = f"""<!-- GENERATED FILE — do not edit by hand.
      Source: assets/data/*.toml, generator: tools/gendocs.py -->
 
@@ -150,7 +172,7 @@ python3 tools/gendocs.py
 **Totals:** {len(ws)} weapons ({len([w for w in ws if not w.get('requires')])} base +
 {len([w for w in ws if len(w.get('requires', [])) == 2])} evolutions +
 {len([w for w in ws if len(w.get('requires', [])) >= 3])} super evolutions),
-{len(es)} enemies.
+{len(es)} enemies, {len(pages)} in-game manual pages.
 
 {weapons_md()}
 
@@ -176,11 +198,18 @@ python3 tools/gendocs.py
 | unique     | ~45% chance per level-up, one-time, violet card           |
 | milestone  | Only on power-of-two levels (4, 8, 16, ...); separate 3-card pick of 2  |
 | weapon     | Only while the named weapon is owned; buffs that slot     |
+
+---
+
+## In-game manual
+
+{manual_md()}
 """
     OUT.parent.mkdir(exist_ok=True)
     OUT.write_text(doc, encoding="utf-8")
     print(f"wrote {OUT.relative_to(ROOT)} "
-          f"({len(ws)} weapons, {len(es)} enemies, {len(us)} upgrades)")
+          f"({len(ws)} weapons, {len(es)} enemies, {len(us)} upgrades, "
+          f"{len(pages)} manual pages)")
 
 
 if __name__ == "__main__":

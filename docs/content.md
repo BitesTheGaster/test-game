@@ -13,7 +13,7 @@ python3 tools/gendocs.py
 **Totals:** 32 weapons (18 base +
 10 evolutions +
 4 super evolutions),
-18 enemies.
+18 enemies, 11 in-game manual pages.
 
 ### Base weapons
 
@@ -108,6 +108,9 @@ python3 tools/gendocs.py
 | Blood Surge | surge_chain | momentum_damage | 1 | 2 |  |  | Kill chain: +1% damage per stack |
 | Rampage | rampage | momentum_speed | 4 | 1 |  |  | Kill chain: +4% move speed per stack |
 | Deep Reserves | deep_reserves | momentum_window | 2 | 1 |  |  | Kill chain: 2 more seconds before it goes cold |
+| Kill Tempo | kill_tempo | momentum_rate | 0.5 | 3 |  |  | Kill chain: +0.5% fire rate per stack |
+| Long Tail | long_tail | momentum_chain | 6 | 2 |  |  | Kill chain: 6 more stacks count toward the multipliers |
+| Cull | cull | momentum_gain | 0.5 | 2 |  |  | Kill chain: +0.5 stacks per kill |
 | Regeneration | regen | regen_add | 1 | 4 |  |  | +1 HP per second |
 | Might | might | damage_mul | 0.25 | 4 |  |  | +25% damage |
 | Quickdraw | quickdraw | fire_rate | 0.13 | 3 |  |  | +13% fire rate |
@@ -129,6 +132,9 @@ python3 tools/gendocs.py
 | Iron Conviction | conviction | defense_add | 25 | 2 |  |  | +25 defense |
 | Minor Ward | ward_small | shield_add | 15 | 3 |  |  | +15 regenerating shield |
 | Runic Ward | ward_great | shield_add | 30 | 2 |  |  | +30 regenerating shield |
+| Aegis Flow | aegis_flow | shield_regen | 0.6 | 3 |  |  | Shield refills 60% faster, and refills right now |
+| Quickdraw | quickdraw_ward | shield_delay | 1 | 2 |  |  | Shield starts refilling 1s sooner after you take a hit |
+| Field Kit | field_kit | heal_pct | 0.4 | 2 |  |  | Patch yourself up: heal 40% of your maximum HP |
 | Gilded Fangs | leech_gold | lifesteal_add | 4 | 3 |  |  | +4% lifesteal |
 | Soulfeed | leech_soul | lifesteal_add | 6 | 2 |  |  | +6% lifesteal |
 | Sunder Edge | sunder | armor_pierce_add | 15 | 4 |  |  | +15 armor pierce |
@@ -179,6 +185,25 @@ python3 tools/gendocs.py
 | Singularity Tuning | w_horizon_power | w_damage_add | 20 | 2 | eventhorizon |  | Event Horizon: +20 damage |
 | Deeper Well | w_horizon_wells | w_proj_add | 1 | 2 | eventhorizon |  | Event Horizon: +1 gravity well |
 | Arsenal Core | u_arsenal_core | weapon_slot_add | 1 | 3 |  |  | +1 weapon slot (3 stacks max) |
+| Eventide Hunger | w_orb_hunger | w_orb_grow | 1 | 2 | orb |  | Void Orb: finds the next victim 30% faster and loses far less per bounce |
+| Long Arm | w_scythe_longarm | w_scythe_reach | 1 | 3 | scythe |  | Soul Scythe: +6% reap radius |
+| Focused Burn | w_beam_focus | w_beam_lance | 1 | 3 | beam |  | Solar Lance: +6% range and +4% width |
+| Arc Cascade | w_storm_cascade | w_chain_arc | 1 | 3 | storm |  | Storm Caller: +6% jump range and +5% damage per link |
+| Rupture | w_nova_rupture | w_nova_wide | 1 | 3 | nova |  | Void Nova: +6% ring radius and +4% expansion speed |
+| Pyre Spread | w_inferno_pyre | w_reap_wide | 1 | 3 | inferno |  | Inferno: +6% reap radius, burning ground lasts 0.5s longer |
+| Long Cast | w_pulsar_longcast | w_boomerang_reach | 1 | 3 | pulsar |  | Pulsar: +7% flight range and +6% return speed |
+| Pooled Ash | w_flame_pools | w_zone_pools | 1 | 2 | flame |  | Ember Sprayer: one more burning pool on the ground at a time |
+| Ashfall Spread | w_inferno_pools | w_zone_pools | 1 | 2 | inferno |  | Inferno: one more burning pool on the ground at a time |
+| Concussion Charge | w_hammer_concussion | w_bomb_blast | 1 | 3 | hammer |  | Runic Hammer: +8% blast radius and +6% knockback |
+| Wide Shell | w_mortar_concussion | w_bomb_blast | 1 | 3 | mortar |  | Siege Mortar: +8% blast radius and +6% knockback |
+| Echo Anchor | w_lure_anchor | w_lure_anchor | 1 | 2 | lure |  | Grave Bell: the beacon lasts 0.8s longer, and one more may be planted |
+| Siege Chime | w_lure_anchor_siege | w_lure_anchor | 1 | 2 | siege |  | Ashfall: the beacon lasts 0.8s longer, and one more may be planted |
+| Beam Lattice | w_prism_lattice | w_prism_lattice | 1 | 2 | prism |  | Prism Array: one more independent beam, +5% range |
+| Long Wings | w_halo_wings | w_halo_wings | 1 | 3 | halo |  | Radiant Halo: +8% beam reach and 1.5 more shove per beam |
+| Denser Gyre | w_vortex_core | w_vortex_core | 1 | 3 | vortex |  | Void Gyre: fatter core, wider orbit, 12% faster spin |
+| Phase Mirror | phase_mirror | ability_dash | 0.8 | 3 |  |  | Phase Dash: +0.8 distance, +0.06s of invulnerability on arrival |
+| Concussion Core | concussion_core | ability_burst | 0.8 | 3 |  |  | Overload: +0.8 radius, +30 damage, +1 knockback |
+| Cryostasis | cryostasis | ability_slow | 1 | 3 |  |  | Stasis: +1s of duration, and the slowed world drops another 0.08x |
 
 ### Unique items (one-time, rule-changing)
 
@@ -218,6 +243,18 @@ python3 tools/gendocs.py
 | Detonation Chain | uw_chaos_echo | w_unique_area | 1.6 | 1 | chaos |  | Chaos Sphere: every bounce splashes area damage around the hit |
 | Event Collapse | uw_sunder_supernova | w_unique_supernova | 1 | 1 | sunder |  | Sundering Core: ring expands faster, wider, and hits harder |
 | Undertow | uw_tidewhip_lash | w_unique_lash | 1 | 1 | tidewhip |  | Tidal Lash: a 35% wider lash that flings 40% harder and reaches further |
+| Corona Mantle | uw_halo_corona | w_unique_corona | 1 | 1 | halo |  | Radiant Halo: beams shove for 6, 40% wider, 15% longer, +20% damage |
+| Black Gyre | uw_vortex_gyre | w_unique_gyre | 1 | 1 | vortex |  | Void Gyre: 45% harder pull, 30% further reach, fatter core, ticks faster |
+| Total Internal Reflection | uw_prism_refract | w_unique_refract | 1 | 1 | prism |  | Prism Array: one more independent beam, 40% longer ricochet, +15% range |
+| Rime Lances | uw_shard_rime | w_unique_rime | 1 | 1 | shard |  | Frost Shards: +4 pierce and 40% longer flight, at 80% damage each |
+| Siege Doctrine | uw_mortar_doctrine | w_unique_siege_doctrine | 1 | 1 | mortar |  | Siege Mortar: a 3-shell salvo on a double fuse, 35% wider blasts, 20% slower |
+| Silver Skewer | uw_pinball_skewer | w_unique_skewer | 1 | 1 | pinball |  | Pinball Puck: +10 bounces, no damage decay, 30% longer reach per hop |
+| Overdrive Bore | uw_drill_bore | w_unique_bore | 1 | 1 | drill |  | Jackhammer Drill: 60% wider bite, 40% longer reach, strikes far faster |
+| Standing Discharge | uw_shockcore_discharge | w_unique_discharge | 1 | 1 | shockcore |  | Shock Core: the ring lingers, expands faster and re-strikes twice as fast |
+| Barbed Chain | uw_whip_chainlash | w_unique_chainlash | 1 | 1 | whip |  | Barbed Whip: the lash goes all the way around, 30% further, 50% harder shove |
+| Wingbeat | uw_seraph_wingbeat | w_unique_wingbeat | 1 | 1 | seraph |  | Seraph Array: the wings spin 60% faster, shove for 5 and burn 30% wider |
+| Singularity | uw_horizon_singularity | w_unique_singularity | 1 | 1 | eventhorizon |  | Event Horizon: 50% harder pull, fatter core, further reach, denser ticks |
+| Hollow Chamber | hollow_chamber | weapon_slot_add | 1 | 1 |  |  | ONE more weapon slot. Your arsenal holds eight |
 | Combat Reflexes | u_ability_haste | ability_haste | 0.25 | 3 |  |  | All abilities recharge 25% faster |
 | Heavy Hands | u_ability_might | ability_might | 1 | 2 |  |  | Overload: a wider blast that hits 30 harder and shoves 3 further |
 | Phase Memory | u_ability_phase | ability_phase | 1 | 2 |  |  | Phase Dash: +1.2 distance and +0.2s of invulnerability on arrival |
@@ -247,7 +284,7 @@ python3 tools/gendocs.py
 | Starlight Ward | m128_starlight | shield_add | 500 | 1 |  | 128 | MILESTONE: +500 regenerating shield |
 | Overdrive | m128_overdrive | damage_mul | 2 | 1 |  | 128 | MILESTONE: +200% damage |
 
-**Totals:** 141 upgrades (84 normal, 39 unique, 18 milestones).
+**Totals:** 178 upgrades (109 normal, 51 unique, 18 milestones).
 
 
 ---
@@ -260,3 +297,295 @@ python3 tools/gendocs.py
 | unique     | ~45% chance per level-up, one-time, violet card           |
 | milestone  | Only on power-of-two levels (4, 8, 16, ...); separate 3-card pick of 2  |
 | weapon     | Only while the named weapon is owned; buffs that slot     |
+
+---
+
+## In-game manual
+
+Shown in the game with **F1** (main menu, live run, or the pause screen). **11 pages:**
+
+- `controls` — CONTROLS (16 lines)
+- `run` — THE RUN (17 lines)
+- `levels` — LEVEL-UPS (21 lines)
+- `weapons` — WEAPONS (16 lines)
+- `evolutions` — EVOLUTIONS (21 lines)
+- `abilities` — ABILITIES  J / K / L (23 lines)
+- `stats` — YOUR STATS (30 lines)
+- `cards` — CARDS (21 lines)
+- `enemies` — ENEMIES (18 lines)
+- `sandbox` — TEST SANDBOX (19 lines)
+- `profile` — PROFILE (17 lines)
+
+### CONTROLS
+
+```
+    > WASD / ARROWS   MOVE
+    > WEAPONS FIRE THEMSELVES
+
+    J    PHASE DASH - BLINK
+    K    OVERLOAD - RADIAL BLAST
+    L    STASIS - SLOW THE WORLD
+    H    HEAL 50% OF MAX HP
+
+    1-5  PICK A CARD ON LEVEL-UP
+    R    REROLL THE CARD CHOICE
+    ESC  PAUSE / CHARACTER SHEET
+    B    BESTIARY (WHILE PAUSED)
+    F1   THIS MANUAL
+    T    WEAPON TEST SANDBOX
+
+    R    RESTART AFTER DEATH
+```
+
+### THE RUN
+
+```
+    A RUN IS A LONG FIGHT AGAINST THE CLOCK.
+
+    > YOU START WITH NO WEAPON.
+    > THE FIRST SCREEN OFFERS 3 STARTERS.
+    > PICK ONE AND THE RUN BEGINS.
+
+    EVERY WEAPON FIRES AUTOMATICALLY AT
+    THE NEAREST ENEMY. ALL OWNED WEAPONS
+    SHARE THAT TARGET, SO THE WHOLE
+    ARSENAL FOCUSES THE BIGGEST THREAT.
+
+    KILLS DROP XP GEMS. XP LEVELS YOU UP.
+    EACH LEVEL-UP OFFERS CARDS - SEE THE
+    CARDS PAGE.
+
+    SURVIVE. THE SPAWN RATE ACCELERATES
+    AFTER SIX MINUTES AND NEVER STOPS.
+```
+
+### LEVEL-UPS
+
+```
+    EVERY LEVEL-UP OFFERS A CHOICE.
+
+    # THE THREE SOURCES
+    > UPGRADE   STATS AND WEAPON CARDS
+    > WEAPON    A NEW WEAPON FOR A SLOT
+    > UNIQUE    A VIOLET ONE-TIME TREASURE
+
+    YOU GET 1 FREE REROLL PER LEVEL-UP.
+    PRESS R TO SPEND IT AND REDRAW.
+
+    # IF NOTHING APPLIES
+    A NORMAL LEVEL-UP ALWAYS HAS AT LEAST
+    ONE USABLE CARD. A LEVEL-UP WITH NO
+    LEGAL CARD STILL COMPLETES, SO THE RUN
+    CAN NEVER GET STUCK ON THE SCREEN.
+
+    # WEAPON SLOTS
+    YOU START WITH 4 SLOTS. ARSENAL CORE
+    ADDS UP TO 3 MORE, AND HOLLOW CHAMBER
+    IS THE EIGHTH. THE WEAPON OFFER STOPS
+    ONCE THE ARSENAL IS FULL.
+```
+
+### WEAPONS
+
+```
+    32 WEAPONS: 18 BASE, 10 EVOLUTIONS,
+    4 SUPER EVOLUTIONS.
+
+    # EVERY WEAPON IS A DIFFERENT SHAPE
+    AIMED PROJECTILE  CROSSBOW, RAIL RIFLE
+    INSTANT CONE      EMBER SPRAYER, DRILL
+    AREA BOMB         RUNIC HAMMER, MORTAR
+    HITSCAN BEAM      SOLAR LANCE
+    ORBITING BLADES   VOID GYRE, SERAPH
+    EXPANDING RING    VOID NOVA, SUNDER
+    TAUNTING BEACON   GRAVE BELL
+    GROUND ZONE       EMBER, ASHFALL
+
+    ORBITING BLADES ALSO GRIND THE
+    INSIDE OF THEIR RING, SO NOTHING
+    HUGS YOU FOR FREE.
+```
+
+### EVOLUTIONS
+
+```
+    OWN ALL THE INGREDIENTS AND THE RESULT
+    BECOMES THE NEXT WEAPON OFFER - IT
+    REPLACES THE RANDOM WEAPON GRANT.
+
+    # TWO INGREDIENTS
+    STORM        WAND + CROSSBOW
+    NOVA         ORB + HAMMER
+    INFERNO      FLAME + SCYTHE
+    PULSAR       LANCE + SHURIKEN
+    HALO         DAGGER + LANCE
+    BLIZZARD     RAIL RIFLE + FROST SHARDS
+    ASHFALL      MORTAR + GRAVE BELL
+    CHAOS        PINBALL + ORB
+    SUNDER       SHOCK CORE + SCYTHE
+    TIDAL LASH   WHIP + SHURIKEN
+
+    # THREE INGREDIENTS = SUPER EVOLUTION
+    VOID GYRE        DAGGER + SCYTHE + ORB
+    PRISM ARRAY      FLAME + LANCE + CROSSBOW
+    SERAPH ARRAY     DRILL + CROSSBOW + WHIP
+    EVENT HORIZON    RAIL RIFLE + SHOCK + FLAME
+```
+
+### ABILITIES  J / K / L
+
+```
+    THREE BUTTONS, LIVE FROM THE FIRST
+    SECOND OF EVERY RUN. NO UNLOCK, NO
+    CARD - ONLY A COOLDOWN STANDS IN THE
+    WAY. A BUILD CHANGES HOW THEY FEEL,
+    NEVER WHETHER THEY EXIST.
+
+    # J  PHASE DASH - 5S
+    TELEPORT ALONG YOUR MOVEMENT, OR AT
+    THE NEAREST ENEMY IF YOU STAND STILL.
+    GRANTS INVULNERABILITY ON ARRIVAL.
+
+    # K  OVERLOAD - 14S
+    A RADIAL BLAST. DAMAGE AND KNOCKBACK
+    TO EVERYTHING WITHIN REACH.
+
+    # L  STASIS - 30S
+    THE WORLD RUNS AT 35% SPEED FOR A FEW
+    SECONDS. YOU DO NOT. ENEMIES AND THEIR
+    SHOTS TICK ON A SLOWED CLOCK.
+
+    NORMAL CARDS SCALE ALL THREE, SO A BUILD
+    CAN GROUND OUT THE COOLDOWNS INSTEAD OF
+    WAITING TO ROLL THE RIGHT UNIQUE.
+```
+
+### YOUR STATS
+
+```
+    # SURVIVAL
+    MAX HP     RAISED BY CARDS, HEALS YOU
+               BY THE SAME AMOUNT.
+    REGEN      FLAT HP EVERY SECOND.
+    DEFENSE    ONE NUMBER THAT MITIGATES
+               ALL DAMAGE. FLAT, THEN %.
+    SHIELD     ABSORBS BEFORE HP AND
+               REGENERATES OUT OF COMBAT.
+               A POOL AND A CLOCK: CARDS
+               GROW THE POOL, SPEED UP THE
+               REFILL AND SHORTEN THE WAIT.
+    LIFESTEAL  CHANCE TO HEAL ON A KILL,
+               NOT ON EVERY HIT.
+
+    # OFFENCE
+    DAMAGE     MULTIPLIES EVERY WEAPON.
+    FIRE RATE  ADDITIVE - A HIGHER BONUS
+               DIVIDES THE DELAY.
+    PIERCE     EXTRA TARGETS PER BOLT, AND
+               IT CANCELS AREA FALLOFF.
+    PROJECTILES  ONE CARD SERVES EVERY
+               WEAPON AT ONCE.
+
+    # THE MOMENTUM CHAIN
+    KEEP KILLING AND A METER FILLS. STOP
+    OR GET HIT AND IT COLLAPSES. EACH STACK
+    ADDS DAMAGE AND FIRE RATE. CARDS CAN
+    ALSO SCALE THE RATE PER STACK, HOW LONG
+    THE CHAIN MAY GROW, AND HOW MANY
+    STACKS EACH KILL ADDS.
+```
+
+### CARDS
+
+```
+    # NORMAL CARDS
+    STAT AND WEAPON CARDS. STACKABLE, AND
+    A WEAPON CARD ONLY APPEARS WHILE THAT
+    WEAPON IS EQUIPPED.
+
+    # VIOLET UNIQUES
+    ONE-TIME, RULE-CHANGING, RARE. EVERY
+    WEAPON HAS AT LEAST ONE OF ITS OWN, SO
+    A NEW WEAPON IS NEVER A DEAD SLOT. FIVE
+    MORE RETUNE THE J/K/L ABILITIES - NONE
+    OF THEM UNLOCKS AN ABILITY.
+
+    # VIOLET MILESTONES
+    EVERY POWER-OF-TWO LEVEL FROM 4 ON
+    REPLACES THE WHOLE CHOICE WITH A
+    SPECIAL SCREEN. PICK 2 OF 3.
+
+    # THE POOL NEVER DRIES UP
+    AN EXHAUSTED OR FULLY MAXED POOL FALLS
+    BACK TO THE FIRST STILL-APPLICABLE
+    CARD RATHER THAN LEAVING YOU STUCK.
+```
+
+### ENEMIES
+
+```
+    18 TYPES WALK IN AND DEAL CONTACT
+    DAMAGE. THEY SCALE WITH RUN TIME:
+    MORE HP, FASTER, AND HARDER HITS.
+
+    # ELITES AND ABOVE
+    ELITE    FROM 45S. ONE RANDOM TRAIT.
+    CHAMPION OPENS WHEN ELITES STOP BEING
+             A PROBLEM. SEVERAL TRAITS.
+    OVERLORD OPENS WHEN CHAMPIONS DO.
+             MANY TRAITS.
+
+    THE TRIBUNAL DIRECTOR WATCHES HOW WELL
+    YOU ARE DOING AND PROMOTES YOU WHEN
+    YOU HAVE EARNED IT. KILL ONE OF EACH
+    TIER TO UNLOCK ITS OUTLINE.
+
+    PRESS B WHILE PAUSED FOR THE FULL
+    BESTIARY, INCLUDING TRAITS AND SCALING.
+```
+
+### TEST SANDBOX
+
+```
+    PRESS T MID-RUN TO OPEN IT.
+
+    # WHAT IT DOES
+    > SNAPSHOTS THE WHOLE RUN AND ROLLS
+    > IT BACK WHEN YOU LEAVE.
+    > CYCLES ALL 32 WEAPONS, EVOLUTIONS
+    > AND SUPERS INCLUDED.
+    > MAX BUILD BOOST, ITEM PICKER,
+    > IMMORTALITY, A DIFFICULTY CLOCK.
+
+    1/2 WEAPON   3 MAX BUILD   4 WAVES
+    5 CLOSE      E ITEMS      I GOD
+    F CLOCK      X KILL ME    R MAX ALL
+
+    # IT IS NOT A CHEAT
+    IT PAYS NO XP. IT NEVER PAYS A SKIN OR
+    OUTLINE UNLOCK. AND LEAVING IT ENDS THE
+    RUN - THE SNAPSHOT IS RESTORED, THEN
+    YOU ARE DROPPED TO 0 HP.
+```
+
+### PROFILE
+
+```
+    THE MAIN MENU KEEPS YOUR SKIN AND THE
+    OUTLINES YOU HAVE EARNED. IT IS SAVED
+    NEXT TO THE GAME DATA AS A PLAIN TEXT
+    FILE, SO A COPIED BUILD KEEPS ITS
+    PROGRESS WITH IT.
+
+    OUTLINES UNLOCK BY KILLING ONE ELITE,
+    ONE CHAMPION AND ONE OVERLORD - EVER,
+    ACROSS ALL RUNS.
+
+    THE MAIN MENU ALSO HAS A RESET
+    PROGRESS ROW, WHICH WIPES THE SKIN AND
+    EVERY UNLOCK. IT ASKS FIRST.
+
+    THE FULL MECHANICS REFERENCE, WITH
+    EVERY FORMULA AND NUMBER, LIVES IN
+    DOCS/MECHANICS.MD IN THE PROJECT.
+```

@@ -152,12 +152,60 @@ restores both the timer and the scale.
 ## Content pipeline
 
 - `assets/data/*.toml` is the single source of balance truth
-  (`weapons.toml`, `enemies.toml`, `upgrades.toml`).
+  (`weapons.toml`, `enemies.toml`, `upgrades.toml`, `manual.toml`).
 - `Content` parses it at startup into packed POD arrays; gameplay never
   hard-codes a weapon/enemy name except the trait enum in `game.cpp`.
 - **`tools/gendocs.py`** (stdlib `tomllib` only) re-derives all weapon,
-  enemy and upgrade tables for `docs/content.md` — edit balance, regenerate
-  docs, never hand-maintain the markdown.
+  enemy, upgrade and manual tables for `docs/content.md` — edit balance,
+  regenerate docs, never hand-maintain the markdown.
+
+### The in-game manual
+
+`manual.toml` is data, not code, and it is loaded by the same pipeline into
+`Content::manual` as `ManualPage { id, title, lines }`. It is deliberately the
+*only* content file allowed to be absent — a stripped distribution must still
+start, so `manualPage()` returning `nullptr` and an empty `Content::manual` are
+both valid states. A **malformed** file throws instead, because a typo in the
+manual is a content bug worth failing loudly on rather than rendering as a screen
+full of `?`.
+
+The loader validates every page on the way in:
+
+- **non-empty** id and title, and at least one line;
+- **unique ids**, because `Content::manualPage()` resolves by id and a duplicate
+  would make the lookup ambiguous;
+- **every character is drawable**, via `core::render::fontSupports()`
+  (`batcher.hpp`). The 5×7 font covers ASCII 32–96 with lowercase folded to
+  uppercase; anything else would render as `?`. Checking at *load* time turns a
+  silent visual bug into a content-load failure with a file name in the message.
+
+The renderer itself knows nothing about content: `renderManual()` draws a page
+rail, a body and a hint bar, and `>` / `#` / `"  "` / `""` are the only markup.
+Those prefixes are stripped before drawing, so they only ever make a line
+*shorter* on screen — which is why the layout test only has to check the line
+body, not the markup.
+
+### Card/effect plumbing
+
+`UpgradeDef::effect` is a string resolved in one of two free functions:
+
+- `applyUpgrade(PlayerStats&, effect, value)` — global stats. Returns
+  `{valid, heal, shield}`; `valid == false` means "unrecognised effect", which is
+  a **content bug the tests catch**: one test walks every card with an empty
+  `weapon` and requires `valid`, another arms every weapon in turn, takes every
+  card scoped to it and requires the weapon's own numbers to have moved
+  (`testWeaponSnapshot` is a comparable copy of the whole configurable stat
+  block, so a new `WeaponSlot` field is covered without touching a test).
+- `Game::applyWeaponEffect(slot, effect, value)` — per-weapon, dispatched on
+  `def.weapon`. Void-returning, and the caller has already proved the weapon is
+  held (`findWeaponSlot`).
+
+The halo and vortex families are the one place where a weapon effect has to
+**resync live entities** after editing a stat: `syncHaloBeams()` and
+`syncVortices()` re-read the count and the geometry, because those weapons
+maintain persistent components rather than spawning per shot. `w_proj_add` already
+did this; the new halo/vortex uniques do it too, which is why picking one up
+visibly changes the ring rather than silently not.
 
 ## Rendering
 
@@ -180,16 +228,37 @@ Batcher (core)  -> one @instanced draw call per pass
   screen pass.
 - UI: XP bar, HP/shield bars, H-heal cooldown, level, timer, kill count, and
   the level-up / milestone / game-over overlays.
+- Overlays are drawn in a fixed order, and the **manual is last and opaque**:
+  `render()` handles the manual *before* `menuOpen_` in the same way `advance()`
+  does, so it is genuinely the topmost layer and covers the HUD, the pause
+  sheet, the bestiary and the sandbox alike.
+
+## Overlay precedence
+
+There are four things that can take the keyboard, and the order is fixed in
+`advance()`:
+
+1. **Manual** (`F1`) — topmost, opaque, eats the whole frame.
+2. **Main menu** — swallows input until START or QUIT.
+3. **Pause sheet** — a modal character sheet, with B toggling the bestiary.
+4. **Gameplay** — the only state in which the simulation advances at all.
+
+The same precedence drives key auto-repeat in `main.cpp`, which uses one
+`KeyRepeat` shared by the menu, the test shop and the manual
+(`g.menuOpen() || g.testShopOpen() || g.manualOpen()`) so holding an arrow
+flips manual pages at the same rate it moves menu rows.
 
 ## Key constants (game.cpp)
 
 | Constant | Value | Meaning |
 |----------|-------|---------|
-| `kBaseWeapons` / `kMaxWeapons` | 4 / 7 | Weapon slots, and the hard cap after 3 Arsenal Cores |
+| `kBaseWeapons` / `kMaxWeapons` | 4 / 8 | Weapon slots, and the hard cap after 3 Arsenal Cores + Hollow Chamber |
+| `kMaxSlotCards` | 4 | Hard cap on `weapon_slot_add` stacks, whatever content says |
 | `kSpawnDist` | 11 | Base spawn distance from player (units); scales to 2× by 10:00 |
 | `kSpawnTelegraph` | 0.6 s | Telegraph duration before an enemy appears |
-| `kShieldRegenRate` | 10 HP/s | Shield regen out of combat |
-| `kShieldRegenDelay` | 4 s | Damage-free time before regen starts |
+| `kShieldRegenRate` | 10 HP/s | Shield regen out of combat, at 1.0× `shieldRegenMul` |
+| `kShieldRegenDelay` | 4 s | Damage-free time before regen starts, before `shieldRegenDelay` |
+| `kShieldRegenDelayFloor` | 0.5 s | Floor on the delay, so no build makes the pool permanent |
 | `kContactIframes` | 0.18 s | Base invulnerability after being hit; scaled by `1 + defense/500` |
 | `kOrbitInnerMul` | 0.35 | Share of one blade's damage the orbit's interior whirl pays |
 | `kBaseAbilityCd` | 5 / 14 / 30 s | Phase Dash / Overload / Stasis cooldowns, before `abilityCdMul` |
@@ -244,6 +313,21 @@ Headless Catch2 tests in `tests/test_game.cpp` construct a `Game` directly
   on champion handling, both reversible, both with hysteresis
 - The momentum kill chain: it feeds on kills, pays out as damage/fire rate, is
   halved by a hit, goes cold on a timer and respects its cap
+- The in-game manual: it loads, its ids are unique, every glyph is drawable,
+  every shipped page fits one screen at the reference height, a build with no
+  `manual.toml` still starts, and **F1 works from a run, the pause screen and
+  the main menu** (including by selecting the MANUAL row)
+- Progress reset: it takes two confirms, navigating away disarms it, the wipe
+  clears the skin/outline/unlocks and marks the profile dirty, it is inert
+  without a profile, and a wiped profile does not re-grant an outline on the
+  next kill
+- **Card coverage, as a rule rather than a hope**: every weapon in the roster
+  has at least one `kind = "unique"` card, every card with no `weapon` resolves
+  to a real effect, and every weapon-scoped card actually moves its own weapon's
+  numbers when that weapon is armed
+- The thin-mechanics cards: the chain's fire-rate/cap/fill axes, all three
+  stackable ability cards (including their floors), the shield's rate and delay,
+  the percentage heal, and the arsenal cap of 4 + slot cards
 - Upgrade-pool shape: no dead stat family may outnumber the offensive core
 - `xpForLevel` monotonicity and a pacing floor, so a run cannot max out early
 

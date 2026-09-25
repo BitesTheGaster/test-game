@@ -17,8 +17,6 @@ constexpr int kTestShopRows = 14;
 constexpr float kSpawnDist = 11.0F;
 constexpr float kSpawnTelegraph = 0.6F; // seconds a spawn marker is visible
 constexpr float kPickupDist = 0.45F;
-constexpr float kShieldRegenRate = 10.0F;   // HP/s once out of combat
-constexpr float kShieldRegenDelay = 4.0F;   // seconds without damage
 constexpr float kContactIframes = 0.18F;    // enemies connect more often
 
 // The orbit ring's interior sweep. Blades only touch the circle itself, so this
@@ -135,6 +133,13 @@ UpgradeEffectResult applyUpgrade(PlayerStats& stats, std::string_view effect, fl
   if (effect == "heal") {
     return {true, value, 0.0F};
   }
+  if (effect == "heal_pct") {
+    // Percentage of CURRENT max HP, resolved here so the card keeps working
+    // after a later max-HP card raises the ceiling. `heal` stays as the flat
+    // form for milestone-sized top-ups where a fraction of a big pool would be
+    // far too small to matter.
+    return {true, stats.maxHp * value, 0.0F};
+  }
   if (effect == "defense_add") {
     stats.defense += value;
     return {true, 0.0F, 0.0F};
@@ -156,6 +161,18 @@ UpgradeEffectResult applyUpgrade(PlayerStats& stats, std::string_view effect, fl
     stats.shieldMax += value;
     return {true, 0.0F, value}; // the picker tops the shield up to the new max
   }
+  if (effect == "shield_regen") {
+    // Refill speed. Multiplicative on the base 10 HP/s so the card reads as
+    // "+X% shield regen" and never needs a rebalance when the base moves.
+    stats.shieldRegenMul += value;
+    return {true, 0.0F, value}; // and tops the pool up, so the card feels now
+  }
+  if (effect == "shield_delay") {
+    // Shortens the out-of-combat wait. Cards subtract; the floor in
+    // updateShield() keeps the pool from becoming permanent.
+    stats.shieldRegenDelay -= value;
+    return {true, 0.0F, 0.0F};
+  }
   if (effect == "extra_choice") {
     stats.extraChoice += static_cast<int>(value);
     return {true, 0.0F, 0.0F};
@@ -165,8 +182,12 @@ UpgradeEffectResult applyUpgrade(PlayerStats& stats, std::string_view effect, fl
     return {true, 0.0F, 0.0F};
   }
   if (effect == "weapon_slot_add") {
-    // Arsenal Core: one more weapon slot per stack (3 stacks max in content).
-    stats.weaponSlots += static_cast<int>(value);
+    // One more weapon slot per stack, floored at zero and capped at the storage
+    // array's headroom. The clamp is what makes weaponCap()'s own clamp a
+    // belt-and-braces check rather than the only thing between a hand-edited
+    // content file and a buffer overrun.
+    stats.weaponSlots = std::clamp(stats.weaponSlots + static_cast<int>(value), 0,
+                                   Game::kMaxSlotCards);
     return {true, 0.0F, 0.0F};
   }
   if (effect == "fan") {
@@ -236,6 +257,26 @@ UpgradeEffectResult applyUpgrade(PlayerStats& stats, std::string_view effect, fl
     stats.momentumWindow += value;
     return {true, 0.0F, 0.0F};
   }
+  if (effect == "momentum_rate") {
+    // % fire rate per chain stack. This is the axis the whole meter exists for
+    // and it had no card at all, so a chain built purely for damage was the only
+    // way to play it.
+    stats.momentumRate += value;
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "momentum_chain") {
+    // How long the chain may grow before the extra stacks stop counting. Reaching
+    // it is a pure DPS milestone, and it is the only way to make a wide,
+    // slow-clearing build worth chaining with.
+    stats.momentumMax += static_cast<int>(value);
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "momentum_gain") {
+    // Stacks per kill. Makes short, dense waves feed the meter faster than one
+    // huge chaff horde, which is the opposite of Bloodthirst's trade.
+    stats.momentumGain += value;
+    return {true, 0.0F, 0.0F};
+  }
   if (effect == "momentum_bloodthirst") {
     // Bloodthirst: twice the stacks per kill, twice the useful chain length
     // and a chain that forgives twice as long without a kill.
@@ -265,6 +306,35 @@ UpgradeEffectResult applyUpgrade(PlayerStats& stats, std::string_view effect, fl
   if (effect == "ability_stasis") {
     stats.stasisDuration += 1.0F;
     stats.stasisSlow = std::max(0.15F, stats.stasisSlow - 0.08F);
+    return {true, 0.0F, 0.0F};
+  }
+  // --- Stackable ability cards ------------------------------------------------
+  // The one-shot uniques above are dramatic; these are the ordinary level-up
+  // cards that let a build actually scale the buttons, so the J/K/L row is a
+  // real build axis instead of a novelty one has to hope to roll once. `value`
+  // is the per-stack magnitude and each one is floored where a floor matters.
+  if (effect == "ability_dash") {
+    // Phase Dash: a longer jump, a touch more landing invulnerability. Capped
+    // because a blink that crosses the screen is not a dash, it is a skip
+    // button — it would delete positioning, which is the only thing the dash
+    // is for.
+    stats.blinkDist = std::min(9.0F, stats.blinkDist + value);
+    stats.blinkIframes = std::min(1.2F, stats.blinkIframes + value * 0.08F);
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "ability_burst") {
+    // Overload: wider, harder, and it shoves harder so the knockback is still a
+    // defensive tool at the radius the extra damage now covers.
+    stats.burstRadius += value;
+    stats.burstDamage += value * 37.5F;
+    stats.burstKnockback += value * 1.25F;
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "ability_slow") {
+    // Stasis: longer and deeper, with the same 0.15 floor as the unique so the
+    // world never grinds to a halt outright.
+    stats.stasisDuration += value;
+    stats.stasisSlow = std::max(0.15F, stats.stasisSlow - value * 0.08F);
     return {true, 0.0F, 0.0F};
   }
   if (effect == "ability_echo") {
@@ -495,17 +565,39 @@ void Game::applyProfileToPlayer() {
 }
 
 void Game::updateMainMenu(const FrameInput& input) {
-  constexpr int kRows = 4; // START, SKIN, OUTLINE, QUIT
-  if (input.menuUp) {
-    menuSelection_ = (menuSelection_ + kRows - 1) % kRows;
-  } else if (input.menuDown) {
-    menuSelection_ = (menuSelection_ + 1) % kRows;
+  // Moving off RESET PROGRESS disarms it: the "press Enter again to wipe"
+  // window belongs to the row you armed it on, not to wherever you drifted next.
+  if (resetArmed_ && (input.menuUp || input.menuDown || input.menuLeft || input.menuRight)) {
+    resetArmed_ = false;
   }
+  if (input.menuUp) {
+    menuSelection_ = (menuSelection_ + kMenuRows - 1) % kMenuRows;
+  } else if (input.menuDown) {
+    menuSelection_ = (menuSelection_ + 1) % kMenuRows;
+  }
+
+  // F1 opens the manual from the menu. Handled before the profile check because
+  // the manual is not a profile feature and must work in a headless caller too.
+  if (input.manualToggle) {
+    openManual();
+    return;
+  }
+
   if (profile_ == nullptr) {
-    // Without a profile the cosmetic rows are inert, but START and QUIT must
-    // still work (tests and headless callers may not attach one).
-    if (input.menuConfirm && menuSelection_ == 0) menuOpen_ = false;
-    if (input.menuConfirm && menuSelection_ == 3) quitRequested_ = true;
+    // Without a profile the cosmetic rows are inert, but START, MANUAL, RESET
+    // and QUIT must still work (tests and headless callers may not attach one).
+    if (input.menuConfirm) {
+      if (menuSelection_ == kMenuStart) {
+        menuOpen_ = false;
+      } else if (menuSelection_ == kMenuManual) {
+        openManual();
+      } else if (menuSelection_ == kMenuReset) {
+        // Nothing to wipe without a profile, so there is nothing to arm either.
+        resetArmed_ = false;
+      } else if (menuSelection_ == kMenuQuit) {
+        quitRequested_ = true;
+      }
+    }
     return;
   }
 
@@ -513,11 +605,11 @@ void Game::updateMainMenu(const FrameInput& input) {
   const int outlines = static_cast<int>(outlinePalette().size());
   if (input.menuLeft || input.menuRight) {
     const int dir = input.menuRight ? 1 : -1;
-    if (menuSelection_ == 1) { // SKIN
+    if (menuSelection_ == kMenuSkin) {
       profile_->skin = ((profile_->skin + dir) % skins + skins) % skins;
       profileDirty_ = true;
       applyProfileToPlayer();
-    } else if (menuSelection_ == 2) { // OUTLINE
+    } else if (menuSelection_ == kMenuOutline) {
       // Cycle but skip locked styles so the player never lands on one they
       // cannot wear: step until an unlocked index is found (palette is tiny,
       // and "None" is index 0 so the loop always terminates).
@@ -531,15 +623,15 @@ void Game::updateMainMenu(const FrameInput& input) {
   }
   if (!input.menuConfirm) return;
   switch (menuSelection_) {
-    case 0: // START
+    case kMenuStart:
       menuOpen_ = false;
       break;
-    case 1: // SKIN — advance to the next colour directly on confirm too
+    case kMenuSkin: // advance to the next colour directly on confirm too
       profile_->skin = (profile_->skin + 1) % skins;
       profileDirty_ = true;
       applyProfileToPlayer();
       break;
-    case 2: // OUTLINE — same convenience
+    case kMenuOutline: // same convenience
       for (int step = 0; step < outlines; ++step) {
         profile_->outline = (profile_->outline + 1) % outlines;
         if (profile_->canUseOutline(profile_->outline)) break;
@@ -547,7 +639,18 @@ void Game::updateMainMenu(const FrameInput& input) {
       profileDirty_ = true;
       applyProfileToPlayer();
       break;
-    case 3: // QUIT
+    case kMenuManual:
+      openManual();
+      break;
+    case kMenuReset:
+      // Two-step. The first Enter only arms; the wipe needs the next one.
+      if (resetArmed_) {
+        confirmProgressReset();
+      } else {
+        beginProgressReset();
+      }
+      break;
+    case kMenuQuit:
       quitRequested_ = true;
       break;
     default:
@@ -555,11 +658,95 @@ void Game::updateMainMenu(const FrameInput& input) {
   }
 }
 
+void Game::beginProgressReset() {
+  resetArmed_ = true;
+}
+
+bool Game::confirmProgressReset() {
+  resetArmed_ = false;
+  if (profile_ == nullptr) return false;
+  // Wipe to first-launch defaults. Assigning a fresh Profile is the whole
+  // operation — there is no second copy of the progress to hunt down.
+  *profile_ = Profile{};
+  // syncedUnlocks_ is the set of bits we already reported to the profile. After
+  // a wipe it must be cleared, or the next kill would re-push an unlock that
+  // the player no longer has and silently re-grant it.
+  syncedUnlocks_ = 0;
+  profileDirty_ = true;
+  // Repaint: the default skin is a different colour than whatever was worn.
+  applyProfileToPlayer();
+  return true;
+}
+
+void Game::openManual() {
+  manualOpen_ = true;
+  if (manualPage_ >= content_.manual.size()) manualPage_ = 0;
+}
+
+void Game::closeManual() {
+  manualOpen_ = false;
+}
+
+void Game::nextManualPage() {
+  if (content_.manual.empty()) return;
+  manualPage_ = (manualPage_ + 1) % content_.manual.size();
+}
+
+void Game::prevManualPage() {
+  if (content_.manual.empty()) return;
+  manualPage_ = (manualPage_ + content_.manual.size() - 1) % content_.manual.size();
+}
+
+std::string Game::manualPageId() const {
+  if (manualPage_ >= content_.manual.size()) return {};
+  return content_.manual[manualPage_].id;
+}
+
+void Game::updateManual(const FrameInput& input) {
+  if (input.manualToggle || input.togglePause) {
+    closeManual();
+    return;
+  }
+  // B is the bestiary's key while paused; inside the manual it is "back", which
+  // is what a player who learned the pause screen will press first.
+  if (input.bestiary || input.restart) {
+    closeManual();
+    return;
+  }
+  if (input.menuDown) nextManualPage();
+  if (input.menuUp) prevManualPage();
+  if (input.menuLeft) prevManualPage();
+  if (input.menuRight) nextManualPage();
+  // Number keys jump straight to a page: a player who knows the page list
+  // should not have to flip through eight screens to get there.
+  const int jump = (input.choose1 ? 0 : input.choose2 ? 1 : input.choose3 ? 2
+                : input.choose4 ? 3 : input.choose5 ? 4 : -1);
+  if (jump >= 0) {
+    if (static_cast<std::size_t>(jump) < content_.manual.size()) {
+      manualPage_ = static_cast<std::size_t>(jump);
+    }
+  }
+}
+
 void Game::advance(float frameDt, const FrameInput& input) {
+  // The manual is the topmost overlay and wins over everything below it,
+  // including the main menu, so F1 always does the obvious thing.
+  if (manualOpen_) {
+    updateManual(input);
+    timestep_.reset();
+    return;
+  }
   // The main menu is fully modal: it eats the whole frame and the simulation
   // does not advance behind it.
   if (menuOpen_) {
     updateMainMenu(input);
+    timestep_.reset();
+    return;
+  }
+  // F1 from a live run, the pause screen or a level-up screen. The run is not
+  // advanced this frame: reading the manual should not cost you the horde.
+  if (input.manualToggle) {
+    openManual();
     timestep_.reset();
     return;
   }
@@ -3120,7 +3307,14 @@ void Game::updateShield() {
     shieldDelay_ -= 1.0F / 60.0F;
     return;
   }
-  shield_ = std::min(stats_.shieldMax, shield_ + kShieldRegenRate / 60.0F);
+  const float rate = shieldRegenRate();
+  shield_ = std::min(stats_.shieldMax, shield_ + rate / 60.0F);
+}
+
+// How long the shield waits after a hit before it starts refilling again.
+// Shortened by shield_delay cards, floored so a pool is never permanent.
+float Game::shieldRegenDelay() const {
+  return std::max(kShieldRegenDelayFloor, kShieldRegenDelay + stats_.shieldRegenDelay);
 }
 
 void Game::updateUniqueEffects() {
@@ -4020,7 +4214,10 @@ void Game::reroll() {
 }
 
 void Game::addWeapon(int defIndex) {
-  if (weaponCount_ >= weaponCap()) return;
+  // Two guards, deliberately: weaponCap() is the design cap and kMaxWeapons is
+  // the array bound. Anything that could push weaponCount_ past the array is a
+  // memory bug, not a balance question.
+  if (weaponCount_ >= weaponCap() || weaponCount_ >= kMaxWeapons) return;
   if (defIndex < 0 || static_cast<std::size_t>(defIndex) >= content_.weapons.size()) return;
   const auto& def = content_.weapons[static_cast<std::size_t>(defIndex)];
   auto& w = weapons_[weaponCount_++];
@@ -4439,6 +4636,159 @@ void Game::applyWeaponEffect(int slotIndex, std::string_view effect, float value
     w.sweepRadius *= 1.35F;
     w.sweepKnockback *= 1.4F;
     w.sweepLead += 0.4F;
+  } else if (effect == "w_unique_corona") {
+    // --- Uniques for the evolutions and supers that had no card at all -------
+    // Halo, Void Gyre and Prism Array carried zero weapon-scoped cards, so
+    // owning one of them meant its whole stat block was untouchable past the
+    // global stats. Each unique below edits the parameters that weapon's
+    // identity is actually made of, not a generic damage number.
+    // Radiant Halo: the beams get real shoving power, so the ring stops being a
+    // purely passive damage dealer and starts holding ground. Length and width
+    // go up with it so the extra knockback is delivered, not swallowed.
+    w.haloKnockback += 6.0F;
+    w.beamWidth *= 1.4F;
+    w.beamRange *= 1.15F;
+    w.damage *= 1.2F;
+    syncHaloBeams(slotIndex);
+  } else if (effect == "w_unique_gyre") {
+    // Void Gyre: harder pull, longer reach, a fatter core. Pull is capped
+    // because past this the ring stops being a zone and becomes a wall that
+    // pins every late-game boss in place forever.
+    w.vortexPull = std::min(14.0F, w.vortexPull * 1.45F);
+    w.vortexReach *= 1.3F;
+    w.vortexRadius *= 1.2F;
+    w.vortexTickRate *= 0.8F;
+    syncVortices(slotIndex);
+  } else if (effect == "w_unique_refract") {
+    // Prism Array: one more independent beam corridor, and each of them
+    // ricochets further off enemies. Max targets is capped at 6 so the screen
+    // never becomes a solid sheet of beams.
+    w.prismMaxTargets = std::min(6, w.prismMaxTargets + 1);
+    w.prismRicochet = std::min(4.0F, w.prismRicochet * 1.4F);
+    w.prismRange *= 1.15F;
+  } else if (effect == "w_unique_rime") {
+    // Frost Shards: the volley stops being a spray of ice and becomes a line of
+    // lances. Damage comes down to pay for the pierce and the extra flight
+    // time, so the payoff is "it keeps going" rather than "it hits harder".
+    w.pierce += 4;
+    w.life *= 1.4F;
+    w.damage *= 0.8F;
+  } else if (effect == "w_unique_siege_doctrine") {
+    // Siege Mortar: a three-shell salvo on a longer fuse, so the whole salvo
+    // lands together instead of dribbling out one shell at a time. The cooldown
+    // goes up to keep the shell count honest — a mortar that fires six every
+    // two seconds is a different weapon, not a better one.
+    w.projectiles += 2;
+    w.bombFuse *= 2.0F;
+    w.bombExplodeRadius *= 1.35F;
+    w.bombArcHeight *= 1.15F;
+    w.cooldown *= 1.2F;
+  } else if (effect == "w_unique_skewer") {
+    // Pinball Puck: a skewed silver ball that never loses its bite. Bounce
+    // count is capped so the puck cannot be left ricocheting forever inside
+    // one room with the horde.
+    w.bounceCount = std::min(24, w.bounceCount + 10);
+    w.bounceDamageMul = 1.0F;
+    w.bounceRange *= 1.3F;
+  } else if (effect == "w_unique_bore") {
+    // Jackhammer Drill: the bit stops being a narrow jab. A wider, longer, far
+    // faster cone is a different shape of threat, not a bigger number.
+    w.coneAngle *= 1.6F;
+    w.coneRange *= 1.4F;
+    w.coneTickRate *= 0.6F;
+    w.damage *= 1.15F;
+  } else if (effect == "w_unique_discharge") {
+    // Shock Core: the ring stops being a single pulse and starts arcing around
+    // the inside of itself, re-striking on a much tighter tick.
+    w.novaMaxRadius *= 1.35F;
+    w.novaExpandSpeed *= 1.4F;
+    w.novaTickRate *= 0.5F;
+    w.novaDamagePerTick *= 1.5F;
+  } else if (effect == "w_unique_chainlash") {
+    // Barbed Whip: the lash goes all the way around. The lead is kept (not
+    // zeroed) so it still centres in front of the player instead of becoming
+    // a reaper that also swings at whatever is behind you.
+    w.sweepAngle = 6.2832F;
+    w.sweepRadius *= 1.3F;
+    w.sweepKnockback *= 1.5F;
+  } else if (effect == "w_unique_wingbeat") {
+    // Seraph Array: the wings beat faster, shove much harder and burn wider.
+    w.haloKnockback += 5.0F;
+    w.beamWidth *= 1.3F;
+    w.orbitSpeed *= 1.6F;
+    w.damage *= 1.2F;
+    syncHaloBeams(slotIndex);
+  } else if (effect == "w_unique_singularity") {
+    // Event Horizon: the last word in crowd control. Pull is capped for the
+    // same reason Void Gyre's is — a hard pin that never releases would delete
+    // every positioning problem the rest of the roster exists to pose.
+    w.vortexPull = std::min(14.0F, w.vortexPull * 1.5F);
+    w.vortexRadius *= 1.35F;
+    w.vortexReach *= 1.25F;
+    w.vortexTickRate *= 0.75F;
+    syncVortices(slotIndex);
+  } else if (effect == "w_orb_grow") {
+    // --- Stackable cards for the weapons that only had their one unique ------
+    // These are the identity parameters that no card used to touch, so a Void
+    // Orb or a Solar Lance could be picked up and never scale again. Each one
+    // is a normal (stackable) card, which is what a build with a favourite
+    // weapon needs most: a second, then a third, then a fourth reason to keep
+    // it.
+    // The orb's size comes from the projectile stat, not from a field, so this
+    // buys what it can: it reacquires the next victim faster and decays far
+    // less per bounce. Both matter, because a single eternal orb that loses a
+    // third of its power every hop is a weapon that dies in ten seconds.
+    w.bounceRange *= 1.3F;
+    w.bounceDamageMul = std::max(w.bounceDamageMul, 0.9F);
+  } else if (effect == "w_scythe_reach") {
+    w.sweepRadius *= 1.0F + value * 0.06F;
+  } else if (effect == "w_beam_lance") {
+    w.beamRange *= 1.0F + value * 0.06F;
+    w.beamWidth *= 1.0F + value * 0.04F;
+  } else if (effect == "w_chain_arc") {
+    w.chainJumpRange *= 1.0F + value * 0.06F;
+    w.chainDamageMul = std::min(1.0F, w.chainDamageMul + value * 0.05F);
+  } else if (effect == "w_nova_wide") {
+    w.novaMaxRadius *= 1.0F + value * 0.06F;
+    w.novaExpandSpeed *= 1.0F + value * 0.04F;
+  } else if (effect == "w_reap_wide") {
+    w.sweepRadius *= 1.0F + value * 0.06F;
+    w.zoneDuration += value * 0.5F;
+  } else if (effect == "w_boomerang_reach") {
+    w.boomerangRange *= 1.0F + value * 0.07F;
+    w.boomerangReturnSpeed *= 1.0F + value * 0.06F;
+  } else if (effect == "w_zone_pools") {
+    // More lingering fire on the ground at once. The pool cap is applied in the
+    // Zone bookkeeping, so this can never leak entities.
+    w.zoneMaxPools += static_cast<int>(value);
+  } else if (effect == "w_bomb_blast") {
+    w.bombExplodeRadius *= 1.0F + value * 0.08F;
+    w.bombKnockback *= 1.0F + value * 0.06F;
+  } else if (effect == "w_lure_anchor") {
+    // The bell survives longer and one more may be planted at a time, so the
+    // taunt is a persistent engine instead of a one-shot.
+    w.lureDuration += value * 0.8F;
+    w.lureMaxBeacons += 1;
+  } else if (effect == "w_prism_lattice") {
+    // Prism Array: one more beam corridor per stack, on top of the global
+    // projectile card (which the prism ignores, since its count is its own
+    // field). Capped at 6 so the screen never fills with beams.
+    w.prismMaxTargets = std::min(6, w.prismMaxTargets + static_cast<int>(value));
+    w.prismRange *= 1.0F + value * 0.05F;
+  } else if (effect == "w_halo_wings") {
+    // Radiant Halo: the ring reaches further and its beams shove a little more,
+    // so the two halo-family weapons stop at exactly one card each.
+    w.beamRange *= 1.0F + value * 0.08F;
+    w.haloKnockback += value * 1.5F;
+    syncHaloBeams(slotIndex);
+  } else if (effect == "w_vortex_core") {
+    // Void Gyre: a fatter core, a wider orbit and a faster spin. The orbit
+    // grows sub-linearly with stacks so the ring cannot creep to the screen
+    // edge, and syncVortices re-reads all three immediately.
+    w.vortexRadius *= 1.0F + value * 0.08F;
+    w.vortexOrbit *= 1.0F + value * 0.07F;
+    w.vortexOrbitSpeed *= 1.0F + value * 0.12F;
+    syncVortices(slotIndex);
   }
 }
 
@@ -4528,7 +4878,7 @@ void Game::hurtPlayer(float amount) {
     const float absorbed = std::min(shield_, dmg);
     shield_ -= absorbed;
     dmg -= absorbed;
-    shieldDelay_ = kShieldRegenDelay;
+    shieldDelay_ = shieldRegenDelay();
   }
 
   if (dmg > 0.0F) {
@@ -4567,7 +4917,7 @@ void Game::damagePlayerDirect(float amount) {
     const float absorbed = std::min(shield_, dmg);
     shield_ -= absorbed;
     dmg -= absorbed;
-    shieldDelay_ = kShieldRegenDelay;
+    shieldDelay_ = shieldRegenDelay();
   }
   if (dmg > 0.0F) {
     php.hp -= dmg;
@@ -5272,6 +5622,15 @@ void Game::testDamageFirstEnemy(float dmg) {
   }
 }
 
+void Game::testDamagePlayer(float amount) {
+  if (player_ == entt::null || !registry_.valid(player_)) return;
+  auto& hp = registry_.get<Health>(player_);
+  // Leave 1 HP: a test that is measuring a heal must not be racing the lethal
+  // rule, and a 0 HP player is a GameOver state that would swallow the rest of
+  // the test's frames.
+  hp.hp = std::max(1.0F, hp.hp - amount);
+}
+
 float Game::testFirstEnemyDistToPlayer() const {
   if (player_ == entt::null || !registry_.valid(player_)) return -1.0F;
   const auto& pt = registry_.get<Transform>(player_);
@@ -5521,9 +5880,14 @@ void Game::renderPlayerStats(core::render::Batcher& b, float px, float py) {
   rows.push_back("HP " + std::to_string(static_cast<int>(hpNow)) + "/" +
                  std::to_string(static_cast<int>(hpMax)) + "    REGEN " +
                  fit1(stats_.regen) + "/S");
+  // Shield shows its refill rate and its delay, because a shield build is only
+  // half a pool and half a clock: 400 HP that trickles back at 10/s is a very
+  // different weapon from 400 HP that trickles back at 30/s.
   rows.push_back("SHIELD " + std::to_string(static_cast<int>(shield_)) + "/" +
-                 std::to_string(static_cast<int>(stats_.shieldMax)) + "  DEFENSE " +
-                 std::to_string(static_cast<int>(stats_.defense)));
+                 std::to_string(static_cast<int>(stats_.shieldMax)) + " +" +
+                 std::to_string(static_cast<int>(shieldRegenRate())) + "/S AFTER " +
+                 fit1(shieldRegenDelay()) + "S");
+  rows.push_back("DEFENSE " + std::to_string(static_cast<int>(stats_.defense)));
   rows.push_back("DAMAGE X" + fit1(stats_.damageMul) + "    FIRE RATE +" +
                  std::to_string(static_cast<int>(stats_.fireRateBonus * 100.0F)) + "%");
   rows.push_back("CHAIN x" + std::to_string(streak_) + "/" +
@@ -5851,6 +6215,248 @@ void Game::renderBestiary(core::render::Batcher& b, float px, float py) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// In-game manual.
+//
+// The same documentation docs/ ships, trimmed to the 5x7 bitmap font's ASCII
+// range and split into one-screen pages. Layout: a page list down the left, the
+// current page's lines on the right, the hint bar at the bottom.
+//
+// A page is allowed to be taller than the screen — the content is data, and a
+// long page should read as "this topic is long" rather than silently lose its
+// last lines off the bottom. The test asserts every page fits, so the shipped
+// manual is always complete; the clamp here is the safety net for a future
+// contributor who adds one that does not.
+// ---------------------------------------------------------------------------
+void Game::renderManual(core::render::Batcher& b, float px, float py) {
+  using core::render::Color;
+  const Color gold{1.0F, 0.85F, 0.4F, 1.0F};
+  const Color dim{0.66F, 0.66F, 0.76F, 1.0F};
+  const Color white{1.0F, 1.0F, 1.0F, 1.0F};
+  const Color violet{0.75F, 0.5F, 1.0F, 1.0F};
+  const Color bullet{0.55F, 0.9F, 1.0F, 1.0F};
+
+  b.rectTopLeft(0.0F, 0.0F, px, py, Color{0.04F, 0.035F, 0.08F, 0.97F});
+
+  if (content_.manual.empty()) {
+    // A build with no manual.toml must still say something honest.
+    const std::string none = "NO MANUAL IN THIS BUILD";
+    b.text(px * 0.5F - b.textWidth(3.0F, none) * 0.5F, py * 0.45F, 3.0F, dim, none);
+    const std::string hint = "[F1] CLOSE";
+    b.text(px * 0.5F - b.textWidth(1.8F, hint) * 0.5F, py - 40.0F, 1.8F, dim, hint);
+    return;
+  }
+
+  const ManualPage& page = content_.manual[manualPage_];
+  const std::size_t total = content_.manual.size();
+  const std::size_t n = manualPage_ + 1;
+
+  // --- Title -----------------------------------------------------------------
+  const std::string title = "MANUAL  " + std::to_string(n) + "/" + std::to_string(total);
+  b.text(px * 0.5F - b.textWidth(3.4F, title) * 0.5F, 20.0F, 3.4F, gold, title);
+  const float subW = std::min(px * 0.5F, 460.0F);
+  for (int k = 0; k <= 40; ++k) {
+    const float t = static_cast<float>(k) / 40.0F;
+    b.circle(px * 0.5F - subW * 0.5F + subW * t, 54.0F, 1.2F,
+             Color{gold.r, gold.g, gold.b, 0.30F});
+  }
+
+  // --- Page list (left rail) -------------------------------------------------
+  {
+    const float listX = 26.0F;
+    const float listY0 = 74.0F;
+    const float rowH = 22.0F;
+    for (std::size_t i = 0; i < total; ++i) {
+      const float y = listY0 + static_cast<float>(i) * rowH;
+      const bool sel = (i == manualPage_);
+      const auto& p = content_.manual[i];
+      // Highlight bar behind the active page.
+      if (sel) {
+        b.rectTopLeft(listX - 8.0F, y - 4.0F, 196.0F, 18.0F,
+                      Color{gold.r, gold.g, gold.b, 0.16F});
+        b.circle(listX - 12.0F, y + 4.0F, 3.5F, gold);
+      }
+      const std::string label =
+          std::to_string(i + 1) + "  " + p.title;
+      b.text(listX, y, 1.6F, sel ? gold : dim, label);
+    }
+  }
+
+  // --- Page body (right) -----------------------------------------------------
+  {
+    const float bodyX = 250.0F;
+    const float bodyY0 = 74.0F;
+    const float lineH = 15.0F;
+    // The body must fit the gap between the rail and the hint bar.
+    const float maxLines = std::max(1.0F, (py - bodyY0 - 56.0F) / lineH);
+    const std::size_t shown = std::min<std::size_t>(page.lines.size(),
+                                                    static_cast<std::size_t>(maxLines));
+    for (std::size_t i = 0; i < shown; ++i) {
+      std::string_view raw = page.lines[i];
+      const float y = bodyY0 + static_cast<float>(i) * lineH;
+      // Leading markers are markup, not text: '>' is a highlighted bullet, '#' is
+      // a sub-heading, and "  " is an indent under the bullet above.
+      if (!raw.empty() && raw.front() == '>') {
+        b.text(bodyX, y, 1.6F, gold, ">");
+        b.text(bodyX + 18.0F, y, 1.6F, bullet, raw.substr(1));
+      } else if (!raw.empty() && raw.front() == '#') {
+        b.text(bodyX, y, 1.6F, violet, raw.substr(1));
+      } else if (raw.size() >= 2 && raw[0] == ' ' && raw[1] == ' ') {
+        b.text(bodyX + 18.0F, y, 1.6F, dim, raw.substr(2));
+      } else if (raw.empty()) {
+        b.circle(bodyX + 4.0F, y + 5.0F, 1.0F, Color{dim.r, dim.g, dim.b, 0.35F});
+      } else {
+        b.text(bodyX, y, 1.6F, white, raw);
+      }
+    }
+    // Overflow marker, so a clipped page says it is clipped.
+    if (page.lines.size() > shown) {
+      const float y = bodyY0 + static_cast<float>(shown) * lineH;
+      b.text(bodyX, y, 1.6F, Color{0.95F, 0.55F, 0.45F, 1.0F}, "...MORE, NEXT PAGE");
+    }
+  }
+
+  // --- Hint bar --------------------------------------------------------------
+  {
+    const std::string hint =
+        "[F1] CLOSE   [UP/DOWN] PAGE   [1-" + std::to_string(total) + "] JUMP";
+    b.text(px * 0.5F - b.textWidth(1.5F, hint) * 0.5F, py - 30.0F, 1.5F,
+           Color{0.5F, 0.5F, 0.6F, 1.0F}, hint);
+  }
+}
+
+// The armed weapon's focus cards and exclusive uniques, for the page that
+// lists them. Pulled out so the weapon tests can assert on the exact same set
+// the game shows.
+std::vector<std::string> Game::collectWeaponCards(std::string_view weaponId) const {
+  std::vector<std::string> out;
+  for (const auto& u : content_.upgrades) {
+    if (u.weapon == weaponId) {
+      out.push_back(u.name);
+    }
+  }
+  return out;
+}
+
+bool Game::WeaponSnapshot::operator==(const WeaponSnapshot& other) const {
+  // Field-by-field rather than memcmp: the struct is a flat bag of scalars with
+  // padding, so memcmp would read the padding bytes and report spurious
+  // differences. Every field a card can move is listed; a new WeaponSlot field
+  // must be added to the snapshot above as well, or it will slip through the
+  // "did this card do anything" test unnoticed.
+  return def == other.def && attackType == other.attackType && cooldown == other.cooldown &&
+         damage == other.damage && projectiles == other.projectiles &&
+         speed == other.speed && life == other.life && pierce == other.pierce &&
+         spread == other.spread && coneAngle == other.coneAngle &&
+         coneRange == other.coneRange && coneTickRate == other.coneTickRate &&
+         orbitRadius == other.orbitRadius && orbitSpeed == other.orbitSpeed &&
+         orbitCount == other.orbitCount && bombArcHeight == other.bombArcHeight &&
+         bombExplodeRadius == other.bombExplodeRadius &&
+         bombKnockback == other.bombKnockback && bombFuse == other.bombFuse &&
+         boomerangRange == other.boomerangRange &&
+         boomerangReturnSpeed == other.boomerangReturnSpeed &&
+         bounceCount == other.bounceCount && bounceRange == other.bounceRange &&
+         bounceDamageMul == other.bounceDamageMul &&
+         bounceInfinite == other.bounceInfinite && beamRange == other.beamRange &&
+         beamWidth == other.beamWidth && beamDuration == other.beamDuration &&
+         haloKnockback == other.haloKnockback && sweepAngle == other.sweepAngle &&
+         sweepRadius == other.sweepRadius && sweepKnockback == other.sweepKnockback &&
+         zoneRadius == other.zoneRadius && zoneDuration == other.zoneDuration &&
+         zoneDps == other.zoneDps && zoneMaxPools == other.zoneMaxPools &&
+         chainJumpRange == other.chainJumpRange && chainMaxJumps == other.chainMaxJumps &&
+         chainDamageMul == other.chainDamageMul && novaMaxRadius == other.novaMaxRadius &&
+         novaExpandSpeed == other.novaExpandSpeed &&
+         novaDamagePerTick == other.novaDamagePerTick &&
+         novaTickRate == other.novaTickRate && area == other.area &&
+         strength == other.strength && homing == other.homing && bounces == other.bounces &&
+         cdBonus == other.cdBonus && sweepLead == other.sweepLead &&
+         uniqueHeal == other.uniqueHeal && beamSplit == other.beamSplit &&
+         vortexRadius == other.vortexRadius && vortexReach == other.vortexReach &&
+         vortexPull == other.vortexPull && vortexOrbit == other.vortexOrbit &&
+         vortexOrbitSpeed == other.vortexOrbitSpeed &&
+         vortexTickRate == other.vortexTickRate && prismRange == other.prismRange &&
+         prismWidth == other.prismWidth && prismMaxTargets == other.prismMaxTargets &&
+         prismRicochet == other.prismRicochet && lureRadius == other.lureRadius &&
+         lureReach == other.lureReach && lurePull == other.lurePull &&
+         lureDps == other.lureDps && lureDuration == other.lureDuration &&
+         lureTickRate == other.lureTickRate && lureMaxBeacons == other.lureMaxBeacons;
+}
+
+Game::WeaponSnapshot Game::testWeaponSnapshot(int slotIndex) const {
+  WeaponSnapshot s{};
+  if (slotIndex < 0 || slotIndex >= weaponCount_) return s;
+  const auto& w = weapons_[static_cast<std::size_t>(slotIndex)];
+  s.def = w.def;
+  s.attackType = static_cast<int>(w.attackType);
+  s.cooldown = w.cooldown;
+  s.damage = w.damage;
+  s.projectiles = w.projectiles;
+  s.speed = w.speed;
+  s.life = w.life;
+  s.pierce = w.pierce;
+  s.spread = w.spread;
+  s.coneAngle = w.coneAngle;
+  s.coneRange = w.coneRange;
+  s.coneTickRate = w.coneTickRate;
+  s.orbitRadius = w.orbitRadius;
+  s.orbitSpeed = w.orbitSpeed;
+  s.orbitCount = w.orbitCount;
+  s.bombArcHeight = w.bombArcHeight;
+  s.bombExplodeRadius = w.bombExplodeRadius;
+  s.bombKnockback = w.bombKnockback;
+  s.bombFuse = w.bombFuse;
+  s.boomerangRange = w.boomerangRange;
+  s.boomerangReturnSpeed = w.boomerangReturnSpeed;
+  s.bounceCount = w.bounceCount;
+  s.bounceRange = w.bounceRange;
+  s.bounceDamageMul = w.bounceDamageMul;
+  s.bounceInfinite = w.bounceInfinite;
+  s.beamRange = w.beamRange;
+  s.beamWidth = w.beamWidth;
+  s.beamDuration = w.beamDuration;
+  s.haloKnockback = w.haloKnockback;
+  s.sweepAngle = w.sweepAngle;
+  s.sweepRadius = w.sweepRadius;
+  s.sweepKnockback = w.sweepKnockback;
+  s.zoneRadius = w.zoneRadius;
+  s.zoneDuration = w.zoneDuration;
+  s.zoneDps = w.zoneDps;
+  s.zoneMaxPools = w.zoneMaxPools;
+  s.chainJumpRange = w.chainJumpRange;
+  s.chainMaxJumps = w.chainMaxJumps;
+  s.chainDamageMul = w.chainDamageMul;
+  s.novaMaxRadius = w.novaMaxRadius;
+  s.novaExpandSpeed = w.novaExpandSpeed;
+  s.novaDamagePerTick = w.novaDamagePerTick;
+  s.novaTickRate = w.novaTickRate;
+  s.area = w.area;
+  s.strength = w.strength;
+  s.homing = w.homing;
+  s.bounces = w.bounces;
+  s.cdBonus = w.cdBonus;
+  s.sweepLead = w.sweepLead;
+  s.uniqueHeal = w.uniqueHeal;
+  s.beamSplit = w.beamSplit;
+  s.vortexRadius = w.vortexRadius;
+  s.vortexReach = w.vortexReach;
+  s.vortexPull = w.vortexPull;
+  s.vortexOrbit = w.vortexOrbit;
+  s.vortexOrbitSpeed = w.vortexOrbitSpeed;
+  s.vortexTickRate = w.vortexTickRate;
+  s.prismRange = w.prismRange;
+  s.prismWidth = w.prismWidth;
+  s.prismMaxTargets = w.prismMaxTargets;
+  s.prismRicochet = w.prismRicochet;
+  s.lureRadius = w.lureRadius;
+  s.lureReach = w.lureReach;
+  s.lurePull = w.lurePull;
+  s.lureDps = w.lureDps;
+  s.lureDuration = w.lureDuration;
+  s.lureTickRate = w.lureTickRate;
+  s.lureMaxBeacons = w.lureMaxBeacons;
+  return s;
+}
+
 void Game::renderMainMenu(core::render::Batcher& b, float px, float py) {
   using core::render::Color;
   // Opaque backdrop: the menu is the app's first screen, not a pause blit.
@@ -5919,8 +6525,8 @@ void Game::renderMainMenu(core::render::Batcher& b, float px, float py) {
   }
 
   // --- Menu rows --------------------------------------------------------------
-  const float rowY0 = py * 0.56F;
-  const float rowH = 42.0F;
+  const float rowY0 = py * 0.54F;
+  const float rowH = 38.0F;
   const float rowX = px * 0.5F - 170.0F;
   const float rowW = 340.0F;
 
@@ -5931,30 +6537,40 @@ void Game::renderMainMenu(core::render::Batcher& b, float px, float py) {
       {"START RUN"},
       {"SKIN"},
       {"OUTLINE"},
+      {"MANUAL"},
+      {"RESET PROGRESS"},
       {"QUIT"},
   };
+  static_assert(std::size(rows) == static_cast<std::size_t>(kMenuRows),
+                "the row table and the kMenu* indices must stay in step");
 
   const auto& skins = skinPalette();
   const auto& outlines = outlinePalette();
-  for (int i = 0; i < 4; ++i) {
+  const Color danger{1.0F, 0.42F, 0.35F, 1.0F};
+  for (int i = 0; i < kMenuRows; ++i) {
     const float y = rowY0 + static_cast<float>(i) * rowH;
     const bool sel = (i == menuSelection_);
-    const Color labelCol = sel ? gold : dim;
+    const bool armedReset = resetArmed_ && (i == kMenuReset);
     // Selection bar: a filled rounded-ish block behind the active row.
     if (sel) {
       b.rectTopLeft(rowX - 18.0F, y - 8.0F, rowW + 36.0F, 34.0F,
-                    Color{gold.r, gold.g, gold.b, 0.14F});
+                    armedReset ? Color{danger.r, danger.g, danger.b, 0.18F}
+                               : Color{gold.r, gold.g, gold.b, 0.14F});
       // Caret marker.
-      b.circle(rowX - 28.0F, y + 4.0F, 5.0F, gold);
+      b.circle(rowX - 28.0F, y + 4.0F, 5.0F, armedReset ? danger : gold);
     }
-    b.text(rowX, y, 2.2F, labelCol, rows[static_cast<std::size_t>(i)].label);
+    const Color labelCol = armedReset ? danger : (sel ? gold : dim);
+    // The label itself becomes the question once armed, so the destructive
+    // state is readable without a second line of small print.
+    b.text(rowX, y, 2.2F, labelCol,
+           armedReset ? "RESET? PRESS AGAIN" : rows[static_cast<std::size_t>(i)].label);
 
     // Value on the right of the row, with the left/right hint.
     std::string value;
-    if (i == 1 && profile_ != nullptr) {
+    if (i == kMenuSkin && profile_ != nullptr) {
       const int skin = std::clamp(profile_->skin, 0, static_cast<int>(skins.size()) - 1);
       value = std::string("< ") + skins[static_cast<std::size_t>(skin)].name + " >";
-    } else if (i == 2) {
+    } else if (i == kMenuOutline) {
       if (profile_ == nullptr) {
         value = "< unavailable >";
       } else if (profile_->canUseOutline(profile_->outline) &&
@@ -5964,11 +6580,32 @@ void Game::renderMainMenu(core::render::Batcher& b, float px, float py) {
       } else {
         value = "< locked >";
       }
+    } else if (i == kMenuManual) {
+      const std::size_t pages = content_.manual.size();
+      value = pages == 0 ? "< no manual in build >"
+                         : "< " + std::to_string(pages) + " pages >";
+    } else if (i == kMenuReset) {
+      if (profile_ == nullptr) {
+        value = "< no profile >";
+      } else if (armedReset) {
+        value = "< ENTER = WIPE ALL >";
+      } else {
+        value = "< 2-STEP >";
+      }
     }
     if (!value.empty()) {
       b.text(rowX + rowW - b.textWidth(1.6F, value), y + 2.0F, 1.6F,
-             sel ? white : dim, value);
+             armedReset ? danger : (sel ? white : dim), value);
     }
+  }
+
+  // A one-line warning under the rows while the wipe is armed. Cheap insurance:
+  // this button is the only thing in the game that deletes earned progress.
+  if (resetArmed_) {
+    const std::string warn =
+        "THIS WIPES YOUR SKIN AND EVERY UNLOCKED OUTLINE. IT CANNOT BE UNDONE.";
+    b.text(px * 0.5F - b.textWidth(1.4F, warn) * 0.5F,
+           rowY0 + static_cast<float>(kMenuRows) * rowH + 4.0F, 1.4F, danger, warn);
   }
 
   // Locked-outline hint line: tells the player exactly what is still to earn.
@@ -5990,6 +6627,9 @@ void Game::renderMainMenu(core::render::Batcher& b, float px, float py) {
   const std::string footer = "[W/S or UP/DOWN] SELECT   [A/D or LEFT/RIGHT] CHANGE   [ENTER] CONFIRM";
   b.text(px * 0.5F - b.textWidth(1.4F, footer) * 0.5F, py - 40.0F, 1.4F,
          Color{0.5F, 0.5F, 0.6F, 1.0F}, footer);
+  const std::string manualHint = "[F1] OPEN THE MANUAL AT ANY TIME";
+  b.text(px * 0.5F - b.textWidth(1.2F, manualHint) * 0.5F, py - 22.0F, 1.2F,
+         Color{0.42F, 0.45F, 0.55F, 1.0F}, manualHint);
 }
 
 void Game::spawnParticles(float x, float y, core::render::Color c, int count, float speed) {
@@ -6752,6 +7392,13 @@ void Game::render(core::render::Batcher& b, float alpha) {
     }
   }
 
+  // Manual hint on the character sheet: F1 is a real key and nobody guesses it.
+  if (!manualOpen_ && (state_ == RunState::Playing || state_ == RunState::Paused)) {
+    const std::string hint = "[F1] MANUAL";
+    b.text(px - b.textWidth(1.5F, hint) - 14.0F, py - 40.0F, 1.5F,
+           Color{0.5F, 0.55F, 0.65F, 1.0F}, hint);
+  }
+
   // Game over overlay.
   if (state_ == RunState::GameOver) {
     b.rectTopLeft(0.0F, 0.0F, px, py, Color{0.1F, 0.0F, 0.0F, 0.7F});
@@ -6800,6 +7447,10 @@ void Game::render(core::render::Batcher& b, float alpha) {
            Color{0.95F, 0.55F, 0.45F, 1.0F}, noteA);
     if (testShopOpen_) renderTestShop(b, px, py);
   }
+
+  // The manual is drawn LAST and opaque: it is the topmost overlay, so it covers
+  // the HUD, the pause sheet, the bestiary and the sandbox alike.
+  if (manualOpen_) renderManual(b, px, py);
 
   b.flush();
 }

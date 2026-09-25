@@ -8,6 +8,13 @@
 
 namespace core::render {
 
+// True when every character of `s` has a real glyph in the bitmap font: ASCII
+// 32..96, with lowercase folded onto uppercase. Anything else is drawn as '?'
+// by Batcher::text, so an em dash or a curly quote in a content file silently
+// becomes a screen full of question marks. Content loaders call this to reject
+// undrawable text at load time instead of at pixel time.
+[[nodiscard]] bool fontSupports(std::string_view s);
+
 // Instanced colored-shape renderer (GL 3.3 core).
 // One draw call per flush(); circles are cut in the fragment shader.
 // Textures are not required: everything is drawn as colored rects/circles.

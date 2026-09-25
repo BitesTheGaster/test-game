@@ -31,6 +31,60 @@ curves. Tables of all content are generated into
   variants you have beaten.
 - Dying shows the game-over screen; **R** restarts (deterministic seed 1337).
 
+## The main menu
+
+Six rows: **START RUN**, **SKIN**, **OUTLINE**, **MANUAL**, **RESET PROGRESS**,
+**QUIT**. The row indices are named constants (`kMenuStart` … `kMenuQuit`) with
+a `static_assert` tying them to the render row table, so a row cannot be inserted
+without the code noticing.
+
+- **SKIN** / **OUTLINE** cycle with ←/→ or on Enter, skipping outlines the profile
+  has not unlocked. Both mark the profile dirty so `main()` persists them.
+- **MANUAL** opens the in-game manual (see below). **F1** does the same, from the
+  menu, from a live run and from the pause screen alike.
+
+### In-game manual (F1)
+
+`assets/data/manual.toml` is the same documentation this repo ships in `docs/`,
+trimmed to what the 5×7 bitmap font can draw (ASCII 32–96 only: no lowercase, no
+accents, no box drawing) and split into one-`[[page]]`-per-screen chunks. It is
+loaded into `Content::manual` alongside the weapons and enemies.
+
+- The manual is a **topmost modal overlay**. It is checked before the menu in
+  `advance()`, so it eats the frame the simulation would otherwise get, and it is
+  drawn **last and opaque** in `render()`, so it covers the HUD, the pause sheet,
+  the bestiary and the sandbox alike.
+- **Missing file is tolerated** (a stripped distribution must still start, and the
+  menu row reads `< no manual in build >`); a **malformed file throws**, because
+  a typo in the manual is a content bug worth failing loudly on.
+- `loadContent()` **rejects any character the font cannot draw**
+  (`core::render::fontSupports`), so a stray em dash fails the content load
+  instead of rendering as a screen full of question marks.
+- Line markup: a leading `>` is stripped and drawn as a highlighted bullet, a
+  leading `#` as a sub-heading, two leading spaces as an indent, and `""` is a
+  spacer. The prefixes only ever make a line *shorter* on screen.
+- Arrows and **1**–**5** flip pages, both wrapping. A test asserts every shipped
+  page fits one screen at the reference 720 px height, so a page can never grow
+  into a "...MORE, NEXT PAGE" marker that hides half a topic with no way to see
+  it.
+
+### Reset progress
+
+The only thing in the game that deletes earned progress, so it is **two-step**:
+
+1. **Enter** on RESET PROGRESS calls `beginProgressReset()` — it *arms* the
+   wipe and repaints the row (`RESET? PRESS AGAIN`, `ENTER = WIPE ALL`, plus a
+   one-line warning). Nothing is deleted.
+2. **Enter** again calls `confirmProgressReset()`: `*profile_ = Profile{}`,
+   `syncedUnlocks_ = 0`, `profileDirty_ = true`, `applyProfileToPlayer()`.
+
+Any menu navigation (↑ ↓ ← →) **disarms** it, so a wipe cannot be armed on one
+row and fired from another. Without an attached profile the row is inert and
+cannot be armed at all. `syncedUnlocks_` is cleared on the wipe because the Game
+remembers which unlocks it has already pushed into the profile; leaving that
+memory behind would let the next elite kill re-push a bit the player no longer
+has and hand the outline straight back.
+
 ## The player
 
 | Stat | Meaning |
@@ -38,9 +92,10 @@ curves. Tables of all content are generated into
 | Max HP | Starts at 100, growable via `max_hp_add` (also heals by the same amount) |
 | Regen | Flat HP per second (`regen_add`) |
 | Defense | One stat that mitigates all damage (see below) |
-| Shield | Absorbs damage point-for-point before HP, regenerates out of combat |
-| Lifesteal | Per-hit chance to heal; see [Lifesteal & healing](#lifesteal--healing) |
+| Shield | Absorbs damage point-for-point before HP; the pool **and** its refill rate/delay are both cards |
+| Lifesteal | Per-**kill** chance to heal; see [Lifesteal & healing](#lifesteal--healing) |
 | Heal (H) | Guaranteed 50% max-HP heal on a 30 s cooldown |
+| Weapon slots | 4 to start, 8 fully stacked; see [Weapon slots](#weapon-slots) |
 | Move speed | Base × `speedMul` |
 | Damage / cooldown | Global multipliers applying to every weapon |
 | Projectiles / pierce | Additive buffs applied to every weapon |
@@ -92,10 +147,25 @@ walk. Momentum is the one thing that cannot be banked.
   sheet still shows the build you actually own next to the live chain).
 
 The point is a decision, not a bonus: standing *in* the horde is the only way to
-keep the chain fed and also the only way to lose it. Four cards bend it —
-**Blood Surge** (+1% damage per stack), **Rampage** (+4% move speed per stack),
-**Deep Reserves** (+2 s of patience) and the **Bloodthirst** unique (twice the
-stacks per kill, double the cap, +3 s of patience).
+keep the chain fed and also the only way to lose it. Seven cards bend it, and
+between them they cover **every** axis the meter has:
+
+| Card | Kind | What it moves |
+| --- | --- | --- |
+| **Blood Surge** | normal, 2 | +1% damage per stack |
+| **Rampage** | normal, 1 | +4% move speed per stack |
+| **Deep Reserves** | normal, 1 | +2 s of patience |
+| **Kill Tempo** | normal, 3 | +0.5% fire rate per stack |
+| **Long Tail** | normal, 2 | +6 stacks that count toward the cap |
+| **Cull** | normal, 2 | +0.5 stacks per kill |
+| **Bloodthirst** | unique | twice the stacks per kill, double the cap, +3 s of patience |
+
+**Kill Tempo** is the one that was missing for longest: `momentumRate` was a live
+simulation field from the first commit and no card could ever raise it, so a
+chain build was structurally forced to be a damage build no matter how it was
+assembled. **Long Tail** and **Cull** are the other two gaps — the cap and the
+fill rate were reachable only through a unique, which meant a chain build either
+had to be lucky or had to settle for the 20-stack default.
 
 ### Defense
 
@@ -113,12 +183,22 @@ large hits.
 
 ### Shield
 
+A shield is a **pool and a clock**, and both halves are now cards. Until this
+round only the pool was: `shieldMax` grew while the refill stayed hard-coded at
+10 HP/s after a hard-coded 4 s wait, so a burst build simply re-took the same
+chunk of HP five seconds later and the shield cards read as dead picks.
+
 - `shieldMax` is raised by `shield_add` upgrades (normal, uniques and
   milestones all use it).
 - Damage is absorbed by the shield **after** defense mitigation,
   point-for-point; HP only drops once the shield is empty.
-- The shield **regenerates at 10 HP/s after 4 seconds without taking damage**.
-  Taking any damage resets the delay.
+- The shield **regenerates at `kShieldRegenRate` (10 HP/s) × `shieldRegenMul`
+  after `shieldRegenDelay()` seconds without damage**. Taking any damage resets
+  the delay. Both numbers are on the character sheet.
+- `shield_regen` cards (**Aegis Flow**, 3 stacks, +60% each) raise the rate and
+  also top the pool up, so the card feels immediate.
+- `shield_delay` cards (**Quickdraw**, 2 stacks, −1 s each) shorten the wait.
+- The delay is floored at **0.5 s**, so no build can make the pool permanent.
 - Picking a `shield_add` card refills the shield to its new max.
 - The current shield is drawn as a bar under the player's HP bar.
 
@@ -146,12 +226,17 @@ large hits.
   *flat* heal rather than the chance, and halving it would just duplicate the
   default behaviour.
 - Regen adds flat HP every fixed tick (0.0556 HP/s per point).
+- **Field Kit** (`heal_pct`, 2 stacks) heals **40% of your *current* max HP** the
+  moment you take it. It resolves against the live pool rather than freezing the
+  value at pickup time, so it still composes with a later max-HP card. This is
+  the only card that heals, and it exists because `heal` was a fully implemented
+  effect that no card in the game could reach.
 
 ## Weapons
 
-- **4 weapon slots** to begin with, **7** at full Arsenal Core stacks. Each slot
-  runs its own cooldown, damage, projectile count/speed/life/pierce/spread and
-  projectile tint.
+- **4 weapon slots** to begin with, **8** at full stack. Each slot runs its own
+  cooldown, damage, projectile count/speed/life/pierce/spread and projectile
+  tint.
 - Every weapon fires `projectiles` bolts in a fan of `spread` radians around
   the aim direction. The fan angle caps at a reasonable maximum so extra
   spread never wraps around backward.
@@ -282,15 +367,27 @@ weapon grant:
 - Evolutions and supers are **not** added to the normal weapon pool before the
   prerequisites are met.
 - Picking one grants the evolved weapon **in addition to** the ingredients'
-  slot usage (it occupies one of the 4 slots; you never lose the ingredients).
+  slot usage (it occupies one of the arsenal's slots; you never lose the
+  ingredients).
 
 ## Weapon slots
 
 The arsenal starts at **4** weapon slots. That is a hard cap for most of a run:
 the level-up offer stops appearing for weapons once you are full.
 
-**Arsenal Core** (`+1 weapon slot`, **max 3 stacks**) is the only way past it.
-Each stack adds one slot, so a fully-stacked build can hold **7** weapons.
+Two cards get past it, both using the same `weapon_slot_add` effect:
+
+- **Arsenal Core** (`+1 weapon slot`, **normal, 3 stacks**) — the grind.
+- **Hollow Chamber** (`+1 weapon slot`, **unique, 1 stack**) — the one-shot that
+  hands you the last slot.
+
+A fully-stacked build holds **8** weapons, which is `Game::kMaxWeapons` and the
+size of the `weapons_` storage array. `weaponSlots` is clamped to
+`kMaxSlotCards` at the point the effect is applied, and `weaponCap()` clamps
+again at the point it is read, so a hand-edited `upgrades.toml` that granted 40
+slots still cannot write past the array. `addWeapon()` additionally refuses past
+`kMaxWeapons` outright — the array bound is a memory-safety check, not a balance
+question.
 
 ## Level-ups
 
@@ -364,8 +461,8 @@ once. See [`content.md`](content.md) for the exact list; the rules they bend:
 | Deep Freeze | Stasis: +1 s of duration, and the slowed world drops another 0.08× |
 | Cascade | Every ability also fires a 40% Overload at the same spot |
 
-**Weapon uniques** — twenty-one weapons have an exclusive treasure card,
-offered only while that weapon is equipped (the card carries
+**Weapon uniques** — **every one of the 32 weapons** has an exclusive treasure
+card, offered only while that weapon is equipped (the card carries
 `weapon = "<id>"`), so the pool stays relevant to your loadout:
 
 | Weapon | Unique | Effect |
@@ -391,9 +488,64 @@ offered only while that weapon is equipped (the card carries
 | Chaos Sphere | Detonation Chain | Every bounce splashes area damage around the hit |
 | Sundering Core | Event Collapse | Ring expands faster, wider, and hits harder |
 | Tidal Lash | Undertow | A 35% wider lash that flings 40% harder and reaches further |
+| **Radiant Halo** | Corona Mantle | Beams shove for 6, 40% wider, 15% longer, +20% damage |
+| **Void Gyre** | Black Gyre | 45% harder pull, 30% further reach, fatter core, denser ticks |
+| **Prism Array** | Total Internal Reflection | One more independent beam, 40% longer ricochet, +15% range |
+| **Frost Shards** | Rime Lances | +4 pierce and 40% longer flight, at 80% damage each |
+| **Siege Mortar** | Siege Doctrine | A 3-shell salvo on a double fuse, 35% wider blasts, 20% slower |
+| **Pinball Puck** | Silver Skewer | +10 bounces, no damage decay, 30% longer reach per hop |
+| **Jackhammer Drill** | Overdrive Bore | 60% wider bite, 40% longer reach, strikes far faster |
+| **Shock Core** | Standing Discharge | The ring lingers, expands faster and re-strikes twice as fast |
+| **Barbed Whip** | Barbed Chain | The lash goes all the way around, 30% further, 50% harder shove |
+| **Seraph Array** | Wingbeat | The wings spin 60% faster, shove for 5 and burn 30% wider |
+| **Event Horizon** | Singularity | 50% harder pull, fatter core, further reach, denser ticks |
 
-The newer Radiant Halo, Seraph Array, Event Horizon, Void Gyre and Prism Array
-have no exclusive card; they rely on their raw stats and synergies instead.
+The bolded rows are new. Eleven weapons used to ship with **no** card at all —
+Radiant Halo, Void Gyre, Prism Array, Frost Shards, Siege Mortar, Pinball Puck,
+Jackhammer Drill, Shock Core, Barbed Whip, Seraph Array and Event Horizon — which
+meant picking one up froze its entire stat block: every card that could improve
+it was a global stat that hit all eight weapons at once, so there was never a
+reason to draw it again. Each new unique edits the parameter that weapon's
+identity is *made of* (the halo's knockback, the gyre's pull, the prism's beam
+count) rather than a flat damage number, because a +20% damage unique is the
+same card 32 times over.
+
+Every one of these is now covered by a test that walks the whole roster and
+fails if any weapon is missing its unique — the rule is enforced by CI, not by
+good intentions.
+
+### Focus cards for thin weapons
+
+An exclusive unique is a single pick. Once it is taken, a weapon whose only card
+was that unique has no reason to appear in the level-up pool again, so eleven
+weapons also ship a **normal, stackable** card aimed at an identity parameter
+that no card had ever touched:
+
+| Weapon | Card | What it moves |
+|--------|------|---------------|
+| Void Orb | Eventide Hunger (2) | 30% longer reach per hop, and the per-bounce decay floors at 0.9× |
+| Soul Scythe | Long Arm (3) | +6% reap radius |
+| Solar Lance | Focused Burn (3) | +6% range, +4% width |
+| Storm Caller | Arc Cascade (3) | +6% jump range, +5% damage per link |
+| Void Nova | Rupture (3) | +6% ring radius, +4% expansion speed |
+| Inferno | Pyre Spread (3) | +6% reap radius, +0.5 s of burning ground |
+| Pulsar | Long Cast (3) | +7% flight range, +6% return speed |
+| Ember Sprayer | Pooled Ash (2) | One more burning pool at a time |
+| Inferno | Ashfall Spread (2) | One more burning pool at a time |
+| Runic Hammer | Concussion Charge (3) | +8% blast radius, +6% knockback |
+| Siege Mortar | Wide Shell (3) | +8% blast radius, +6% knockback |
+| Grave Bell | Echo Anchor (2) | +0.8 s of beacon, one more bell at a time |
+| Ashfall | Siege Chime (2) | +0.8 s of beacon, one more bell at a time |
+| Radiant Halo | Long Wings (3) | +8% beam reach, +1.5 shove per beam |
+| Void Gyre | Denser Gyre (3) | Fatter core, wider orbit, 12% faster spin |
+| Prism Array | Beam Lattice (2) | One more independent beam, +5% range |
+
+**Beam Lattice** is the interesting one. The prism's beam count lives in
+`prismMaxTargets`, a field of its own, so the global `proj_add` card that
+grows the halo and the gyre **never touched it**. A card that silently does
+nothing on the weapon it is scoped to is worse than no card at all, so the
+weapon-scoped card test arms every weapon in turn, takes every card scoped to
+it, and requires the weapon's own numbers to actually move.
 
 ### Milestones
 
@@ -474,11 +626,22 @@ Notes:
 - Cooldowns are multiplied by `abilityCdMul`, which cards only ever push
   **down** (floor **0.35×**). `abilityCdMul` never reaches zero, so no build
   gets to spam all three keys at once.
-- Five ability cards retune them (never unlock them): **Combat Reflexes**
-  (`-25%` cooldown, 3 stacks), **Heavy Hands** (a bigger, harder Overload),
-  **Phase Memory** (a longer dash and a longer mercy window), **Deep Freeze**
-  (longer, deeper Stasis) and **Cascade** (every ability also fires a 40%
-  Overload at the same spot).
+- **Eight** ability cards retune them (never unlock them). Five are one-shot
+  uniques you have to be lucky enough to roll: **Combat Reflexes** (`-25%`
+  cooldown, 3 stacks), **Heavy Hands** (a bigger, harder Overload), **Phase
+  Memory** (a longer dash and a longer mercy window), **Deep Freeze** (longer,
+  deeper Stasis) and **Cascade** (every ability also fires a 40% Overload at the
+  same spot).
+- The other three are **normal, stackable** cards, one per button, so the J/K/L
+  row is a real build axis instead of a novelty you hope to draw once:
+  **Phase Mirror** (`ability_dash`, 3 stacks, +0.8 distance and +0.06 s of
+  landing invulnerability), **Concussion Core** (`ability_burst`, 3 stacks, +0.8
+  radius / +30 damage / +1 knockback) and **Cryostasis** (`ability_slow`, 3
+  stacks, +1 s and another −0.08× on the world clock).
+- Two of those are floored so a maxed build cannot delete the button's purpose:
+  `blinkDist` caps at **9.0** (a dash that crosses the screen is a skip button,
+  and the dash exists for positioning) and `stasisSlow` at **0.15** (the world
+  never grinds to a halt outright).
 - The sandbox snapshots the ability cooldowns and the stasis timer along with
   everything else, so testing a dash cannot leave the real run mid-cooldown.
 

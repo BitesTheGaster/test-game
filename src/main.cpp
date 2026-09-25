@@ -90,6 +90,7 @@ game::FrameInput pollInput(bool& quit, float deltaSeconds, bool menuActive,
     if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat) {
       switch (event.key.key) {
         case SDLK_ESCAPE: in.togglePause = true; break;
+        case SDLK_F1: in.manualToggle = true; break;
         case SDLK_1: in.choose1 = true; break;
         case SDLK_2: in.choose2 = true; break;
         case SDLK_3: in.choose3 = true; break;
@@ -193,8 +194,10 @@ int main() {
       previous = now;
       if (dt > 0.1F) dt = 0.1F;
 
+      // The manual is a modal overlay, so the arrow-key repeat state is shared
+      // with the menu and the item picker: holding DOWN flips pages.
       const game::FrameInput input = pollInput(
-          quit, dt, g.menuOpen() || g.testShopOpen(), menuRepeats);
+          quit, dt, g.menuOpen() || g.testShopOpen() || g.manualOpen(), menuRepeats);
       g.advance(dt, input);
       // Persist the profile whenever a kill unlocked an outline or the menu
       // changed a selection. consumeProfileDirty() clears the flag.

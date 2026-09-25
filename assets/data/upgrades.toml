@@ -120,6 +120,35 @@ effect = "momentum_window"
 value = 2.0
 max_stacks = 1
 
+# The chain's fire-rate axis existed in the simulation from day one and had no
+# card at all, so a chain build could only ever be a damage build. These three
+# cover the missing meters: how fast it fires, how long it may grow, and how
+# eagerly each kill feeds it.
+
+[[upgrade]]
+id = "kill_tempo"
+name = "Kill Tempo"
+desc = "Kill chain: +0.5% fire rate per stack"
+effect = "momentum_rate"
+value = 0.5
+max_stacks = 3
+
+[[upgrade]]
+id = "long_tail"
+name = "Long Tail"
+desc = "Kill chain: 6 more stacks count toward the multipliers"
+effect = "momentum_chain"
+value = 6.0
+max_stacks = 2
+
+[[upgrade]]
+id = "cull"
+name = "Cull"
+desc = "Kill chain: +0.5 stacks per kill"
+effect = "momentum_gain"
+value = 0.5
+max_stacks = 2
+
 [[upgrade]]
 id = "regen"
 name = "Regeneration"
@@ -288,6 +317,35 @@ name = "Runic Ward"
 desc = "+30 regenerating shield"
 effect = "shield_add"
 value = 30
+max_stacks = 2
+
+# A shield is a pool AND a clock. Until these two existed the pool could grow
+# but the refill could not, so a burst build simply re-took the same 80 HP five
+# seconds later and the shield card felt dead. Both numbers are on the character
+# sheet now, so what they buy is visible.
+
+[[upgrade]]
+id = "aegis_flow"
+name = "Aegis Flow"
+desc = "Shield refills 60% faster, and refills right now"
+effect = "shield_regen"
+value = 0.6
+max_stacks = 3
+
+[[upgrade]]
+id = "quickdraw_ward"
+name = "Quickdraw"
+desc = "Shield starts refilling 1s sooner after you take a hit"
+effect = "shield_delay"
+value = 1.0
+max_stacks = 2
+
+[[upgrade]]
+id = "field_kit"
+name = "Field Kit"
+desc = "Patch yourself up: heal 40% of your maximum HP"
+effect = "heal_pct"
+value = 0.4
 max_stacks = 2
 
 [[upgrade]]
@@ -1079,6 +1137,293 @@ max_stacks = 1
 kind = "unique"
 weapon = "tidewhip"
 
+# Radiant Halo, Void Gyre and Prism Array were the last three weapons in the
+# roster with NO weapon-scoped card at all: pick one up and its whole stat block
+# was frozen, reachable only through the global cards. Each of these edits the
+# parameter that weapon's identity is actually made of, not a flat damage bump.
+
+[[upgrade]]
+id = "uw_halo_corona"
+name = "Corona Mantle"
+desc = "Radiant Halo: beams shove for 6, 40% wider, 15% longer, +20% damage"
+effect = "w_unique_corona"
+value = 1
+max_stacks = 1
+kind = "unique"
+weapon = "halo"
+
+[[upgrade]]
+id = "uw_vortex_gyre"
+name = "Black Gyre"
+desc = "Void Gyre: 45% harder pull, 30% further reach, fatter core, ticks faster"
+effect = "w_unique_gyre"
+value = 1
+max_stacks = 1
+kind = "unique"
+weapon = "vortex"
+
+[[upgrade]]
+id = "uw_prism_refract"
+name = "Total Internal Reflection"
+desc = "Prism Array: one more independent beam, 40% longer ricochet, +15% range"
+effect = "w_unique_refract"
+value = 1
+max_stacks = 1
+kind = "unique"
+weapon = "prism"
+
+# The last eight weapons to get their own treasure. Every weapon in the roster
+# now has at least one `kind = "unique"` card scoped to it, which is the rule
+# the content test enforces: a weapon with no unique means its identity stat
+# block is unreachable in every run.
+
+[[upgrade]]
+id = "uw_shard_rime"
+name = "Rime Lances"
+desc = "Frost Shards: +4 pierce and 40% longer flight, at 80% damage each"
+effect = "w_unique_rime"
+value = 1
+max_stacks = 1
+kind = "unique"
+weapon = "shard"
+
+[[upgrade]]
+id = "uw_mortar_doctrine"
+name = "Siege Doctrine"
+desc = "Siege Mortar: a 3-shell salvo on a double fuse, 35% wider blasts, 20% slower"
+effect = "w_unique_siege_doctrine"
+value = 1
+max_stacks = 1
+kind = "unique"
+weapon = "mortar"
+
+[[upgrade]]
+id = "uw_pinball_skewer"
+name = "Silver Skewer"
+desc = "Pinball Puck: +10 bounces, no damage decay, 30% longer reach per hop"
+effect = "w_unique_skewer"
+value = 1
+max_stacks = 1
+kind = "unique"
+weapon = "pinball"
+
+[[upgrade]]
+id = "uw_drill_bore"
+name = "Overdrive Bore"
+desc = "Jackhammer Drill: 60% wider bite, 40% longer reach, strikes far faster"
+effect = "w_unique_bore"
+value = 1
+max_stacks = 1
+kind = "unique"
+weapon = "drill"
+
+[[upgrade]]
+id = "uw_shockcore_discharge"
+name = "Standing Discharge"
+desc = "Shock Core: the ring lingers, expands faster and re-strikes twice as fast"
+effect = "w_unique_discharge"
+value = 1
+max_stacks = 1
+kind = "unique"
+weapon = "shockcore"
+
+[[upgrade]]
+id = "uw_whip_chainlash"
+name = "Barbed Chain"
+desc = "Barbed Whip: the lash goes all the way around, 30% further, 50% harder shove"
+effect = "w_unique_chainlash"
+value = 1
+max_stacks = 1
+kind = "unique"
+weapon = "whip"
+
+[[upgrade]]
+id = "uw_seraph_wingbeat"
+name = "Wingbeat"
+desc = "Seraph Array: the wings spin 60% faster, shove for 5 and burn 30% wider"
+effect = "w_unique_wingbeat"
+value = 1
+max_stacks = 1
+kind = "unique"
+weapon = "seraph"
+
+[[upgrade]]
+id = "uw_horizon_singularity"
+name = "Singularity"
+desc = "Event Horizon: 50% harder pull, fatter core, further reach, denser ticks"
+effect = "w_unique_singularity"
+value = 1
+max_stacks = 1
+kind = "unique"
+weapon = "eventhorizon"
+
+# --- Second slots for the weapons that only ever had their unique --------------
+# Orb, Scythe, Solar Lance, Storm Caller, Void Nova, Inferno, Pulsar, Ember
+# Sprayer, Runic Hammer, Siege Mortar and Grave Bell each shipped with a single
+# one-shot unique and nothing else, so once that unique was taken the weapon was
+# a dead slot. These are NORMAL (stackable) cards aimed at the identity
+# parameter that no card had ever touched, which is what a build with a
+# favourite weapon needs most: a reason to keep drawing it at levels 30, 31
+# and 32.
+
+[[upgrade]]
+id = "w_orb_hunger"
+name = "Eventide Hunger"
+desc = "Void Orb: finds the next victim 30% faster and loses far less per bounce"
+effect = "w_orb_grow"
+value = 1
+max_stacks = 2
+weapon = "orb"
+
+[[upgrade]]
+id = "w_scythe_longarm"
+name = "Long Arm"
+desc = "Soul Scythe: +6% reap radius"
+effect = "w_scythe_reach"
+value = 1
+max_stacks = 3
+weapon = "scythe"
+
+[[upgrade]]
+id = "w_beam_focus"
+name = "Focused Burn"
+desc = "Solar Lance: +6% range and +4% width"
+effect = "w_beam_lance"
+value = 1
+max_stacks = 3
+weapon = "beam"
+
+[[upgrade]]
+id = "w_storm_cascade"
+name = "Arc Cascade"
+desc = "Storm Caller: +6% jump range and +5% damage per link"
+effect = "w_chain_arc"
+value = 1
+max_stacks = 3
+weapon = "storm"
+
+[[upgrade]]
+id = "w_nova_rupture"
+name = "Rupture"
+desc = "Void Nova: +6% ring radius and +4% expansion speed"
+effect = "w_nova_wide"
+value = 1
+max_stacks = 3
+weapon = "nova"
+
+[[upgrade]]
+id = "w_inferno_pyre"
+name = "Pyre Spread"
+desc = "Inferno: +6% reap radius, burning ground lasts 0.5s longer"
+effect = "w_reap_wide"
+value = 1
+max_stacks = 3
+weapon = "inferno"
+
+[[upgrade]]
+id = "w_pulsar_longcast"
+name = "Long Cast"
+desc = "Pulsar: +7% flight range and +6% return speed"
+effect = "w_boomerang_reach"
+value = 1
+max_stacks = 3
+weapon = "pulsar"
+
+[[upgrade]]
+id = "w_flame_pools"
+name = "Pooled Ash"
+desc = "Ember Sprayer: one more burning pool on the ground at a time"
+effect = "w_zone_pools"
+value = 1
+max_stacks = 2
+weapon = "flame"
+
+[[upgrade]]
+id = "w_inferno_pools"
+name = "Ashfall Spread"
+desc = "Inferno: one more burning pool on the ground at a time"
+effect = "w_zone_pools"
+value = 1
+max_stacks = 2
+weapon = "inferno"
+
+[[upgrade]]
+id = "w_hammer_concussion"
+name = "Concussion Charge"
+desc = "Runic Hammer: +8% blast radius and +6% knockback"
+effect = "w_bomb_blast"
+value = 1
+max_stacks = 3
+weapon = "hammer"
+
+[[upgrade]]
+id = "w_mortar_concussion"
+name = "Wide Shell"
+desc = "Siege Mortar: +8% blast radius and +6% knockback"
+effect = "w_bomb_blast"
+value = 1
+max_stacks = 3
+weapon = "mortar"
+
+[[upgrade]]
+id = "w_lure_anchor"
+name = "Echo Anchor"
+desc = "Grave Bell: the beacon lasts 0.8s longer, and one more may be planted"
+effect = "w_lure_anchor"
+value = 1
+max_stacks = 2
+weapon = "lure"
+
+[[upgrade]]
+id = "w_lure_anchor_siege"
+name = "Siege Chime"
+desc = "Ashfall: the beacon lasts 0.8s longer, and one more may be planted"
+effect = "w_lure_anchor"
+value = 1
+max_stacks = 2
+weapon = "siege"
+
+# Halo, Void Gyre and Prism Array had a single card between them once their
+# uniques landed. The prism especially was stuck: its beam count lives in its
+# own field, so the global "+1 projectile" card the halo and the gyre enjoy
+# never touched it at all.
+
+[[upgrade]]
+id = "w_prism_lattice"
+name = "Beam Lattice"
+desc = "Prism Array: one more independent beam, +5% range"
+effect = "w_prism_lattice"
+value = 1
+max_stacks = 2
+weapon = "prism"
+
+[[upgrade]]
+id = "w_halo_wings"
+name = "Long Wings"
+desc = "Radiant Halo: +8% beam reach and 1.5 more shove per beam"
+effect = "w_halo_wings"
+value = 1
+max_stacks = 3
+weapon = "halo"
+
+[[upgrade]]
+id = "w_vortex_core"
+name = "Denser Gyre"
+desc = "Void Gyre: fatter core, wider orbit, 12% faster spin"
+effect = "w_vortex_core"
+value = 1
+max_stacks = 3
+weapon = "vortex"
+
+[[upgrade]]
+id = "hollow_chamber"
+name = "Hollow Chamber"
+desc = "ONE more weapon slot. Your arsenal holds eight"
+effect = "weapon_slot_add"
+value = 1
+max_stacks = 1
+kind = "unique"
+
 # --- Abilities (J / K / L) ----------------------------------------------------
 # The three abilities are live from the first second of a run, so these cards
 # never unlock anything — they only make the keys come back sooner or hit
@@ -1128,6 +1473,36 @@ effect = "ability_echo"
 value = 0.4
 max_stacks = 1
 kind = "unique"
+
+# --- Stackable ability cards ---------------------------------------------------
+# The uniques above are dramatic one-shots you have to be lucky enough to roll.
+# These are the ordinary level-up cards, one per button, so a build can actually
+# scale J / K / L instead of hoping the right treasure shows up. Same three
+# cooldown-only contract: none of them unlocks a key, they all retune one.
+
+[[upgrade]]
+id = "phase_mirror"
+name = "Phase Mirror"
+desc = "Phase Dash: +0.8 distance, +0.06s of invulnerability on arrival"
+effect = "ability_dash"
+value = 0.8
+max_stacks = 3
+
+[[upgrade]]
+id = "concussion_core"
+name = "Concussion Core"
+desc = "Overload: +0.8 radius, +30 damage, +1 knockback"
+effect = "ability_burst"
+value = 0.8
+max_stacks = 3
+
+[[upgrade]]
+id = "cryostasis"
+name = "Cryostasis"
+desc = "Stasis: +1s of duration, and the slowed world drops another 0.08x"
+effect = "ability_slow"
+value = 1.0
+max_stacks = 3
 
 # --- Milestones (every power-of-two level from 4 on) -------------------------
 

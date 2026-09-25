@@ -59,6 +59,10 @@ struct FrameInput {
   bool menuLeft = false;  // Left / A
   bool menuRight = false; // Right / D
   bool menuConfirm = false; // Enter / Space: activate the highlighted row
+  // F1: open/close the in-game manual. Legal from the main menu, from a run and
+  // from the pause screen, because a manual you can only read at the start is a
+  // manual nobody reads.
+  bool manualToggle = false;
 };
 
 // Attack-speed formula: the final delay between shots is
@@ -103,6 +107,14 @@ struct PlayerStats {
   float armorPierce = 0.0F;
   // Shield: regenerating damage buffer (see rules in game.hpp docs).
   float shieldMax = 0.0F;
+  // Shield refill SPEED and how long the "out of combat" wait before it starts.
+  // Both used to be bare constants, which made a shield build a one-card trick:
+  // the pool grew but the rate and the downtime did not, so a burst build
+  // simply re-took the same chunk of HP five seconds later. Cards can now scale
+  // the rate and shorten the delay (kShieldRegenRate / kShieldRegenDelay are the
+  // 1.0x / 0.0s baselines).
+  float shieldRegenMul = 1.0F;
+  float shieldRegenDelay = 0.0F;
   // XP gain multiplier (Scholar-style items).
   float xpMul = 1.0F;
 
@@ -113,8 +125,9 @@ struct PlayerStats {
   float aimJitter = 0.0F;
   int extraChoice = 0;    // +N level-up cards
   int rerollCharges = 0;  // +N extra rerolls (the base budget is already 1)
-  // Extra weapon slots. The arsenal starts at kBaseWeapons (4) and the
-  // "Arsenal Core" card adds one slot per stack, up to 3 stacks => 7 total.
+  // Extra weapon slots. The arsenal starts at kBaseWeapons (4); the "Arsenal
+  // Core" card adds one slot per stack (3 stacks) and the "Hollow Chamber"
+  // unique adds the last one, so a fully stacked build holds kMaxWeapons (8).
   int weaponSlots = 0;
   float thornsDmg = 0.0F; // AoE burst around player on hit
   int adrenaline = 0;     // speed burst when HP is low
@@ -294,6 +307,80 @@ public:
     return q;
   }
 
+  // --- In-game manual (F1) ---------------------------------------------------
+  // The same documentation docs/ ships, trimmed to what the bitmap font can
+  // draw and split into pages. It is a Game-level overlay so it can be opened
+  // from the main menu, from a live run and from the pause screen.
+  void openManual();
+  void closeManual();
+  [[nodiscard]] bool manualOpen() const { return manualOpen_; }
+  [[nodiscard]] std::size_t manualPageIndex() const { return manualPage_; }
+  [[nodiscard]] std::size_t manualPageCount() const { return content_.manual.size(); }
+  void nextManualPage();
+  void prevManualPage();
+  // Page id shown right now, or "" when the build ships no manual.
+  [[nodiscard]] std::string manualPageId() const;
+
+  // --- Progress reset (main menu) --------------------------------------------
+  // Wipes the attached profile back to first-launch defaults: default skin, no
+  // outline, no earned unlocks, and repaints the player. Marks the profile
+  // dirty so main() persists the wipe.
+  //
+  // Two-step on purpose. `beginProgressReset()` arms it and returns true; the
+  // actual wipe only happens on `confirmProgressReset()`, which must be a
+  // SEPARATE call. A destructive action that fires on the same Enter that
+  // selected it is one stray keypress away from wiping hours of unlocks.
+  void beginProgressReset();
+  [[nodiscard]] bool progressResetArmed() const { return resetArmed_; }
+  // Wipes and disarms. Returns false when nothing was armed.
+  bool confirmProgressReset();
+  void cancelProgressReset() { resetArmed_ = false; }
+
+  // --- Defense clock ----------------------------------------------------------
+  // A shield is a pool AND a clock. These are the 1.0x rate and the 0.0s
+  // baseline; the shield_add cards grow the pool, shield_regen and shield_delay
+  // change these two, and the character sheet prints the result.
+  static constexpr float kShieldRegenRate = 10.0F;  // HP/s once out of combat
+  static constexpr float kShieldRegenDelay = 4.0F;   // seconds without damage
+  // The delay is floored so no build can make the pool permanent.
+  static constexpr float kShieldRegenDelayFloor = 0.5F;
+
+  // --- Read-only build readouts ----------------------------------------------
+  // The numbers a card is supposed to move, exposed so tests (and the
+  // character sheet) can read the same value the simulation does rather than
+  // re-deriving it from the card's effect id.
+  // % fire rate the chain grants per live stack (see momentumFireRate() for the
+  // value the simulation actually applies, which is stacks * this).
+  [[nodiscard]] float momentumRatePerStack() const { return stats_.momentumRate; }
+  [[nodiscard]] float blinkDistance() const { return stats_.blinkDist; }
+  [[nodiscard]] float burstRadius() const { return stats_.burstRadius; }
+  [[nodiscard]] float burstDamage() const { return stats_.burstDamage; }
+  [[nodiscard]] float stasisDurationMax() const { return stats_.stasisDuration; }
+  [[nodiscard]] float stasisSlowFactor() const { return stats_.stasisSlow; }
+  // Shield refill HP/s and the seconds it waits after a hit before starting.
+  // The delay is floored at kShieldRegenDelayFloor, so no build can make the
+  // pool permanent. Exposed (not inlined into updateShield) so the character
+  // sheet and the tests read the same number the simulation does.
+  [[nodiscard]] float shieldRegenRate() const {
+    return kShieldRegenRate * std::max(0.1F, stats_.shieldRegenMul);
+  }
+  [[nodiscard]] float shieldRegenDelay() const;
+  // Base arsenal size + any "+1 weapon slot" cards. Weapons cannot be added
+  // past this, and the level-up offer stops appearing once it is full. Clamped
+  // to kMaxWeapons so a hand-edited content file cannot overflow the array.
+  [[nodiscard]] int weaponCap() const {
+    return std::min(kMaxWeapons, kBaseWeapons + std::max(0, stats_.weaponSlots));
+  }
+  // The arsenal starts at 4 weapons. Slot cards add more: "Arsenal Core" gives
+  // +1 per stack (3 stacks) and "Hollow Chamber" is the one-shot +1 that takes
+  // the build to the full eight. Public so a test can assert the shipped cap
+  // against the storage array rather than hard-coding a number.
+  static constexpr int kBaseWeapons = 4;
+  static constexpr int kMaxWeapons = 8;
+  // Hard cap on "+1 weapon slot" stacks, whatever the content says. Content can
+  // ship fewer (today: 3 + 1); it can never ship more than this.
+  static constexpr int kMaxSlotCards = kMaxWeapons - kBaseWeapons;
+
   // Test/debug hooks.
   void grantXp(float amount);
   // Test helper: add weapon by index (bypasses normal level-up flow)
@@ -301,6 +388,88 @@ public:
     starterChoicePending_ = false; // tests set up weapons directly
     addWeapon(defIndex);
   }
+  // Test helper: a comparable copy of one weapon slot's whole CONFIGURABLE stat
+  // block, so a test can assert that taking a card actually MOVED something
+  // instead of silently doing nothing. Comparing two snapshots with == covers
+  // every field at once, so a new WeaponSlot field needs no test edit. Pure
+  // runtime state (timers, the live bounce handle, the nova radius) is left out
+  // on purpose: it ticks on its own, so including it would make every
+  // comparison fail for reasons that have nothing to do with the card.
+  struct WeaponSnapshot {
+    int def = 0;
+    int attackType = 0;
+    float cooldown = 0;
+    float damage = 0;
+    int projectiles = 0;
+    float speed = 0;
+    float life = 0;
+    int pierce = 0;
+    float spread = 0;
+    float coneAngle = 0;
+    float coneRange = 0;
+    float coneTickRate = 0;
+    float orbitRadius = 0;
+    float orbitSpeed = 0;
+    int orbitCount = 0;
+    float bombArcHeight = 0;
+    float bombExplodeRadius = 0;
+    float bombKnockback = 0;
+    float bombFuse = 0;
+    float boomerangRange = 0;
+    float boomerangReturnSpeed = 0;
+    int bounceCount = 0;
+    float bounceRange = 0;
+    float bounceDamageMul = 0;
+    bool bounceInfinite = 0;
+    float beamRange = 0;
+    float beamWidth = 0;
+    float beamDuration = 0;
+    float haloKnockback = 0;
+    float sweepAngle = 0;
+    float sweepRadius = 0;
+    float sweepKnockback = 0;
+    float zoneRadius = 0;
+    float zoneDuration = 0;
+    float zoneDps = 0;
+    int zoneMaxPools = 0;
+    float chainJumpRange = 0;
+    int chainMaxJumps = 0;
+    float chainDamageMul = 0;
+    float novaMaxRadius = 0;
+    float novaExpandSpeed = 0;
+    float novaDamagePerTick = 0;
+    float novaTickRate = 0;
+    float area = 0;
+    float strength = 0;
+    bool homing = 0;
+    int bounces = 0;
+    float cdBonus = 0;
+    float sweepLead = 0;
+    float uniqueHeal = 0;
+    int beamSplit = 0;
+    float vortexRadius = 0;
+    float vortexReach = 0;
+    float vortexPull = 0;
+    float vortexOrbit = 0;
+    float vortexOrbitSpeed = 0;
+    float vortexTickRate = 0;
+    float prismRange = 0;
+    float prismWidth = 0;
+    int prismMaxTargets = 0;
+    float prismRicochet = 0;
+    float lureRadius = 0;
+    float lureReach = 0;
+    float lurePull = 0;
+    float lureDps = 0;
+    float lureDuration = 0;
+    float lureTickRate = 0;
+    int lureMaxBeacons = 0;
+    [[nodiscard]] bool operator==(const WeaponSnapshot& other) const;
+    [[nodiscard]] bool operator!=(const WeaponSnapshot& other) const {
+      return !(*this == other);
+    }
+  };
+  [[nodiscard]] WeaponSnapshot testWeaponSnapshot(int slotIndex) const;
   // Test helper: drop owned weapons + their persistent entities (orbit blades).
   void testClearWeapons();
   // Test helper: place a stationary, high-HP enemy at a world position.
@@ -368,6 +537,10 @@ public:
   // Test helper: route a raw damage packet through applyEnemyDamage() on the
   // first enemy (so defense mitigation and the lethal rule are exercised).
   void testDamageFirstEnemy(float dmg);
+  // Test helper: wound the PLAYER by `amount` HP, bypassing defense (the point
+  // is to set up a heal test, not to measure mitigation). Clamped so the run
+  // never ends from a test's own bookkeeping.
+  void testDamagePlayer(float amount);
   // Test helper: distance from the player to the first Enemy (-1 if none).
   [[nodiscard]] float testFirstEnemyDistToPlayer() const;
   // Test helper: distance from the first Enemy to the NEAREST live Vortex zone
@@ -396,6 +569,11 @@ public:
   // Test helper: the equipped weapon ids, oldest first (e.g. for test-mode
   // snapshot/restore assertions). Empty when no weapons are equipped.
   [[nodiscard]] std::vector<std::string> armedWeaponIds() const;
+  // Test helper: the names of every card in content that is scoped to this
+  // weapon id (focus cards and weapon uniques alike), in content order. Lets a
+  // test assert the "every weapon has cards" rule against the same roster the
+  // game offers.
+  [[nodiscard]] std::vector<std::string> collectWeaponCards(std::string_view weaponId) const;
   // Test helper: angular position (radians) of the first orbit blade, so a
   // test can measure how fast the dagger spins. -1 if no blades exist.
   [[nodiscard]] float testOrbitBladeAngle() const;
@@ -627,10 +805,8 @@ private:
     float lureTickRate = 0.15F;
     int lureMaxBeacons = 2;
   };
-  // The arsenal starts at 4 weapons; each "Arsenal Core" stack adds one more
-  // (max 3 stacks), so the storage array must hold the fully-stacked total.
-  static constexpr int kBaseWeapons = 4;
-  static constexpr int kMaxWeapons = kBaseWeapons + 3;
+  // The storage arrays below hold the fully-stacked weaponCap(), which the
+  // public constants above bound.
 
   // Pending spawn telegraphs (enemies walk in after a short warning).
   struct PendingSpawn {
@@ -703,9 +879,8 @@ private:
   void syncOrbitBlades(int slot); // add orbit blades up to the current count
   void syncHaloBeams(int slot);   // add halo beams up to the current count
   void syncVortices(int slot);    // add vortex zones up to the current count
-  // Base arsenal size + any "+1 weapon slot" stacks. Weapons cannot be added
-  // past this, and the level-up offer stops appearing once it is full.
-  [[nodiscard]] int weaponCap() const { return kBaseWeapons + stats_.weaponSlots; }
+  // weaponCap() (public, above) is the limit addWeapon enforces: weapons cannot
+  // be added past it, and the level-up offer stops appearing once it is full.
   void applyWeaponEffect(int slotIndex, std::string_view effect, float value);
   int findWeaponSlot(std::string_view weaponId) const;
   bool ownsWeapon(int defIndex) const;
@@ -738,12 +913,18 @@ private:
   void damagePlayerDirect(float amount); // no thorns trigger (DoT auras)
   void spawnParticles(float x, float y, core::render::Color c, int count, float speed);
   void renderPlayerStats(core::render::Batcher& b, float px, float py);
-  // Main menu overlay: title, the four rows (START / SKIN / OUTLINE / QUIT)
-  // and the live skin+outline preview.
+  // Main menu overlay: title, the five rows (START / SKIN / OUTLINE / MANUAL /
+  // RESET PROGRESS / QUIT) and the live skin+outline preview.
   void renderMainMenu(core::render::Batcher& b, float px, float py);
   // Handles one frame of menu input (navigation + activation). Runs before any
   // gameplay input so the menu is fully modal.
   void updateMainMenu(const FrameInput& input);
+  // In-game manual overlay: one page at a time, page list on the left, the
+  // page's own lines on the right.
+  void renderManual(core::render::Batcher& b, float px, float py);
+  // Handles one frame of manual input (page flipping, closing). The manual is
+  // modal too: it eats the frame so a page flip never also moves the player.
+  void updateManual(const FrameInput& input);
   // Skin + outline applied to the player Sprite, and the ring drawn around it.
   void applyProfileToPlayer();
   // Bestiary overlay (paused, B): discovered enemy types, their stats,
@@ -992,8 +1173,22 @@ private:
   // reports genuinely new unlocks.
   UnlockMask syncedUnlocks_ = 0;
   bool menuOpen_ = false;
-  int menuSelection_ = 0; // 0 START, 1 SKIN, 2 OUTLINE, 3 QUIT
+  // 0 START, 1 SKIN, 2 OUTLINE, 3 MANUAL, 4 RESET PROGRESS, 5 QUIT.
+  // Named so the tests and the renderer cannot drift apart on the numbering.
+  static constexpr int kMenuRows = 6;
+  static constexpr int kMenuStart = 0;
+  static constexpr int kMenuSkin = 1;
+  static constexpr int kMenuOutline = 2;
+  static constexpr int kMenuManual = 3;
+  static constexpr int kMenuReset = 4;
+  static constexpr int kMenuQuit = 5;
+  int menuSelection_ = kMenuStart;
   bool quitRequested_ = false;
+  // Armed by the first confirm on RESET PROGRESS; the wipe needs a second one.
+  bool resetArmed_ = false;
+  // In-game manual overlay.
+  bool manualOpen_ = false;
+  std::size_t manualPage_ = 0;
   // The selected outline is drawn as a ring around the player; this caches the
   // resolved color so render() does not touch the profile pointer.
   core::render::Color outlineColor_{0.0F, 0.0F, 0.0F, 0.0F};
