@@ -41,11 +41,18 @@ struct FrameInput {
   bool testModeToggle = false; // T: open/close the weapon test mode
   bool testShop = false;       // E: open/close the sandbox item picker
   bool testInvuln = false;     // I: toggle sandbox immortality
-  bool testKill = false;       // K: kill the player on demand
+  bool testKill = false;       // X: kill the player on demand
   bool testTime = false;       // F: cycle the sandbox difficulty timer
   // Note: `restart` (R) is repurposed INSIDE the sandbox as "max every item".
   bool heal = false;           // H: guaranteed 50% max-HP heal (cooldown-gated)
   bool bestiary = false;       // B: toggle the bestiary while paused
+  // --- Active abilities (always available, cooldown-gated) --------------------
+  // Three buttons, no menu, no cards required: the build decides how they are
+  // tuned, the player decides when to spend them. See the "Active abilities"
+  // section in docs/mechanics.md.
+  bool abilityBlink = false; // J: Phase Dash — teleport along your movement
+  bool abilityBurst = false; // K: Overload — knock everything around you away
+  bool abilitySlow = false;  // L: Stasis — the world slows down, you do not
   // --- Main menu --------------------------------------------------------------
   bool menuUp = false;    // Up / W
   bool menuDown = false;  // Down / S
@@ -131,6 +138,22 @@ struct PlayerStats {
   int momentumMax = 20;         // chain length that counts
   float momentumWindow = 3.0F;  // seconds of not killing before the chain drops
   float momentumGain = 1.0F;    // stacks per kill
+  // --- Active abilities (J / K / L) -------------------------------------------
+  // Three buttons that exist in every run from the first second — no unlock, no
+  // card, no level. They are what the player reaches for when a build is done
+  // growing and the fight has to be solved with positioning instead of numbers,
+  // and they are the answer to "the run got boring": something to spend.
+  // Cooldowns live in the Game (see abilityCooldownRemaining); these fields only
+  // hold what the cards change.
+  float abilityCdMul = 1.0F;   // multiplies all three cooldowns (cards lower it)
+  float blinkDist = 3.2F;      // Phase Dash: teleport distance
+  float blinkIframes = 0.35F;  // seconds of invulnerability the dash grants
+  float burstRadius = 3.0F;    // Overload: blast radius
+  float burstDamage = 45.0F;   // Overload: damage before damageMul
+  float burstKnockback = 8.0F; // Overload: shove strength
+  float stasisDuration = 2.5F; // Stasis: window length
+  float stasisSlow = 0.35F;    // Stasis: enemy time multiplier while it is up
+  int abilityEcho = 0;         // 1 = every ability also fires a 40% Overload
 };
 
 struct UpgradeEffectResult {
@@ -351,6 +374,17 @@ public:
   // (-1 if there is no enemy or no zone). This is what proves the suction zones
   // actually drag prey into their cores.
   [[nodiscard]] float testFirstEnemyDistToVortex() const;
+  // Test helper: distance from the first enemy to the NEAREST planted Lure bell
+  // (-1 if there is no enemy or no bell). This is what proves the Grave Bell
+  // actually taunts prey into its core instead of just sitting there.
+  [[nodiscard]] float testFirstEnemyDistToLure() const;
+  // Test helpers: the player's world position (Blink moves it).
+  [[nodiscard]] float testPlayerX() const;
+  [[nodiscard]] float testPlayerY() const;
+  // Test helper: the aim direction of every live beam, in radians. Used to prove
+  // the Solar Lance's "Prism Lance" unique really spreads into front/left/right
+  // instead of stacking three beams on the same line.
+  [[nodiscard]] std::vector<float> testBeamAngles() const;
   // Test helper: current speed (velocity magnitude) of every live Enemy.
   [[nodiscard]] std::vector<float> testEnemySpeeds() const;
   // Test helper: current HP of every live Enemy (order unspecified — use for
@@ -447,9 +481,37 @@ public:
     std::size_t chains = 0;
     std::size_t novas = 0;
     std::size_t vortices = 0;
+    std::size_t lures = 0;
   };
   [[nodiscard]] DebugCounts debugCounts() const;
   [[nodiscard]] std::size_t debugEnemyCount() const;
+
+  // --- Active abilities (J / K / L) -------------------------------------------
+  // Every run has all three buttons, from the first second, with no unlock and
+  // no card. They cost nothing but a cooldown, so the interesting decision is
+  // never "do I have it" but "is now the moment" — which is exactly what a
+  // finished build needs. Each answers a different problem a run keeps hitting:
+  // J gets you out of a hug, K clears what your weapons cannot reach through,
+  // L buys the three seconds a big enemy needs to die.
+  enum class Ability : int { Blink = 0, Burst = 1, Stasis = 2 };
+  static constexpr int kAbilityCount = 3;
+  // Base cooldowns in seconds, scaled by PlayerStats::abilityCdMul.
+  static constexpr float kBaseAbilityCd[kAbilityCount] = {5.0F, 14.0F, 30.0F};
+  [[nodiscard]] float abilityCooldown(Ability a) const {
+    return kBaseAbilityCd[static_cast<int>(a)] * stats_.abilityCdMul;
+  }
+  // Seconds left on an ability (0 = ready).
+  [[nodiscard]] float abilityCooldownRemaining(Ability a) const {
+    return abilityCd_[static_cast<int>(a)];
+  }
+  [[nodiscard]] bool abilityReady(Ability a) const {
+    return abilityCd_[static_cast<int>(a)] <= 0.0F;
+  }
+  // Enemy time multiplier right now (1.0 unless Stasis is up).
+  [[nodiscard]] float worldTimeScale() const { return worldTimeScale_; }
+  [[nodiscard]] float stasisRemaining() const { return stasis_; }
+  // Test hook: cast an ability through the normal input path.
+  void testTriggerAbility(Ability a);
 
 private:
   // Owned weapons (fixed slots, no allocation on the hot path).
@@ -554,6 +616,16 @@ private:
     float prismRange = 9.0F;
     float prismWidth = 0.45F;
     int prismMaxTargets = 6;
+    float prismRicochet = 4.0F;  // range of a reflected beam's next jump
+
+    // Lure: planted beacon that drags enemies into its kill core.
+    float lureRadius = 1.4F;
+    float lureReach = 3.6F;
+    float lurePull = 5.0F;
+    float lureDps = 14.0F;
+    float lureDuration = 5.0F;
+    float lureTickRate = 0.15F;
+    int lureMaxBeacons = 2;
   };
   // The arsenal starts at 4 weapons; each "Arsenal Core" stack adds one more
   // (max 3 stacks), so the storage array must hold the fully-stacked total.
@@ -602,6 +674,7 @@ private:
   void updateBeamEffects();
   void updateSweepEffects();
   void updateZoneEffects();
+  void updateLures();
   void updateChainLightning();
   void updateNovaRing();
   void updateEnemyShots();
@@ -777,6 +850,9 @@ private:
   float savedTierBannerT_ = 0.0F;
   int savedStreak_ = 0;
   float savedStreakTimer_ = 0.0F;
+  float savedAbilityCd_[kAbilityCount] = {0.0F, 0.0F, 0.0F};
+  float savedStasis_ = 0.0F;
+  float savedWorldTimeScale_ = 1.0F;
   std::vector<PendingSpawn> pending_;
   std::vector<PendingSpawn> savedPending_;
   // --- Rest of the run state that also mutates inside the sandbox ----------
@@ -888,10 +964,23 @@ private:
   float momentumDamageMul_ = 1.0F;
   float momentumRate_ = 0.0F;
   float momentumSpeedMul_ = 1.0F;
+
+  // Active ability state (see the Ability enum above).
+  float abilityCd_[kAbilityCount] = {0.0F, 0.0F, 0.0F};
+  // Stasis window remaining, and the enemy time multiplier it produces. The
+  // player and every weapon keep running at full speed while this is up: only
+  // the world slows down, which is what makes it readable at a glance.
+  float stasis_ = 0.0F;
+  float worldTimeScale_ = 1.0F;
   void updateMomentum();
   // Called when something actually lands a hit: the chain takes the hit with
   // you. Halved, minus two, and floored at zero.
   void breakMomentum();
+
+  void updateAbilities(const FrameInput& input);
+  void castBlink();
+  void castBurst(float damageScale);
+  void castStasis();
 
   // --- Profile / main menu state ---------------------------------------------
   // Not owned: main() owns the Profile and keeps it alive. Null in tests that

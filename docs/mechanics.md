@@ -19,12 +19,16 @@ curves. Tables of all content are generated into
   share the same target so the whole arsenal focuses the biggest threat.
 - Killing enemies drops XP gems. Leveling up opens a card choice (see
   [Level-ups](#level-ups)).
+- The three active abilities (`J`/`K`/`L`, see
+  [Active abilities](#active-abilities-j--k--l)) are live from this first
+  frame — no unlock, no card, only a cooldown.
 - **Esc** pauses the run and overlays a **character sheet**: level/XP, time,
-  kills, HP/regen, shield/defense, damage/cooldown, speed/pickup/lifesteal and
-  the full list of owned weapons with their numbers. Press **B** while paused
-  to toggle the **bestiary** — every enemy type you have slain, with its base
-  and current stats, its in-world appearance, its kill count and badges for
-  the elite/champion/overlord variants you have beaten.
+  kills, HP/regen, shield/defense, damage/cooldown, speed/pickup/lifesteal,
+  the `J`/`K`/`L` ability row and the full list of owned weapons with their
+  numbers. Press **B** while paused to toggle the **bestiary** — every enemy
+  type you have slain, with its base and current stats, its in-world
+  appearance, its kill count and badges for the elite/champion/overlord
+  variants you have beaten.
 - Dying shows the game-over screen; **R** restarts (deterministic seed 1337).
 
 ## The player
@@ -157,21 +161,49 @@ large hits.
   rakes a visible flame fan in an arc, dealing its damage instantly), some are
   piercing snipers (**Heavy Crossbow** bolts home and punch through crowds —
   a slow, heavy 2.2 s reload after the balance pass — and the **Solar Lance**
-  is an instant hitscan line), some are area-splash
-  (**Runic Hammer** lobs an arcing bomb that detonates where it lands,
+  is an instant hitscan line, 130 damage on a 1.6 s reload), some are
+  area-splash (**Runic Hammer** lobs an arcing bomb that detonates on contact,
   destroying itself), some bounce (orb), and some home toward the target
-  (crossbow, shuriken, nova). The **Solar Lance** fires a wide beam across the
-  whole arena and splits into one parallel beam per projectile. Check
-  `content.md` for the per-weapon traits column.
-- The **Soul Scythe** reaps a **full 360° circle around its nearest enemy**:
-  the swing is centered on the target itself, so everything around that
-  target takes the hit. A target-centered ring — visually and mechanically a
-  world apart from the flame's forward-pointing cone.
+  (crossbow, shuriken, nova). Check `content.md` for the per-weapon traits
+  column.
+- The **Solar Lance** fires a wide hitscan line across the whole arena and
+  **fans** with your projectile count — up to four symmetric beams. The
+  **Prism Lance** unique is not "+2 projectiles": it fires **exactly three**
+  beams spread 0.30 rad apart, i.e. **forward, left and right**, so it covers a
+  cone instead of stacking three lines on the same aim.
+- Two melee weapons, two different shapes:
+  - The **Soul Scythe** reaps a **full 360° circle around its nearest enemy**:
+    the swing is centered on the target itself, so everything around that
+    target takes the hit. A target-centered ring — visually and mechanically a
+    world apart from the flame's forward-pointing cone.
+  - The **Barbed Whip** (and its evolution, the **Tidal Lash**) instead lashes
+    the arc **in front of the player**: the swing is centered 1.8–2.2 units
+    along the aim line and only covers `sweep_angle` of it, so it hits what
+    you are facing whether or not anything is standing there — and it still
+    swings at empty air. A whip is the answer to a horde that is already on
+    top of you; a scythe is the answer to one that is standing around a brute.
+- The **Grave Bell** plants a **beacon behind your target** and does no damage
+  on impact at all. Its whole value is what it does afterwards: everything
+  inside `lure_reach` is dragged toward the core every tick (easing off at the
+  rim, so the horde is coaxed in rather than yanked) and only takes damage once
+  it has been hauled inside `lure_radius`. It is a turret that plays on the
+  *other* side of the crowd, not a projectile aimed at the player's feet. At
+  most `lure_max_beacons` bells live at once; the oldest one gives way.
+- A **fused** bomb (`bomb_fuse > 0`) does **not** detonate on contact. The
+  **Siege Mortar** therefore arcs clean over the front rank and cooks where the
+  parabola brings it back down — a ranged weapon wearing a hammer's clothes is
+  not a mortar, and the fuse is the whole difference.
 - The **Void Orb** is **one eternal projectile**: it never expires and hunts
   forever, steering between enemies (or back to you when the arena is empty).
   Projectile upgrades do **not** spawn more orbs — they make the single orb
   **grow** (bigger contact radius). With no damage decay per bounce, every
   hit deals full damage.
+- The **Throwing Dagger** blades live *on* their orbit circle, so anything
+  hugging the player used to sit in a blind spot and take literally nothing
+  while the ring spun overhead. The spin now also grinds through the interior:
+  once per step, every enemy strictly inside the blade band takes `0.35×` one
+  blade's contact damage (with the usual AoE falloff). N blades still means N×
+  the contact damage — the whirl is once per build, not once per blade.
 - Weapon fields `area` (splash radius), `strength` (knockback), `homing` and
   `bounces` are honored: area deals half-damage in a radius on hit, strength
   pushes the struck enemy, homing steers the projectile toward the nearest
@@ -179,9 +211,10 @@ large hits.
 
 ### AoE damage falloff
 
-Any area-of-effect hit (cone, scythe reap, inferno, bomb blast, zone tick,
-nova tick, beam row, boomerang trail/blast, orb splash) deals **slightly less
-damage to each target the more targets it catches at once**:
+Any area-of-effect hit (cone, scythe reap, whip lash, inferno, bomb blast, zone
+tick, nova tick, beam row, boomerang trail/blast, orb splash, lure core,
+Overload) deals **slightly less damage to each target the more targets it
+catches at once**:
 
 ```text
 multiplier = 0.9^(n − 1)   # n = enemies hit, clamped to 1..40
@@ -195,26 +228,37 @@ direct projectile impacts) are unaffected.
 **Pierce reduces this falloff.** The multiplier blends toward `1.0` by
 `clamp(pierce / 20, 0, 1)`, so at **20+ pierce** an AoE hit deals full damage
 to every target it catches. Every area source passes its own pierce (weapon
-pierce plus the global pierce buff) — cones, scythe reaps, infernos, bombs,
-zones, novas, beams, boomerang trails/blasts and orb splashes.
+pierce plus the global pierce buff) — cones, scythe reaps, whip lashes,
+infernos, bombs, zones, novas, beams, boomerang trails/blasts, orb splashes,
+lure cores and the Overload.
 
 ### Evolutions & super evolutions (A + B = C)
 
+The roster is **32 weapons**: **18** that can be rolled as ordinary weapon
+cards, **10** two-ingredient evolutions and **4** three-ingredient supers.
 Weapons can require other weapons. When you own **all** prerequisites, the
 result becomes the **highest-priority** weapon offer, replacing the random
 weapon grant:
 
 - **Two-ingredient evolutions** (tag `EVOLUTION! (A+B)`): `storm` (Arcane Wand
   + Heavy Crossbow), `nova` (Void Orb + Runic Hammer), `inferno` (Ember Sprayer
-  + Soul Scythe), `pulsar` (Solar Lance + Storm Shuriken) and `halo` (**Radiant
-  Halo**: Throwing Dagger + Solar Lance). Radiant Halo spawns **persistent
-  beams that orbit you**, reaping everything they sweep through — the beam's
-  damage re-expressed as an always-on ring rather than a brief flash.
+  + Soul Scythe), `pulsar` (Solar Lance + Storm Shuriken), `halo` (**Radiant
+  Halo**: Throwing Dagger + Solar Lance), `blizzard` (**Blizzard Rail**: Rail
+  Rifle + Frost Shards), `siege` (**Ashfall**: Siege Mortar + Grave Bell),
+  `chaos` (**Chaos Sphere**: Pinball Puck + Void Orb), `sunder` (**Sundering
+  Core**: Shock Core + Soul Scythe) and `tidewhip` (**Tidal Lash**: Barbed Whip
+  + Storm Shuriken). Radiant Halo spawns **persistent beams that orbit you**,
+  reaping everything they sweep through — the beam's damage re-expressed as an
+  always-on ring rather than a brief flash. `chaos` is deliberately *not* the
+  Void Orb's eternal bounce: it burns out after ~14 ricochets, which is what
+  makes "one more bounce" a real decision.
 - **Three-ingredient super evolutions** (tag `SUPER EVOLUTION! (A+B+C)`):
-  `vortex` (**Void Gyre**: Throwing Dagger + Soul Scythe + Void Orb) and
-  `prism` (**Prism Array**: Ember Sprayer + Solar Lance + Heavy Crossbow).
-  Neither is a re-skin of an existing evolution — each introduces a mechanic
-  nothing else in the pool has:
+  `vortex` (**Void Gyre**: Throwing Dagger + Soul Scythe + Void Orb),
+  `prism` (**Prism Array**: Ember Sprayer + Solar Lance + Heavy Crossbow),
+  `seraph` (**Seraph Array**: Jackhammer Drill + Heavy Crossbow + Barbed Whip)
+  and `eventhorizon` (**Event Horizon**: Rail Rifle + Shock Core + Ember
+  Sprayer). None is a re-skin of an existing evolution — each introduces a
+  mechanic nothing else in the pool has:
   - **Void Gyre** spawns **suction zones** that circle the player. Anything
     caught in a zone's outer reach is **dragged inward** toward its core every
     tick, and only takes damage once it has been hauled inside. Both the
@@ -225,7 +269,16 @@ weapon grant:
   - **Prism Array** does not fire one beam at one target. It locks a
     **separate beam onto each of the N nearest enemies** (up to 6), so a crowd
     is chewed from several angles at once and one big brute no longer eats
-    every shot.
+    every shot. Each locked beam then **ricochets**: on hitting its victim it
+    jumps to the nearest enemy it has not already hit within
+    `prism_ricochet`, up to **pierce** reflections. Pierce *is* the reflection
+    budget, so a pierce card visibly turns one straight beam into a zig-zag
+    that walks down a line of enemies — which is the point, since the report
+    was that ricochets needed to actually be driven by pierce.
+  - **Seraph Array** is the halo taken to weapon-grade numbers: wide, slow
+    wings that cut and knock everything they cross.
+  - **Event Horizon** is four independent gravity wells, each with its own
+    core, orbiting fast enough to corkscrew a crowd.
 - Evolutions and supers are **not** added to the normal weapon pool before the
   prerequisites are met.
 - Picking one grants the evolved weapon **in addition to** the ingredients'
@@ -305,10 +358,15 @@ once. See [`content.md`](content.md) for the exact list; the rules they bend:
 | Vampiric Heart | Lifesteal procs heal 2 HP instead of 1 |
 | Last Stand | Taking a hit below 20% HP grants 1s of invulnerability (20s cooldown) |
 | Repulsion Field | Enemies that strike you are violently knocked away |
+| Combat Reflexes | All three abilities (`J`/`K`/`L`) recharge 25% faster (3 stacks, floor 0.35×) |
+| Heavy Hands | Overload: a wider blast that hits 30 harder and shoves 3 further |
+| Phase Memory | Phase Dash: +1.2 distance and +0.2 s of invulnerability on arrival |
+| Deep Freeze | Stasis: +1 s of duration, and the slowed world drops another 0.08× |
+| Cascade | Every ability also fires a 40% Overload at the same spot |
 
-**Weapon uniques** — thirteen weapons have one exclusive treasure card, offered
-only while that weapon is equipped (the card carries `weapon = "<id>"`), so the
-pool stays relevant to your loadout:
+**Weapon uniques** — twenty-one weapons have an exclusive treasure card,
+offered only while that weapon is equipped (the card carries
+`weapon = "<id>"`), so the pool stays relevant to your loadout:
 
 | Weapon | Unique | Effect |
 |--------|--------|--------|
@@ -320,14 +378,22 @@ pool stays relevant to your loadout:
 | Storm Shuriken | Return Tempest | Returning blades detonate a burst |
 | Void Orb | Echo Detonation | Every bounce splashes half damage around the hit |
 | Soul Scythe | Reaper's Harvest | Sweeps restore 3 HP per kill |
-| Solar Lance | Prism Lance | Fires 3 parallel beams at once |
+| Solar Lance | Prism Lance | Fires **3 beams at once — forward, left and right** |
 | Storm Caller | Thunderlord | +4 chain jumps and no damage decay |
 | Void Nova | Supernova | Ring expands faster, wider, and hits harder |
 | Inferno | Everflame | Wider reap; burning ground lasts longer and burns harder |
 | Pulsar | Arc Saw | The laser trail is 80% wider and deals 35% more damage |
+| Rail Rifle | Magnetic Slug | The slug homes onto the nearest enemy |
+| Grave Bell | Deep Toll | 35% harder pull, 20% wider reach, one more bell at a time |
+| Tesla Coil | Gravitic Field | Jumps reach 50% further and stop decaying so hard |
+| Blizzard Rail | White Squall | +4 jumps and no damage decay |
+| Ashfall | Molten Crater | The burning ground is 80% hotter, 25% wider and lasts much longer |
+| Chaos Sphere | Detonation Chain | Every bounce splashes area damage around the hit |
+| Sundering Core | Event Collapse | Ring expands faster, wider, and hits harder |
+| Tidal Lash | Undertow | A 35% wider lash that flings 40% harder and reaches further |
 
-The newer Radiant Halo and the two super evolutions have no exclusive card;
-they rely on their raw stats and synergies instead.
+The newer Radiant Halo, Seraph Array, Event Horizon, Void Gyre and Prism Array
+have no exclusive card; they rely on their raw stats and synergies instead.
 
 ### Milestones
 
@@ -350,31 +416,71 @@ real build by testing.
 | Key | Action |
 |-----|--------|
 | `T` | Toggle test mode on/off (also works from a level-up screen) |
-| `1` / `2` | Previous / next weapon — **all 16 including evolutions and supers** (`storm`, `nova`, `inferno`, `pulsar`, `halo`, `vortex`, `prism`) |
+| `1` / `2` | Previous / next weapon — **all 32 including evolutions and supers** (`storm`, `nova`, `inferno`, `pulsar`, `halo`, `blizzard`, `siege`, `chaos`, `sunder`, `tidewhip`, `vortex`, `prism`, `seraph`, `eventhorizon`) |
 | `3` | Apply a **max build** boost: +100% damage, +4 projectiles, +3 pierce, +80% fire rate. Toggling it off keeps your item picks — it only undoes the boost |
 | `4` | Toggle enemy waves (fodder bats spawn so every weapon has a target) |
 | `5` | Exit back to the untouched run |
 | `E` | Open/close the **item picker** |
 | `I` | Toggle **immortality** (all incoming damage ignored, so you can stand in a horde) |
 | `F` | Cycle the **difficulty clock**: 1× → 4× → 10× → 20× |
-| `K` | **Kill the player** on demand (works through immortality — that is the point of a death switch) |
+| `X` | **Kill the player** on demand (works through immortality — that is the point of a death switch) |
 | `R` | **Max every item** instantly (milestones excluded) |
 
 In the item picker, `↑`/`↓` (or `←`/`→`, or `W`/`S`) move the highlight and
 `Enter` takes the highlighted card — one stack per press, up to the card's own
 cap. The list shows each card's current stacks and flags cards that are
-`[MAX]` or `[NOT ARMED]`.
+`[MAX]` or `[NOT ARMED]`. A card for a weapon you are **not** holding cannot be
+applied at all, so "max every item" fills the weapon-agnostic cards and the
+cards of whatever you happen to be holding, and stops there.
 
 Other sandbox rules worth knowing:
 
+- **The sandbox is a dead end, and that is the point.** It pays **no XP**, it
+  never pays a **skin or outline** unlock, and **leaving it ends the run**: the
+  snapshot is restored first (so the death report shows the real run you
+  actually played), and *then* the player is dropped to 0 HP on the normal
+  game-over screen. A sandbox that could be opened, farmed and closed cleanly
+  was a cheat, not a test rig.
 - **Level-ups work** in the sandbox (that is how the card flow gets exercised)
   but only **item** cards are offered — never weapons, because testing *one*
-  weapon is the entire point. Rerolls are **unlimited** there.
+  weapon is the entire point. Since no XP is paid, you never level up there at
+  all and so can never reroll; `R` is the "max every item" cheat instead.
 - Switching weapons re-seeds a herd of weak test bats.
 - Leaving the sandbox removes the sandbox's injected fodder (enemies that were
-  already on the field are kept) and puts you back exactly where you stood.
-- Dying inside the sandbox with `K` drops you on the normal game-over screen;
-  `R` there restarts the run as usual.
+  already on the field are kept) and puts you back exactly where you stood —
+  before, as noted, the run ends.
+- `X` inside the sandbox drops you on the normal game-over screen; `R` there
+  restarts the run as usual.
+
+## Active abilities (J / K / L)
+
+Three abilities, always live from the first second of a run, with no menu, no
+unlock and no card. Only a **cooldown** stands in the way, so a build changes how
+they feel but never whether they exist. The HUD shows all three with their
+remaining cooldown, and so does the character sheet.
+
+| Key | Ability | Cooldown | What it does |
+|-----|---------|----------|--------------|
+| `J` | **Phase Dash** | 5 s | Teleport `blinkDist` (3.2) units along your movement — or *at* the nearest enemy if you are standing still, because a dash that only works while a movement key is held is not an answer to being cornered. Grants `blinkIframes` (0.35 s) of invulnerability on arrival, so it is a real dodge. |
+| `K` | **Overload** | 14 s | A radial burst: `burstDamage` (45) to everything within `burstRadius` (3.0), knocked `burstKnockback` (8) units away, using the same crowd falloff as every other blast. |
+| `L` | **Stasis** | 30 s | For `stasisDuration` (2.5 s) the world runs at `stasisSlow` (0.35×): enemies and their projectiles tick on a scaled clock, **you do not**. The player is not slowed by their own stasis. |
+
+Notes:
+
+- Stasis scales the *hostile* side of the world only. `updateEnemies` and
+  `updateEnemyShots` multiply their local `dt` by the world scale; the player,
+  the weapons and the ability cooldowns run at full speed, and `simTime_` keeps
+  counting real seconds so the difficulty ramp is not stretched by it.
+- Cooldowns are multiplied by `abilityCdMul`, which cards only ever push
+  **down** (floor **0.35×**). `abilityCdMul` never reaches zero, so no build
+  gets to spam all three keys at once.
+- Five ability cards retune them (never unlock them): **Combat Reflexes**
+  (`-25%` cooldown, 3 stacks), **Heavy Hands** (a bigger, harder Overload),
+  **Phase Memory** (a longer dash and a longer mercy window), **Deep Freeze**
+  (longer, deeper Stasis) and **Cascade** (every ability also fires a 40%
+  Overload at the same spot).
+- The sandbox snapshots the ability cooldowns and the stasis timer along with
+  everything else, so testing a dash cannot leave the real run mid-cooldown.
 
 ## Enemies
 

@@ -101,8 +101,12 @@ game::FrameInput pollInput(bool& quit, float deltaSeconds, bool menuActive,
         case SDLK_E: in.testShop = true; break;
         case SDLK_I: in.testInvuln = true; break;
         case SDLK_F: in.testTime = true; break;
-        case SDLK_K: in.testKill = true; break;
+        case SDLK_X: in.testKill = true; break;
         case SDLK_H: in.heal = true; break;
+        // Active abilities (J / K / L).
+        case SDLK_J: in.abilityBlink = true; break;
+        case SDLK_K: in.abilityBurst = true; break;
+        case SDLK_L: in.abilitySlow = true; break;
         case SDLK_B: in.bestiary = true; break;
         // Main menu navigation + confirm.  Directional presses are converted
         // to repeat events below; the edge is kept separate from the held

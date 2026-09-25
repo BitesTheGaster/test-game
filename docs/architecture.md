@@ -29,7 +29,7 @@ the instanced renderer and the bitmap font. Everything roguelike lives in
 | `components.hpp` | POD entity components: `Transform`, `Velocity`, `Radius`, `Sprite`, `Health`, `Enemy`, `EnemyTraits`, `EnemyShot`, `Projectile`, `Xp`, `PlayerTag` |
 | `content.hpp` / `content.cpp` | `Content` loader: parses `assets/data/*.toml` into `WeaponDef`, `EnemyDef`, `UpgradeDef` structs |
 | `systems.hpp` / `systems.cpp` | Smaller gameplay systems (projectiles, pickups, particles) |
-| `main.cpp` | SDL3 window, GL context, input mapping (WASD, 1–5, Esc, R, T, H), game loop |
+| `main.cpp` | SDL3 window, GL context, input mapping (WASD, 1–5, Esc, R, T, H, J/K/L, X), game loop |
 
 ### ECS (EnTT)
 
@@ -77,19 +77,34 @@ stream.
 
 ## Simulation order (per fixed tick)
 
+Frame-level work runs before the accumulator: `updateAbilities()` consumes the
+`J`/`K`/`L` presses (cooldown-gated, legal at any time — including on the
+level-up screen's other keys), and `moveX_/moveY_` are latched for the tick.
+
 1. `movePlayer()` — input → velocity, Adrenaline speed/invuln logic
 2. `buildSpatialHash()`
 3. `updateEnemies()` — seek player, separation, trait ticks (regen, archer
-   shots, damage aura), contact damage, vampiric/venomous/ice-blood on hit
+   shots, damage aura), contact damage, vampiric/venomous/ice-blood on hit.
+   Runs on `dt = (1/60) * worldTimeScale_`, so Stasis slows the horde without
+   touching the player
 4. `fireWeapons()` — per-slot cooldowns, shared nearest-enemy target, fans,
-   AoE crowd falloff
+   AoE crowd falloff. This is where each `AttackType` lives: `Lure` plants a
+   `Lure` beacon, `Prism` walks one reflection path per locked beam, `Sweep`
+   either reaps the prey's circle (scythe) or lashes the arc in front of the
+   player (`sweep_lead > 0`, the whip)
 5. `updateProjectiles()` — hits, pierce, chain (Storm Bolt), particle bursts
-6. `updatePickups()` — XP magnetism and collection (scaled by `xpMul`)
-7. Regen (`regen_add`), black hole timer, adrenaline cooldown, poison tick
-8. `spawnWave()` — spawn interval ramp, weighted enemy pick, elite/champion/
-   overlord rolls, pushes a `PendingSpawn` with a 0.6 s telegraph
-9. `processPendingSpawns()` — materializes enemies after their telegraph
-10. Particle tick, camera update (frame-level, smooth follow)
+6. `updateOrbitBlades()` / `syncHaloBeams()` / `syncVortices()` — the persistent
+   ring weapons. The orbit pass also runs the **interior whirl** (once per
+   build, not per blade), which is what makes the inside of the dagger's ring
+   dangerous instead of a blind spot
+7. `updateLures()` — beacon life, the inward drag on everything in reach, and
+   the kill core; also on the scaled clock
+8. `updatePickups()` — XP magnetism and collection (scaled by `xpMul`)
+9. Regen (`regen_add`), black hole timer, adrenaline cooldown, poison tick
+10. `spawnWave()` — spawn interval ramp, weighted enemy pick, elite/champion/
+    overlord rolls, pushes a `PendingSpawn` with a 0.6 s telegraph
+11. `processPendingSpawns()` — materializes enemies after their telegraph
+12. Particle tick, camera update (frame-level, smooth follow)
 
 ## Level-up pipeline
 
@@ -105,17 +120,34 @@ see `docs/mechanics.md`):
 - **Weapon grant**: `pickWeaponGrant()` first checks **evolutions whose
   `prereqs` are all owned**, then the untouched normal weapons, shuffled.
 - **Unique**: 45% roll from unpicked `kind = "unique"` cards; cards tagged
-  `weapon = "<id>"` (the 13 weapon uniques) are only eligible while that
+  `weapon = "<id>"` (the 21 weapon uniques) are only eligible while that
   weapon is equipped.
 - `reroll()` just re-runs `buildChoices()`; consumed counts live in
   `rerollsUsed_` vs `1 + stats_.rerollCharges`.
 
 Upgrades apply through two stateless functions: `applyUpgrade(stats, effect,
 value)` for player-wide effects (including the fan/thorns/adrenaline/black-
-hole/chain/blood-price/ice-blood uniques) and `applyWeaponEffect(slot, ...)`
-for `weapon`-tagged cards (`w_damage_add`, `w_proj_add`, `w_pierce_add`,
-`w_fire_rate`, plus the `w_unique_*` weapon uniques). `stacks_[i]` counts each
-upgrade's stacks and enforces `max_stacks`.
+hole/chain/blood-price/ice-blood uniques and the five `ability_*` cards) and
+`applyWeaponEffect(slot, ...)` for `weapon`-tagged cards (`w_damage_add`,
+`w_proj_add`, `w_pierce_add`, `w_fire_rate`, `w_lure_power`, `w_nova_power`,
+plus the `w_unique_*` weapon uniques). `stacks_[i]` counts each upgrade's
+stacks and enforces `max_stacks`.
+
+### Active abilities
+
+`Game::Ability` is a three-entry enum (`Blink`, `Burst`, `Stasis`) with
+`kAbilityCount` and a `kBaseAbilityCd{5, 14, 30}` table, all public so the
+tests and the HUD agree with the code. `updateAbilities()` reads the three
+`FrameInput` flags, checks `abilityReady()` and calls `castBlink()`,
+`castBurst()` or `castStasis()`. Every number they use lives in `PlayerStats`
+(`blinkDist`, `blinkIframes`, `burstRadius`, `burstDamage`, `burstKnockback`,
+`stasisDuration`, `stasisSlow`, `abilityCdMul`, `abilityEcho`), so the cards
+retune the keys without the casts knowing anything about upgrades.
+
+Stasis is a single `worldTimeScale_` float rather than a per-system flag: the
+hostile systems multiply their own `dt` by it, `simTime_` keeps counting real
+seconds (so the difficulty ramp is not stretched), and the snapshot saves and
+restores both the timer and the scale.
 
 ## Content pipeline
 
@@ -153,12 +185,14 @@ Batcher (core)  -> one @instanced draw call per pass
 
 | Constant | Value | Meaning |
 |----------|-------|---------|
-| `kMaxWeapons` | 5 | Weapon slots |
+| `kBaseWeapons` / `kMaxWeapons` | 4 / 7 | Weapon slots, and the hard cap after 3 Arsenal Cores |
 | `kSpawnDist` | 11 | Base spawn distance from player (units); scales to 2× by 10:00 |
 | `kSpawnTelegraph` | 0.6 s | Telegraph duration before an enemy appears |
 | `kShieldRegenRate` | 10 HP/s | Shield regen out of combat |
 | `kShieldRegenDelay` | 4 s | Damage-free time before regen starts |
 | `kContactIframes` | 0.18 s | Base invulnerability after being hit; scaled by `1 + defense/500` |
+| `kOrbitInnerMul` | 0.35 | Share of one blade's damage the orbit's interior whirl pays |
+| `kBaseAbilityCd` | 5 / 14 / 30 s | Phase Dash / Overload / Stasis cooldowns, before `abilityCdMul` |
 | `kEliteHpMin` / `kEliteHpMax` | 5 / 10 | Elite HP multiplier range (rolled per spawn) |
 | `kChampionHpMin` / `kChampionHpMax` | 25 / 100 | Champion HP multiplier range |
 | `kOverlordHpMin` / `kOverlordHpMax` | 125 / 1000 | Overlord HP multiplier range |
@@ -181,9 +215,20 @@ Headless Catch2 tests in `tests/test_game.cpp` construct a `Game` directly
 - Opening 3-weapon pick, defense-scaled iframes, Last Stand low-HP iframes
 - Halo spokes (Radiant Halo) and super-evolution prerequisites
 - Void Gyre suction zones (count/size track the projectile stat) and the
-  Prism Array multi-target beam locks
-- The weapon test sandbox: full run snapshot/restore, the item picker, unlimited
-  rerolls, immortality and the difficulty-clock multiplier
+  Prism Array beams, which ricochet once per pierce point
+- The weapon test sandbox: full run snapshot/restore, the item picker,
+  immortality, the difficulty-clock multiplier, and the three ways it refuses
+  to be a cheat (no XP, no unlocks, leaving it kills the run)
+- The roster shape: 18 base weapons, 10 evolutions, 4 supers, every
+  prerequisite resolvable and every super built from three base weapons
+- The second-wave mechanics: the dagger's interior whirl, the whip's lead lash
+  versus the scythe's reap, the fused mortar arcing over the front rank, the
+  Grave Bell's drag (inside reach dies, outside it does not), the Solar Lance's
+  three-beam triad
+- The three abilities: they are ready on tick one, the dash moves the player
+  and the cooldown really gates a second press, Stasis measurably slows the
+  world, the cards retune rather than unlock, and the sandbox rolls the
+  cooldowns back
 - The lethal-hit rule (a hit covering the remaining HP always kills)
 - Bestiary kill/tier tracking and the B overlay toggle
 - Milestone offering at level 5

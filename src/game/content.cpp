@@ -67,6 +67,7 @@ AttackType parseAttackType(const toml::table& t, const std::string& where) {
   if (s == "halo") return AttackType::Halo;
   if (s == "vortex") return AttackType::Vortex;
   if (s == "prism") return AttackType::Prism;
+  if (s == "lure") return AttackType::Lure;
   throw std::runtime_error(where + ": unknown attack_type \"" + s + "\"");
 }
 
@@ -212,6 +213,16 @@ Content loadContent(const std::filesystem::path& dir) {
       def.prismRange = (*t)["prism_range"].value_or(9.0F);
       def.prismWidth = (*t)["prism_width"].value_or(0.45F);
       def.prismMaxTargets = static_cast<int>((*t)["prism_max_targets"].value_or(6));
+      def.prismRicochet = (*t)["prism_ricochet"].value_or(4.0F);
+
+      // Lure
+      def.lureRadius = (*t)["lure_radius"].value_or(1.4F);
+      def.lureReach = (*t)["lure_reach"].value_or(3.6F);
+      def.lurePull = (*t)["lure_pull"].value_or(5.0F);
+      def.lureDps = (*t)["lure_dps"].value_or(14.0F);
+      def.lureDuration = (*t)["lure_duration"].value_or(5.0F);
+      def.lureTickRate = (*t)["lure_tick_rate"].value_or(0.15F);
+      def.lureMaxBeacons = static_cast<int>((*t)["lure_max_beacons"].value_or(2));
 
       content.weapons.push_back(std::move(def));
     }

@@ -21,6 +21,11 @@ constexpr float kShieldRegenRate = 10.0F;   // HP/s once out of combat
 constexpr float kShieldRegenDelay = 4.0F;   // seconds without damage
 constexpr float kContactIframes = 0.18F;    // enemies connect more often
 
+// The orbit ring's interior sweep. Blades only touch the circle itself, so this
+// is what makes the inside of the dagger's ring dangerous to stand in; it is a
+// reduced share of one blade's contact damage (see updateOrbitBlades).
+constexpr float kOrbitInnerMul = 0.35F;
+
 // Enemies die once their HP drops to (or below) this tiny epsilon. Defense
 // mitigation and float rounding can otherwise leave a sliver of HP, so a hit
 // that should be lethal leaves a "0 HP" enemy alive.
@@ -239,6 +244,34 @@ UpgradeEffectResult applyUpgrade(PlayerStats& stats, std::string_view effect, fl
     stats.momentumWindow += value * 3.0F;
     return {true, 0.0F, 0.0F};
   }
+  // --- Ability cards ---------------------------------------------------------
+  // The three buttons exist in every run; these only decide how much they are
+  // worth. Cooldown reduction is floored so no build can hold them all.
+  if (effect == "ability_haste") {
+    stats.abilityCdMul = std::max(0.35F, stats.abilityCdMul - value);
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "ability_might") {
+    stats.burstRadius += 0.8F;
+    stats.burstDamage += 30.0F;
+    stats.burstKnockback += 3.0F;
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "ability_phase") {
+    stats.blinkDist += 1.2F;
+    stats.blinkIframes += 0.2F;
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "ability_stasis") {
+    stats.stasisDuration += 1.0F;
+    stats.stasisSlow = std::max(0.15F, stats.stasisSlow - 0.08F);
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "ability_echo") {
+    // Echo Chamber: every ability also throws a weakened Overload.
+    stats.abilityEcho = 1;
+    return {true, 0.0F, 0.0F};
+  }
   return {false, 0.0F, 0.0F};
 }
 
@@ -413,6 +446,11 @@ void Game::reset() {
 
 void Game::syncProfileUnlocks() {
   if (profile_ == nullptr) return;
+  // The sandbox NEVER grants cosmetics. Killing a champion there must not hand
+  // out an outline that took a real run to earn — the whole point of the
+  // sandbox is that nothing inside it counts, and the tier-kill mask is rolled
+  // back on exit anyway, so simply not writing is enough.
+  if (testMode_) return;
   // tierKillMask_ bit t is set once a tier-t enemy has died. Map that to the
   // profile's tier-1-based unlock bits and push only the new ones.
   for (int tier = 1; tier <= 3; ++tier) {
@@ -579,6 +617,12 @@ void Game::advance(float frameDt, const FrameInput& input) {
       else if (input.choose5) exitTestMode();
     }
   }
+  // J / K / L: the three active abilities. They are always live (no unlock, no
+  // card) and only a cooldown stands in the way, so this is checked before the
+  // level-up branch: spending a cooldown is legal at any time.
+  if (state_ == RunState::Playing) {
+    updateAbilities(input);
+  }
   // H: guaranteed heal for 50% of max HP on a cooldown (replaces the old
   // single-use heal cards, which are no longer in the loot pool).
   if (state_ == RunState::Playing && input.heal && healCd_ <= 0.0F &&
@@ -653,6 +697,18 @@ void Game::fixedStep() {
   if (lastStandCd_ > 0.0F) {
     lastStandCd_ -= 1.0F / 60.0F;
   }
+  // Ability cooldowns and the Stasis window tick with the simulation, and the
+  // world-time multiplier is derived from them once per step so every system
+  // that reads it this frame sees the same value.
+  for (int i = 0; i < kAbilityCount; ++i) {
+    if (abilityCd_[i] > 0.0F) abilityCd_[i] = std::max(0.0F, abilityCd_[i] - 1.0F / 60.0F);
+  }
+  if (stasis_ > 0.0F) {
+    stasis_ = std::max(0.0F, stasis_ - 1.0F / 60.0F);
+    worldTimeScale_ = std::max(0.1F, stats_.stasisSlow);
+  } else {
+    worldTimeScale_ = 1.0F;
+  }
 
   movePlayer();
   buildSpatialHash();
@@ -668,6 +724,7 @@ void Game::fixedStep() {
   updateBeamEffects();
   updateSweepEffects();
   updateZoneEffects();
+  updateLures();
   updateChainLightning();
   updateNovaRing();
   updateEnemyShots();
@@ -704,9 +761,10 @@ void Game::fixedStep() {
     p.vy *= 0.92F;
   }
 
-  // Level-up check. The sandbox DOES level up (that is how the item picker and
-  // rerolls get exercised); everything it earns is rolled back on exit.
-  if (state_ == RunState::Playing && xp_ >= xpNext_) {
+  // Level-up check. The sandbox can never reach it: grantXp() refuses to pay
+  // out inside the sandbox, so the card screen is not something a tester can
+  // farm picks from. A sandbox that was opened mid-level-up still unwinds.
+  if (state_ == RunState::Playing && !testMode_ && xp_ >= xpNext_) {
     enterLevelUp();
   }
 }
@@ -770,6 +828,10 @@ void Game::updateEnemies() {
   const auto& pt = registry_.get<Transform>(player_);
   const auto& pr = registry_.get<Radius>(player_);
   auto& php = registry_.get<Health>(player_);
+  // Stasis slows the world, not the player: every enemy timer, every step of
+  // movement and every aura tick inside this function run on the slowed clock,
+  // so one multiplier here covers the whole hostile side of the game.
+  const float dt = (1.0F / 60.0F) * worldTimeScale_;
 
   auto view = registry_.view<Transform, Velocity, Enemy, Radius>();
   for (const auto e : view) {
@@ -786,19 +848,19 @@ void Game::updateEnemies() {
     if (traits != nullptr) {
       if (traits->flags & TraitRegenerating) {
         auto& eh = registry_.get<Health>(e);
-        eh.hp = std::min(eh.max, eh.hp + traits->regen / 60.0F);
+        eh.hp = std::min(eh.max, eh.hp + traits->regen * dt);
       }
       // Damage aura: continuous chip damage while the player stands inside.
       if (traits->auraRadius > 0.0F) {
         const float adx = pt.x - t.x;
         const float ady = pt.y - t.y;
         if (adx * adx + ady * ady < traits->auraRadius * traits->auraRadius) {
-          damagePlayerDirect(traits->auraDps / 60.0F);
+          damagePlayerDirect(traits->auraDps * dt);
         }
       }
       // Archer: periodic projectiles aimed at the player.
       if (traits->shootCooldown > 0.0F) {
-        traits->shootTimer -= 1.0F / 60.0F;
+        traits->shootTimer -= dt;
         if (traits->shootTimer <= 0.0F) {
           const float sdx = pt.x - t.x;
           const float sdy = pt.y - t.y;
@@ -897,7 +959,7 @@ void Game::updateEnemies() {
     // Slowed enemies (ice blood) move at 45%.
     float effSpeed = en.speed;
     if (en.slowT > 0.0F) {
-      en.slowT -= 1.0F / 60.0F;
+      en.slowT -= dt;
       effSpeed *= 0.45F;
     }
 
@@ -924,8 +986,8 @@ void Game::updateEnemies() {
     en.kbY *= kKbDecay;
     if (std::abs(en.kbX) < 0.01F) en.kbX = 0.0F;
     if (std::abs(en.kbY) < 0.01F) en.kbY = 0.0F;
-    t.x += v.x / 60.0F;
-    t.y += v.y / 60.0F;
+    t.x += v.x * dt;
+    t.y += v.y * dt;
 
     // Contact damage to the player.
     const float hitDist = pr.r + r.r;
@@ -1206,13 +1268,19 @@ void Game::fireWeapons() {
       }
       case AttackType::Beam: {
         if (found) {
-          // Projectiles now mean PARALLEL BEAMS (very visible), and the beam
-          // unique ("Prism Lance") multiplies that count. Beam width still
-          // grows a little per projectile too.
-          const int split = w.beamSplit > 0 ? w.beamSplit : 1;
-          const int beamCount = std::min(6, count * split);
+          // The fan is the whole point of the beam, so it is laid out as a
+          // readable wedge instead of a stack: the "Prism Lance" unique
+          // (`beamSplit >= 3`) is exactly THREE beams aimed forward, left and
+          // right, and projectile cards no longer multiply them (they used to
+          // read as "+2 projectiles" because all of them overlapped on the
+          // aim line with a 0.05 rad gap). Without the unique, extra
+          // projectiles widen the same symmetric fan instead of stacking.
+          const bool triad = w.beamSplit >= 3;
+          const int beamCount = triad ? 3 : std::clamp(count, 1, 4);
           const float beamWidth = w.beamWidth * (1.0F + stats_.projAdd * 0.05F);
-          const float gap = 0.05F * stats_.spreadMul; // radians between beams
+          constexpr float kTriadGap = 0.30F;  // ~17 degrees between the three
+          constexpr float kFanGap = 0.18F;    // ~10 degrees per extra beam
+          const float gap = triad ? kTriadGap : kFanGap;
           for (int p = 0; p < beamCount; ++p) {
             const float offset =
                 (static_cast<float>(p) - static_cast<float>(beamCount - 1) * 0.5F) * gap;
@@ -1246,12 +1314,19 @@ void Game::fireWeapons() {
       }
       case AttackType::Sweep: {
         // The scythe REAPS a circle around its prey: the swing is centered ON
-        // the nearest enemy, carving up everything around that target. A
-        // target-centered ring — visually and mechanically distinct from the
-        // flame's forward-pointing cone.
+        // the nearest enemy, carving up everything around that target.
+        // A weapon with `sweep_lead` is a WHIP instead: the arc is centered on
+        // the point in FRONT of the player and only covers `sweep_angle` of it,
+        // so it lashes where the player is looking rather than where the prey
+        // happens to stand — and it still swings with nothing to hit. This is
+        // the mechanical difference between the two melee weapons, and it is
+        // what lets the whip (and its evolution) cover the player's own front
+        // while the scythe covers the far side of a crowd.
+        const bool lead = w.sweepLead > 0.0F;
         const float sweepRadius = w.sweepRadius * (1.0F + stats_.projAdd * 0.15F);
-        const float sx = targetX;
-        const float sy = targetY;
+        const float sx = lead ? pt.x + std::cos(baseAngle) * w.sweepLead : targetX;
+        const float sy = lead ? pt.y + std::sin(baseAngle) * w.sweepLead : targetY;
+        const float halfArc = lead ? std::min(kPi, w.sweepAngle * 0.5F) : kPi;
         auto view = registry_.view<Transform, Health, Radius, Enemy>();
         std::vector<entt::entity> hits;
         std::vector<float> hx;
@@ -1262,6 +1337,12 @@ void Game::fireWeapons() {
           const float dy = et.y - sy;
           const float dist2 = dx * dx + dy * dy;
           if (dist2 > sweepRadius * sweepRadius) continue;
+          if (lead && dist2 > 1e-4F) {
+            // Keep only the part of the circle the lash actually travels.
+            const float ang = std::atan2(dy, dx);
+            const float off = std::abs(std::remainderf(ang - baseAngle, 2.0F * kPi));
+            if (off > halfArc) continue;
+          }
           hits.push_back(e);
           hx.push_back(et.x);
           hy.push_back(et.y);
@@ -1287,7 +1368,8 @@ void Game::fireWeapons() {
           applyKnockback(e, pushAngle, w.sweepKnockback);
           spawnParticles(hx[hi], hy[hi], {0.7F, 1.0F, 0.8F, 1.0F}, 6, 4.0F);
         }
-        // Visual: a full 360° fading ring around the target.
+        // Visual: a full 360° fading ring around the target, or — for a whip —
+        // the arc that was actually swept.
         const auto se = registry_.create();
         registry_.emplace<Transform>(se, sx, sy, sx, sy);
         registry_.emplace<Radius>(se, sweepRadius);
@@ -1298,8 +1380,8 @@ void Game::fireWeapons() {
         sw.knockback = w.sweepKnockback;
         sw.duration = 0.25F;
         sw.timer = 0.25F;
-        sw.startAngle = 0.0F;
-        sw.endAngle = 2.0F * kPi;
+        sw.startAngle = lead ? baseAngle - halfArc : 0.0F;
+        sw.endAngle = lead ? baseAngle + halfArc : 2.0F * kPi;
         sw.color = w.color;
         registry_.emplace<SweepEffect>(se, sw);
         w.timer = cooldown;
@@ -1387,6 +1469,57 @@ void Game::fireWeapons() {
             ze.color = w.color;
             registry_.emplace<ZoneEffect>(zone, ze);
           }
+        }
+        w.timer = cooldown;
+        break;
+      }
+      case AttackType::Lure: {
+        // Grave Bell: plant a beacon just short of the player's target. It does
+        // no damage on impact at all — its value is the drag it applies
+        // afterwards, so it is planted BEHIND the prey: the bell has to sit
+        // between the player and the horde for anything to be funneled.
+        if (found) {
+          constexpr float kLead = 1.1F;
+          const float bx = targetX - std::cos(baseAngle) * kLead;
+          const float by = targetY - std::sin(baseAngle) * kLead;
+          // Cap the number of live bells: a taunt that covers the screen is not
+          // a taunt, it is a wall. The oldest bell gives way.
+          int live = 0;
+          entt::entity oldest = entt::null;
+          float oldestAge = -1.0F;
+          for (const auto be : registry_.view<Transform, Lure>()) {
+            const auto& bl = registry_.get<Lure>(be);
+            ++live;
+            const float age = bl.maxLife - bl.life;
+            if (oldest == entt::null || age > oldestAge) {
+              oldest = be;
+              oldestAge = age;
+            }
+          }
+          if (live >= std::max(1, w.lureMaxBeacons) && oldest != entt::null) {
+            destroyQueue_.push_back(oldest);
+          }
+          const auto bell = registry_.create();
+          registry_.emplace<Transform>(bell, bx, by, bx, by);
+          registry_.emplace<Radius>(bell, w.lureRadius);
+          Sprite s{};
+          s.color = w.color;
+          s.circle = true;
+          registry_.emplace<Sprite>(bell, s);
+          Lure lu{};
+          lu.damage = w.lureDps;
+          lu.pierce = pierce;
+          lu.radius = w.lureRadius;
+          lu.reach = w.lureReach;
+          lu.pull = w.lurePull;
+          lu.life = w.lureDuration;
+          lu.maxLife = w.lureDuration;
+          lu.tickRate = w.lureTickRate;
+          lu.tickTimer = 0.0F;
+          lu.weaponIndex = i;
+          lu.color = w.color;
+          registry_.emplace<Lure>(bell, lu);
+          spawnParticles(bx, by, w.color, 12, 3.0F);
         }
         w.timer = cooldown;
         break;
@@ -1536,31 +1669,74 @@ void Game::fireWeapons() {
                                                      static_cast<std::size_t>(beams));
         for (std::size_t k = 0; k < n; ++k) {
           const auto& et = registry_.get<Transform>(cands[k].second);
-          const auto beam = registry_.create();
-          registry_.emplace<Transform>(beam, pt.x, pt.y, pt.x, pt.y);
-          // Split the prism's colour across its beams so the fan reads as
-          // separate shafts instead of one thick smear.
-          const float hueMix = static_cast<float>(k) / static_cast<float>(std::max<std::size_t>(1, n));
-          registry_.emplace<Radius>(beam, w.prismWidth * 0.5F);
-          Sprite s{};
-          s.color = w.color;
-          s.color.g = std::clamp(w.color.g * (1.0F - 0.45F * hueMix), 0.0F, 1.0F);
-          s.color.b = std::clamp(w.color.b + 0.35F * hueMix, 0.0F, 1.0F);
-          s.circle = false;
-          registry_.emplace<Sprite>(beam, s);
-          BeamEffect be{};
-          be.damage = w.damage; // base; updateBeamEffects scales by damageMul
-          be.pierce = pierce;
-          be.range = w.prismRange;
-          be.width = w.prismWidth;
-          be.duration = w.beamDuration;
-          be.timer = w.beamDuration;
-          be.startX = pt.x;
-          be.startY = pt.y;
-          be.endX = et.x;
-          be.endY = et.y;
-          be.color = s.color;
-          registry_.emplace<BeamEffect>(beam, be);
+          // --- Ricochet: pierce IS the number of reflections ------------------
+          // The beam does not stop at the first body it burns through: it comes
+          // off it and jumps to the next victim within reach, once per pierce,
+          // drawing itself as a chain of segments. This is what makes the Prism
+          // Array a super evolution instead of "several lasers", and it is why
+          // the card that raises pierce visibly turns a beam into a zig-zag that
+          // keeps chewing through a crowd.
+          std::vector<entt::entity> hit;
+          hit.push_back(cands[k].second);
+          float lastX = et.x;
+          float lastY = et.y;
+          const int reflections = std::max(0, pierce);
+          for (int r = 0; r < reflections; ++r) {
+            entt::entity next = entt::null;
+            float bestD2 = w.prismRicochet * w.prismRicochet;
+            for (const auto e : registry_.view<Transform, Enemy>()) {
+              if (std::find(hit.begin(), hit.end(), e) != hit.end()) continue;
+              const auto& nt = registry_.get<Transform>(e);
+              const float dx = nt.x - lastX;
+              const float dy = nt.y - lastY;
+              const float d2 = dx * dx + dy * dy;
+              if (d2 >= bestD2) continue;
+              bestD2 = d2;
+              next = e;
+            }
+            if (next == entt::null) break; // nothing left to bounce to
+            const auto& nt = registry_.get<Transform>(next);
+            lastX = nt.x;
+            lastY = nt.y;
+            hit.push_back(next);
+          }
+          // One beam effect per segment of the path.
+          float fromX = pt.x;
+          float fromY = pt.y;
+          for (std::size_t seg = 0; seg < hit.size(); ++seg) {
+            const auto& ht = registry_.get<Transform>(hit[seg]);
+            const auto beam = registry_.create();
+            registry_.emplace<Transform>(beam, fromX, fromY, fromX, fromY);
+            // Split the prism's colour across its shafts so the fan reads as
+            // separate beams instead of one thick smear.
+            const float hueMix =
+                (static_cast<float>(k) + static_cast<float>(seg) * 0.3F) /
+                static_cast<float>(std::max<std::size_t>(1, n));
+            registry_.emplace<Radius>(beam, w.prismWidth * 0.5F);
+            Sprite s{};
+            s.color = w.color;
+            s.color.g = std::clamp(w.color.g * (1.0F - 0.45F * hueMix), 0.0F, 1.0F);
+            s.color.b = std::clamp(w.color.b + 0.35F * hueMix, 0.0F, 1.0F);
+            s.circle = false;
+            registry_.emplace<Sprite>(beam, s);
+            BeamEffect be{};
+            be.damage = w.damage; // base; updateBeamEffects scales by damageMul
+            // A reflection is aimed at ONE specific body, so the segment must not
+            // be softened by the crowd standing beside it.
+            be.pierce = 20;
+            be.range = w.prismRange;
+            be.width = w.prismWidth;
+            be.duration = w.beamDuration;
+            be.timer = w.beamDuration;
+            be.startX = fromX;
+            be.startY = fromY;
+            be.endX = ht.x;
+            be.endY = ht.y;
+            be.color = s.color;
+            registry_.emplace<BeamEffect>(beam, be);
+            fromX = ht.x;
+            fromY = ht.y;
+          }
         }
         w.timer = cooldown;
         break;
@@ -1982,6 +2158,58 @@ void Game::updateOrbitBlades() {
       spawnParticles(et.x, et.y, {0.85F, 0.9F, 1.0F, 1.0F}, 2, 2.0F);
     }
   }
+
+  // --- The whirl: the inside of the ring ---------------------------------------
+  // Blades live ON a circle, so anything hugging the player (which, in a
+  // survivors-like, is most of the horde once it closes) used to sit in a blind
+  // spot and take literally nothing while the ring spun harmlessly overhead.
+  // The spin now also grinds its way through the interior at a reduced rate.
+  // This runs once per step for the whole build, not per blade: N blades means
+  // N times the contact damage but only one whirl.
+  {
+    const int orbitSlot = [&] {
+      for (int i = 0; i < weaponCount_; ++i) {
+        if (weapons_[i].attackType == AttackType::Orbit) return i;
+      }
+      return -1;
+    }();
+    if (orbitSlot < 0) return;
+    const auto& w = weapons_[orbitSlot];
+    const float radius = w.orbitRadius;
+    const float damage =
+        w.damage * stats_.damageMul * momentumDamageMul_ * kOrbitInnerMul;
+    std::vector<entt::entity> inside;
+    auto enemyView = registry_.view<Transform, Health, Radius, Enemy>();
+    for (const auto en : enemyView) {
+      const auto& et = enemyView.get<Transform>(en);
+      const auto& er = enemyView.get<Radius>(en);
+      const float dx = et.x - pt.x;
+      const float dy = et.y - pt.y;
+      // Strictly inside the blade band, so an enemy standing on the ring is
+      // never paid twice for the same tick.
+      const float limit = radius - (0.18F + er.r);
+      if (limit <= 0.0F) continue;
+      if (dx * dx + dy * dy > limit * limit) continue;
+      auto* eh = registry_.try_get<Health>(en);
+      if (eh == nullptr || eh->hp <= 0.0F) continue;
+      inside.push_back(en);
+    }
+    if (inside.empty()) return;
+    // Same crowd falloff as every other area attack: standing in a horde is
+    // still the best way to use the ring, it just is not a free damage bonus.
+    const float mul = aoeFalloff(static_cast<int>(inside.size()), w.pierce + stats_.pierceAdd);
+    for (const auto en : inside) {
+      if (!registry_.valid(en)) continue;
+      applyEnemyDamage(en, damage * mul);
+    }
+    if (inside.size() <= 8) {
+      for (const auto en : inside) {
+        if (!registry_.valid(en)) continue;
+        const auto& et = registry_.get<Transform>(en);
+        spawnParticles(et.x, et.y, {0.7F, 0.8F, 1.0F, 1.0F}, 1, 1.5F);
+      }
+    }
+  }
 }
 
 void Game::updateHaloBeams() {
@@ -2166,23 +2394,28 @@ void Game::updateBombProjectiles() {
     t.x += v.x * dt;
     t.y += v.y * dt;
 
-    // Check collision with enemies (explode on impact)
+    // Contact detonation. A shell with a FUSE ignores the horde entirely and
+    // only cooks where its arc lands: that is what makes a mortar a mortar
+    // instead of a slower hammer — it lobs over the front rank and detonates on
+    // the far side of the crowd the player is aiming past.
     bool hit = false;
-    hash_.forEachNear(t.x, t.y, r.r + 1.0F, [&](std::uint32_t id) {
-      if (hit) return;
-      const auto enemy = static_cast<entt::entity>(id);
-      if (!registry_.valid(enemy) || !registry_.all_of<Enemy>(enemy)) return;
-      auto* eh = registry_.try_get<Health>(enemy);
-      if (eh == nullptr || eh->hp <= 0.0F) return;
-      const auto& et = registry_.get<Transform>(enemy);
-      const auto& er = registry_.get<Radius>(enemy);
-      const float dx = et.x - t.x;
-      const float dy = et.y - t.y;
-      const float hitR = r.r + er.r;
-      if (dx * dx + dy * dy > hitR * hitR) return;
+    if (bp.fuse <= 0.0F) {
+      hash_.forEachNear(t.x, t.y, r.r + 1.0F, [&](std::uint32_t id) {
+        if (hit) return;
+        const auto enemy = static_cast<entt::entity>(id);
+        if (!registry_.valid(enemy) || !registry_.all_of<Enemy>(enemy)) return;
+        auto* eh = registry_.try_get<Health>(enemy);
+        if (eh == nullptr || eh->hp <= 0.0F) return;
+        const auto& et = registry_.get<Transform>(enemy);
+        const auto& er = registry_.get<Radius>(enemy);
+        const float dx = et.x - t.x;
+        const float dy = et.y - t.y;
+        const float hitR = r.r + er.r;
+        if (dx * dx + dy * dy > hitR * hitR) return;
 
-      hit = true;
-    });
+        hit = true;
+      });
+    }
     if (hit) {
       // Explode where the bomb is — it has just moved into the enemy, so the
       // blast lands on the target (and the bomb entity is always removed).
@@ -2642,6 +2875,89 @@ void Game::updateZoneEffects() {
   }
 }
 
+// Grave Bell (lure). Two things happen every tick, and only the second one is
+// damage: enemies inside `reach` are DRAGGED toward the bell, and enemies inside
+// the core are cut up on a fixed tick. The drag is what makes the weapon work
+// — a bell planted a few steps ahead of the player walks the whole horde into a
+// two-unit circle, which is a far better crowd-control tool than any amount of
+// extra damage would be. Like every other continuous field it respects the
+// enemy's live knockback resistance, so a late overlord can still shrug it off.
+void Game::updateLures() {
+  const float dt = (1.0F / 60.0F) * worldTimeScale_;
+  auto view = registry_.view<Transform, Lure>();
+  for (const auto e : view) {
+    auto& t = view.get<Transform>(e);
+    auto& lu = view.get<Lure>(e);
+    const bool owned = lu.weaponIndex >= 0 && lu.weaponIndex < weaponCount_;
+
+    lu.life -= dt;
+    if (lu.life <= 0.0F) {
+      destroyQueue_.push_back(e);
+      continue;
+    }
+    t.px = t.x;
+    t.py = t.y;
+
+    // --- Taunt: walk everything in reach toward the bell ----------------------
+    auto enemyView = registry_.view<Transform, Health, Radius, Enemy>();
+    std::vector<entt::entity> caught;
+    for (const auto en : enemyView) {
+      auto& et = enemyView.get<Transform>(en);
+      auto* eh = registry_.try_get<Health>(en);
+      if (eh == nullptr || eh->hp <= 0.0F) continue;
+      const float dx = t.x - et.x;
+      const float dy = t.y - et.y;
+      const float d2 = dx * dx + dy * dy;
+      if (d2 > lu.reach * lu.reach || d2 < 1e-6F) continue;
+      const float d = std::sqrt(d2);
+      // Ease off at the very rim so the horde is coaxed in rather than yanked,
+      // and never overshoot the core.
+      const float edge = std::clamp(
+          1.0F - (d - lu.radius) / std::max(0.001F, lu.reach - lu.radius), 0.25F, 1.0F);
+      const float step =
+          std::min(lu.pull * edge * continuousPullScale(en) * dt,
+                   std::max(0.0F, d - lu.radius * 0.1F));
+      et.x += (dx / d) * step;
+      et.y += (dy / d) * step;
+      caught.push_back(en);
+    }
+
+    // --- Kill core ------------------------------------------------------------
+    lu.tickTimer += dt;
+    if (lu.tickTimer < lu.tickRate) continue;
+    const float tickSpan = lu.tickTimer;
+    lu.tickTimer = 0.0F;
+    std::vector<entt::entity> inside;
+    for (const auto en : caught) {
+      if (!registry_.valid(en)) continue;
+      auto* eh = registry_.try_get<Health>(en);
+      if (eh == nullptr || eh->hp <= 0.0F) continue;
+      const auto& et = registry_.get<Transform>(en);
+      const float dx = et.x - t.x;
+      const float dy = et.y - t.y;
+      if (dx * dx + dy * dy > lu.radius * lu.radius) continue;
+      inside.push_back(en);
+    }
+    if (inside.empty()) continue;
+    // A bell that pulls thirty enemies in should not out-damage the rest of the
+    // arsenal thirtyfold, so the core uses the same crowd falloff as a bomb.
+    const float mul = aoeFalloff(static_cast<int>(inside.size()), lu.pierce);
+    const float baseDamage = owned ? weapons_[lu.weaponIndex].lureDps : lu.damage;
+    const float dmg = baseDamage * tickSpan * stats_.damageMul * momentumDamageMul_;
+    for (const auto en : inside) {
+      if (!registry_.valid(en)) continue;
+      applyEnemyDamage(en, dmg * mul);
+    }
+    if (inside.size() <= 6) {
+      for (const auto en : inside) {
+        if (!registry_.valid(en)) continue;
+        const auto& et = registry_.get<Transform>(en);
+        spawnParticles(et.x, et.y, {0.75F, 0.5F, 1.0F, 1.0F}, 2, 2.0F);
+      }
+    }
+  }
+}
+
 void Game::updateChainLightning() {
   auto view = registry_.view<Transform, ChainLightning, Radius>();
   for (const auto e : view) {
@@ -2790,7 +3106,9 @@ void Game::updatePickups() {
     t.y += v.y / 60.0F;
 
     if (dist < kPickupDist) {
-      xp_ += registry_.get<Xp>(e).value * stats_.xpMul;
+      // XP is routed through grantXp() so the sandbox's "no experience" rule
+      // is enforced in exactly one place.
+      grantXp(registry_.get<Xp>(e).value * stats_.xpMul);
       destroyQueue_.push_back(e);
     }
   }
@@ -3308,6 +3626,147 @@ void Game::updateTierDirector() {
   apply(3, lordWant, "OVERLORD");
 }
 
+// --- Active abilities (J / K / L) ---------------------------------------------
+//
+// Weapons decide what a build does to the field; abilities decide what the
+// player does about the field. All three exist from the first second of a run,
+// need no card, and are gated purely by a cooldown, so the interesting decision
+// is never "do I have it" but "is now the moment". Each one answers a different
+// problem a survivors-like run keeps running into:
+//
+//   J Phase Dash  - "there are six of them on me and I cannot outrun them"
+//   K Overload    - "I am surrounded and my weapons cannot reach through"
+//   L Stasis      - "I need three more seconds of shooting at this thing"
+
+void Game::updateAbilities(const FrameInput& input) {
+  if (player_ == entt::null || !registry_.valid(player_)) return;
+  if (input.abilityBlink && abilityReady(Ability::Blink)) castBlink();
+  if (input.abilityBurst && abilityReady(Ability::Burst)) castBurst(1.0F);
+  if (input.abilitySlow && abilityReady(Ability::Stasis)) castStasis();
+}
+
+void Game::castBlink() {
+  abilityCd_[static_cast<int>(Ability::Blink)] = abilityCooldown(Ability::Blink);
+  auto& t = registry_.get<Transform>(player_);
+  // Direction: where the player is walking. Standing still, dash *at* the
+  // nearest enemy instead — the common panic case is "I am cornered", and a
+  // dash that only works while a movement key is held is not an answer to it.
+  float dx = moveX_;
+  float dy = moveY_;
+  const float inputLen = length(dx, dy);
+  if (inputLen > 0.05F) {
+    dx /= inputLen;
+    dy /= inputLen;
+  } else {
+    dx = 0.0F;
+    dy = 0.0F;
+    float best = 1e12F;
+    auto view = registry_.view<Transform, Enemy>();
+    for (const auto e : view) {
+      const auto& et = view.get<Transform>(e);
+      const float ddx = et.x - t.x;
+      const float ddy = et.y - t.y;
+      const float d2 = ddx * ddx + ddy * ddy;
+      if (d2 < best) {
+        best = d2;
+        dx = ddx;
+        dy = ddy;
+      }
+    }
+    const float d = length(dx, dy);
+    if (d > 0.001F) {
+      dx /= d;
+      dy /= d;
+    } else {
+      dx = 1.0F;
+      dy = 0.0F;
+    }
+  }
+  // Leave a trail of afterimages along the path, then land on the far side.
+  const float dist = stats_.blinkDist;
+  for (int i = 1; i <= 4; ++i) {
+    const float f = static_cast<float>(i) / 5.0F;
+    spawnParticles(t.x + dx * dist * f, t.y + dy * dist * f, {0.45F, 0.85F, 1.0F, 1.0F}, 3,
+                   1.5F);
+  }
+  t.px = t.x;
+  t.py = t.y;
+  t.x += dx * dist;
+  t.y += dy * dist;
+  // A dash that cannot be interrupted is not a dodge.
+  iframes_ = std::max(iframes_, stats_.blinkIframes);
+  spawnParticles(t.x, t.y, {0.6F, 0.95F, 1.0F, 1.0F}, 14, 4.0F);
+  // The Echo Chamber unique rides on every ability.
+  if (stats_.abilityEcho != 0) castBurst(0.4F);
+}
+
+void Game::castBurst(float damageScale) {
+  if (player_ == entt::null || !registry_.valid(player_)) return;
+  if (damageScale >= 1.0F) {
+    abilityCd_[static_cast<int>(Ability::Burst)] = abilityCooldown(Ability::Burst);
+  }
+  auto& t = registry_.get<Transform>(player_);
+  const float radius = stats_.burstRadius;
+  const float damage =
+      stats_.burstDamage * damageScale * stats_.damageMul * momentumDamageMul_;
+  auto view = registry_.view<Transform, Health, Radius, Enemy>();
+  std::vector<entt::entity> hits;
+  for (const auto e : view) {
+    const auto& et = view.get<Transform>(e);
+    const auto& er = view.get<Radius>(e);
+    const float dx = et.x - t.x;
+    const float dy = et.y - t.y;
+    if (dx * dx + dy * dy > (radius + er.r) * (radius + er.r)) continue;
+    hits.push_back(e);
+  }
+  // Same falloff rule as every other blast in the game, so a crowd is still
+  // worth using it on but not worth spamming into.
+  const float falloff = aoeFalloff(static_cast<int>(hits.size()), stats_.pierceAdd);
+  for (const auto e : hits) {
+    const auto& et = registry_.get<Transform>(e);
+    const float dx = et.x - t.x;
+    const float dy = et.y - t.y;
+    const float d = length(dx, dy);
+    applyEnemyDamage(e, damage * falloff);
+    if (d > 0.001F) {
+      applyKnockback(e, std::atan2(dy, dx), stats_.burstKnockback);
+    }
+    spawnParticles(et.x, et.y, {1.0F, 0.85F, 0.5F, 1.0F}, 4, 4.0F);
+  }
+  // A bright expanding ring so the player can see exactly what it covered.
+  const auto ring = registry_.create();
+  registry_.emplace<Transform>(ring, t.x, t.y, t.x, t.y);
+  registry_.emplace<Radius>(ring, radius);
+  SweepEffect sw{};
+  sw.radius = radius;
+  sw.angle = 6.2832F;
+  sw.duration = 0.35F;
+  sw.timer = 0.35F;
+  sw.startAngle = 0.0F;
+  sw.endAngle = 6.2832F;
+  sw.color = {1.0F, 0.85F, 0.45F, 1.0F};
+  registry_.emplace<SweepEffect>(ring, sw);
+  spawnParticles(t.x, t.y, {1.0F, 0.8F, 0.4F, 1.0F}, 18, 6.0F);
+}
+
+void Game::castStasis() {
+  abilityCd_[static_cast<int>(Ability::Stasis)] = abilityCooldown(Ability::Stasis);
+  stasis_ = stats_.stasisDuration;
+  const auto& t = registry_.get<Transform>(player_);
+  spawnParticles(t.x, t.y, {0.5F, 0.7F, 1.0F, 1.0F}, 26, 5.0F);
+  if (stats_.abilityEcho != 0) castBurst(0.4F);
+}
+
+void Game::testTriggerAbility(Ability a) {
+  FrameInput in{};
+  switch (a) {
+    case Ability::Blink: in.abilityBlink = true; break;
+    case Ability::Burst: in.abilityBurst = true; break;
+    case Ability::Stasis: in.abilitySlow = true; break;
+  }
+  updateAbilities(in);
+}
+
 
 void Game::enterStarterPick() {
   state_ = RunState::LevelUp;
@@ -3651,6 +4110,16 @@ void Game::addWeapon(int defIndex) {
   w.prismRange = def.prismRange;
   w.prismWidth = def.prismWidth;
   w.prismMaxTargets = def.prismMaxTargets;
+  w.prismRicochet = def.prismRicochet;
+
+  // Lure
+  w.lureRadius = def.lureRadius;
+  w.lureReach = def.lureReach;
+  w.lurePull = def.lurePull;
+  w.lureDps = def.lureDps;
+  w.lureDuration = def.lureDuration;
+  w.lureTickRate = def.lureTickRate;
+  w.lureMaxBeacons = def.lureMaxBeacons;
 
   // General projectile fields
   w.area = 0.0F;
@@ -3950,6 +4419,26 @@ void Game::applyWeaponEffect(int slotIndex, std::string_view effect, float value
   } else if (effect == "w_unique_arcsaw") {
     w.beamWidth *= 1.8F;
     w.damage *= 1.35F;
+  } else if (effect == "w_lure_power") {
+    // The bell's damage lives in lureDps, not damage, so a plain damage card
+    // would be a dead pick on it.
+    w.lureDps += value;
+    w.lureRadius += value * 0.01F;
+  } else if (effect == "w_nova_power") {
+    // Same story for the ring: novaDamagePerTick is the real number.
+    w.novaDamagePerTick += value;
+  } else if (effect == "w_unique_bell") {
+    w.lurePull *= 1.35F;
+    w.lureRadius *= 1.2F;
+    w.lureReach *= 1.2F;
+    w.lureMaxBeacons += 1;
+  } else if (effect == "w_unique_gravitic") {
+    w.chainJumpRange *= 1.5F;
+    w.chainDamageMul = std::max(w.chainDamageMul, 0.85F);
+  } else if (effect == "w_unique_lash") {
+    w.sweepRadius *= 1.35F;
+    w.sweepKnockback *= 1.4F;
+    w.sweepLead += 0.4F;
   }
 }
 
@@ -4101,6 +4590,10 @@ void Game::updateEnemyShots() {
   if (player_ == entt::null || !registry_.valid(player_)) return;
   const auto& pt = registry_.get<Transform>(player_);
   const auto& pr = registry_.get<Radius>(player_);
+  // Enemy fire is part of the world: Stasis slows it like everything else the
+  // hostile side owns, so a paused moment is a real reprieve and not a
+  // cosmetic trick.
+  const float dt = (1.0F / 60.0F) * worldTimeScale_;
   auto view = registry_.view<Transform, Velocity, EnemyShot, Radius>();
   for (const auto e : view) {
     auto& t = view.get<Transform>(e);
@@ -4109,13 +4602,13 @@ void Game::updateEnemyShots() {
     const auto& r = view.get<Radius>(e);
     t.px = t.x;
     t.py = t.y;
-    es.life -= 1.0F / 60.0F;
+    es.life -= dt;
     if (es.life <= 0.0F) {
       destroyQueue_.push_back(e);
       continue;
     }
-    t.x += v.x / 60.0F;
-    t.y += v.y / 60.0F;
+    t.x += v.x * dt;
+    t.y += v.y * dt;
     const float dx = pt.x - t.x;
     const float dy = pt.y - t.y;
     const float hitR = pr.r + r.r;
@@ -4128,6 +4621,12 @@ void Game::updateEnemyShots() {
 }
 
 void Game::grantXp(float amount) {
+  // The sandbox pays out NO experience at all: no XP orbs, no level-ups, no
+  // free cards. Everything the sandbox is for (trying a weapon, watching its
+  // numbers, maxing a build) works without a single level, and a sandbox that
+  // cannot level up cannot be used to farm levels either. XP is a real-run
+  // reward and stays that way.
+  if (testMode_) return;
   xp_ += amount;
   if (state_ == RunState::Playing && xp_ >= xpNext_) {
     enterLevelUp();
@@ -4159,6 +4658,7 @@ void Game::testClearWeapons() {
   collect(registry_.view<BeamEffect>());
   collect(registry_.view<SweepEffect>());
   collect(registry_.view<ZoneEffect>());
+  collect(registry_.view<Lure>());
   collect(registry_.view<ChainLightning>());
   collect(registry_.view<NovaRing>());
   // A deferred death queued for one of these entities would double-destroy it
@@ -4281,6 +4781,9 @@ void Game::enterTestModeImpl() {
   savedTierBannerT_ = tierBannerT_;
   savedStreak_ = streak_;
   savedStreakTimer_ = streakTimer_;
+  for (int i = 0; i < kAbilityCount; ++i) savedAbilityCd_[i] = abilityCd_[i];
+  savedStasis_ = stasis_;
+  savedWorldTimeScale_ = worldTimeScale_;
   savedPending_ = pending_;
   savedSpawnTimer_ = spawnTimer_;
   savedHordeTimer_ = hordeTimer_;
@@ -4406,6 +4909,9 @@ void Game::exitTestModeImpl() {
   tierBannerT_ = savedTierBannerT_;
   streak_ = savedStreak_;
   streakTimer_ = savedStreakTimer_;
+  for (int i = 0; i < kAbilityCount; ++i) abilityCd_[i] = savedAbilityCd_[i];
+  stasis_ = savedStasis_;
+  worldTimeScale_ = savedWorldTimeScale_;
   momentumDamageMul_ = 1.0F;
   momentumRate_ = 0.0F;
   momentumSpeedMul_ = 1.0F;
@@ -4465,6 +4971,19 @@ void Game::exitTestModeImpl() {
   savedChoices_.clear();
   savedPending_.clear();
   savedParticles_.clear();
+
+  // Leaving the sandbox ends the run. The snapshot above is what makes the
+  // sandbox fair — nothing inside it survives — but a cheat tool that hands the
+  // run back untouched is also a cheat tool: max-all weapons, a fast-forwarded
+  // clock and an immortal test are exactly the "easy run" a player should not
+  // be able to cash in. So the run is restored (so the death screen reports the
+  // REAL kills, level and time) and then the player is killed for real.
+  if (player_ != entt::null && registry_.valid(player_)) {
+    auto& h = registry_.get<Health>(player_);
+    h.hp = 0.0F;
+    state_ = RunState::GameOver;
+    iframes_ = 0.0F;
+  }
 }
 
 void Game::setTestWeapon(int defIndex) {
@@ -4711,6 +5230,7 @@ Game::DebugCounts Game::debugCounts() const {
   c.chains = registry_.view<ChainLightning>().size();
   c.novas = registry_.view<NovaRing>().size();
   c.vortices = registry_.view<Vortex>().size();
+  c.lures = registry_.view<Lure>().size();
   return c;
 }
 
@@ -4780,6 +5300,42 @@ float Game::testFirstEnemyDistToVortex() const {
     return best;
   }
   return -1.0F;
+}
+
+float Game::testFirstEnemyDistToLure() const {
+  auto enemyView = registry_.view<Transform, Enemy>();
+  for (const auto en : enemyView) {
+    const auto& et = registry_.get<Transform>(en);
+    float best = -1.0F;
+    for (const auto lb : registry_.view<Transform, Lure>()) {
+      const auto& lt = registry_.get<Transform>(lb);
+      const float dx = et.x - lt.x;
+      const float dy = et.y - lt.y;
+      const float d = std::sqrt(dx * dx + dy * dy);
+      if (best < 0.0F || d < best) best = d;
+    }
+    return best;
+  }
+  return -1.0F;
+}
+
+float Game::testPlayerX() const {
+  if (player_ == entt::null || !registry_.valid(player_)) return 0.0F;
+  return registry_.get<Transform>(player_).x;
+}
+
+float Game::testPlayerY() const {
+  if (player_ == entt::null || !registry_.valid(player_)) return 0.0F;
+  return registry_.get<Transform>(player_).y;
+}
+
+std::vector<float> Game::testBeamAngles() const {
+  std::vector<float> out;
+  for (const auto e : registry_.view<BeamEffect>()) {
+    const auto& be = registry_.get<BeamEffect>(e);
+    out.push_back(std::atan2(be.endY - be.startY, be.endX - be.startX));
+  }
+  return out;
 }
 
 std::size_t Game::debugEnemyCount() const {
@@ -4932,6 +5488,7 @@ static const char* attackTypeName(AttackType t) {
     case AttackType::Halo: return "halo";
     case AttackType::Vortex: return "vortex";
     case AttackType::Prism: return "prism";
+    case AttackType::Lure: return "beacon";
   }
   return "?";
 }
@@ -4984,6 +5541,21 @@ void Game::renderPlayerStats(core::render::Batcher& b, float px, float py) {
   rows.push_back(speedRow);
   rows.push_back("PROJECTILES +" + std::to_string(stats_.projAdd) + "   PIERCE +" +
                  std::to_string(stats_.pierceAdd));
+  {
+    // The three buttons, with what the build has done to them. Printed even at
+    // their base numbers: they are always available, and a player who has never
+    // noticed them should find the reminder where the rest of the build lives.
+    const auto secs = [](float v) { return fit1(v); };
+    std::string abil = "J DASH " + secs(stats_.blinkDist) + "U   K BURST " +
+                       std::to_string(static_cast<int>(stats_.burstDamage)) + "/" +
+                       secs(stats_.burstRadius) + "U   L STASIS " + secs(stats_.stasisDuration) +
+                       "S X" + std::to_string(static_cast<int>(stats_.stasisSlow * 100.0F)) + "%";
+    if (stats_.abilityCdMul < 0.999F) {
+      abil += "   CD X" + std::to_string(static_cast<int>(stats_.abilityCdMul * 100.0F)) + "%";
+    }
+    if (stats_.abilityEcho != 0) abil += "  ECHO";
+    rows.push_back(abil);
+  }
   if (stats_.armorPierce > 0.0F) {
     rows.push_back("ARMOR PIERCE " + std::to_string(static_cast<int>(stats_.armorPierce)));
   }
@@ -5838,6 +6410,47 @@ void Game::render(core::render::Batcher& b, float alpha) {
     }
   }
 
+  // Grave Bell beacons (lure): a wide, faint "taunt" disc, a bright kill core,
+  // and motes walking inward from the rim so the drag direction is obvious.
+  {
+    auto view = registry_.view<Transform, Lure>();
+    for (const auto e : view) {
+      const auto& t = view.get<Transform>(e);
+      const auto& lu = view.get<Lure>(e);
+      const float fade = lu.maxLife > 0.001F ? std::clamp(lu.life / lu.maxLife, 0.0F, 1.0F) : 0.0F;
+      // The reach: a very soft wash, so the player can see what it grabs.
+      Color reach = lu.color;
+      reach.a = 0.06F * fade;
+      b.circle(t.x, t.y, lu.reach, reach);
+      // The kill core: a rim that pulses on the damage tick.
+      const float pulse = 1.0F + 0.08F * std::sin(simTime_ * 9.0F);
+      Color core = lu.color;
+      core.a = 0.20F * fade;
+      b.circle(t.x, t.y, lu.radius * pulse, core);
+      Color rim = lu.color;
+      rim.a = 0.60F * fade;
+      constexpr int kBellRim = 20;
+      for (int k = 0; k < kBellRim; ++k) {
+        const float a = 2.0F * kPi * static_cast<float>(k) / static_cast<float>(kBellRim);
+        b.circle(t.x + std::cos(a) * lu.radius * pulse,
+                 t.y + std::sin(a) * lu.radius * pulse, 0.07F, rim);
+      }
+      // Inward motes: the taunt, drawn.
+      constexpr int kMotes = 8;
+      for (int k = 0; k < kMotes; ++k) {
+        const float f = (static_cast<float>(k) + 0.5F) / static_cast<float>(kMotes);
+        const float a = 2.4F * static_cast<float>(k) - simTime_ * 1.3F;
+        const float rr = lu.reach * (1.0F - f);
+        Color mote = lu.color;
+        mote.a = (0.10F + 0.35F * f) * fade;
+        b.circle(t.x + std::cos(a) * rr, t.y + std::sin(a) * rr, 0.06F, mote);
+      }
+      Color eye = lu.color;
+      eye.a = 0.85F * fade;
+      b.circle(t.x, t.y, 0.15F, eye);
+    }
+  }
+
   // Chain lightning: halo + core at the current jump position.
   {
     auto view = registry_.view<Transform, ChainLightning>();
@@ -5984,6 +6597,37 @@ void Game::render(core::render::Batcher& b, float alpha) {
     const float left = std::clamp(streakTimer_ / std::max(0.5F, stats_.momentumWindow), 0.0F, 1.0F);
     b.rectTopLeft(px - barW - 14.0F, 50.0F, barW, 4.0F, Color{0.35F, 0.30F, 0.35F, 0.8F});
     b.rectTopLeft(px - barW * left - 14.0F, 50.0F, barW * left, 4.0F, heat);
+  }
+
+  // Active abilities (bottom-left): key, name and the seconds left. Stasis also
+  // reports how deep in stasis the world currently is, so the slow is visible
+  // on the HUD instead of only being felt.
+  {
+    static const char* kKeys[3] = {"J", "K", "L"};
+    static const char* kNames[3] = {"DASH", "OVERLOAD", "STASIS"};
+    const float rowY = py - 42.0F;
+    for (int i = 0; i < kAbilityCount; ++i) {
+      const auto a = static_cast<Ability>(i);
+      const float left = abilityCooldownRemaining(a);
+      const bool ready = left <= 0.0F;
+      const bool active = (a == Ability::Stasis && stasis_ > 0.0F);
+      const float x = 14.0F + static_cast<float>(i) * 168.0F;
+      std::string label = std::string("[") + kKeys[i] + "] " + kNames[i];
+      if (active) {
+        label += " " + std::to_string(static_cast<int>(stasis_ * 10.0F + 0.5F) / 10);
+      } else if (!ready) {
+        label += " " + std::to_string(static_cast<int>(left + 0.999F)) + "S";
+      }
+      const Color tint = active   ? Color{0.6F, 0.85F, 1.0F, 1.0F}
+                          : ready  ? Color{0.55F, 1.0F, 0.7F, 1.0F}
+                                   : Color{0.5F, 0.52F, 0.58F, 1.0F};
+      b.text(x, rowY, 1.7F, tint, label);
+      // Cooldown bar: full when ready, draining as it comes back.
+      const float full = abilityCooldown(a);
+      const float frac = ready ? 1.0F : std::clamp(1.0F - left / std::max(0.01F, full), 0.0F, 1.0F);
+      b.rectTopLeft(x, rowY + 20.0F, 150.0F, 3.0F, Color{0.18F, 0.18F, 0.22F, 0.8F});
+      b.rectTopLeft(x, rowY + 20.0F, 150.0F * frac, 3.0F, tint);
+    }
   }
 
   // Tribunal banner: the adaptive director announces a newly opened tier under
@@ -6149,12 +6793,11 @@ void Game::render(core::render::Batcher& b, float alpha) {
         "[1] PREV   [2] NEXT   [3] MAX BUILD   [4] WAVES   [5] CLOSE";
     b.text(px * 0.5F - b.textWidth(1.6F, rowA) * 0.5F, py * 0.775F, 1.6F, key, rowA);
     const std::string rowB =
-        "[E] ITEMS   [I] GOD   [F] CLOCK   [K] KILL   [R] MAX ALL";
+        "[E] ITEMS   [I] GOD   [F] CLOCK   [X] KILL   [R] MAX ALL";
     b.text(px * 0.5F - b.textWidth(1.6F, rowB) * 0.5F, py * 0.805F, 1.6F, key, rowB);
-    const std::string note =
-        "SANDBOX: XP / ITEMS / KILLS / HP ARE ROLLED BACK WHEN YOU CLOSE";
-    b.text(px * 0.5F - b.textWidth(1.4F, note) * 0.5F, py * 0.84F, 1.4F,
-           Color{0.6F, 0.6F, 0.7F, 1.0F}, note);
+    const std::string noteA = "NO XP - NO SKINS - LEAVING THE SANDBOX ENDS THE RUN";
+    b.text(px * 0.5F - b.textWidth(1.4F, noteA) * 0.5F, py * 0.84F, 1.4F,
+           Color{0.95F, 0.55F, 0.45F, 1.0F}, noteA);
     if (testShopOpen_) renderTestShop(b, px, py);
   }
 

@@ -445,6 +445,299 @@ value = 0.19
 max_stacks = 2
 weapon = "shuriken"
 
+# --- Second-wave weapons -------------------------------------------------------
+# Same two-card shape as above. The three that do not spend `w.damage` (the
+# bell, the pressure ring and the ground fire) get a card that raises the number
+# they actually use, so no card in the pool is ever a dead pick.
+
+[[upgrade]]
+id = "w_railgun_power"
+name = "Rail Tuning"
+desc = "Rail Rifle: +30 damage"
+effect = "w_damage_add"
+value = 30
+max_stacks = 2
+weapon = "railgun"
+
+[[upgrade]]
+id = "w_railgun_pierce"
+name = "Overcharged Rail"
+desc = "Rail Rifle: +2 pierce"
+effect = "w_pierce_add"
+value = 2
+max_stacks = 2
+weapon = "railgun"
+
+[[upgrade]]
+id = "w_shard_power"
+name = "Shard Whetstone"
+desc = "Frost Shards: +5 damage"
+effect = "w_damage_add"
+value = 5
+max_stacks = 3
+weapon = "shard"
+
+[[upgrade]]
+id = "w_shard_volley"
+name = "Shard Barrage"
+desc = "Frost Shards: +2 projectiles"
+effect = "w_proj_add"
+value = 2
+max_stacks = 2
+weapon = "shard"
+
+[[upgrade]]
+id = "w_mortar_power"
+name = "Mortar Charge"
+desc = "Siege Mortar: +25 damage"
+effect = "w_damage_add"
+value = 25
+max_stacks = 2
+weapon = "mortar"
+
+[[upgrade]]
+id = "w_mortar_volley"
+name = "Barrage"
+desc = "Siege Mortar: +1 shell per shot"
+effect = "w_proj_add"
+value = 1
+max_stacks = 2
+weapon = "mortar"
+
+[[upgrade]]
+id = "w_pinball_power"
+name = "Puck Polish"
+desc = "Pinball Puck: +10 damage"
+effect = "w_damage_add"
+value = 10
+max_stacks = 3
+weapon = "pinball"
+
+[[upgrade]]
+id = "w_pinball_speed"
+name = "Hot Wheels"
+desc = "Pinball Puck: +20% fire rate"
+effect = "w_fire_rate"
+value = 0.20
+max_stacks = 2
+weapon = "pinball"
+
+[[upgrade]]
+id = "w_lure_power"
+name = "Deeper Toll"
+desc = "Grave Bell: +8 damage per second"
+effect = "w_lure_power"
+value = 8
+max_stacks = 3
+weapon = "lure"
+
+[[upgrade]]
+id = "w_lure_rate"
+name = "Quick Chime"
+desc = "Grave Bell: +18% fire rate"
+effect = "w_fire_rate"
+value = 0.18
+max_stacks = 2
+weapon = "lure"
+
+[[upgrade]]
+id = "w_drill_power"
+name = "Drill Bit"
+desc = "Jackhammer Drill: +3 damage per tick"
+effect = "w_damage_add"
+value = 3
+max_stacks = 3
+weapon = "drill"
+
+[[upgrade]]
+id = "w_drill_rate"
+name = "Redline"
+desc = "Jackhammer Drill: +25% fire rate"
+effect = "w_fire_rate"
+value = 0.25
+max_stacks = 2
+weapon = "drill"
+
+[[upgrade]]
+id = "w_shockcore_power"
+name = "Deeper Charge"
+desc = "Shock Core: +10 damage per tick"
+effect = "w_nova_power"
+value = 10
+max_stacks = 3
+weapon = "shockcore"
+
+[[upgrade]]
+id = "w_shockcore_rate"
+name = "Quicken"
+desc = "Shock Core: +20% fire rate"
+effect = "w_fire_rate"
+value = 0.20
+max_stacks = 2
+weapon = "shockcore"
+
+[[upgrade]]
+id = "w_whip_power"
+name = "Barb Wire"
+desc = "Barbed Whip: +12 damage"
+effect = "w_damage_add"
+value = 12
+max_stacks = 3
+weapon = "whip"
+
+[[upgrade]]
+id = "w_whip_wide"
+name = "Long Lash"
+desc = "Barbed Whip: a 15% wider lash per stack"
+effect = "w_proj_add"
+value = 1
+max_stacks = 2
+weapon = "whip"
+
+[[upgrade]]
+id = "w_tesla_power"
+name = "Coil Tuning"
+desc = "Tesla Coil: +5 damage per jump"
+effect = "w_damage_add"
+value = 5
+max_stacks = 3
+weapon = "tesla"
+
+[[upgrade]]
+id = "w_tesla_rate"
+name = "Arc Cascade"
+desc = "Tesla Coil: +22% fire rate"
+effect = "w_fire_rate"
+value = 0.22
+max_stacks = 2
+weapon = "tesla"
+
+[[upgrade]]
+id = "w_blizzard_power"
+name = "Deep Cold"
+desc = "Blizzard Rail: +8 damage per jump"
+effect = "w_damage_add"
+value = 8
+max_stacks = 2
+weapon = "blizzard"
+
+[[upgrade]]
+id = "w_blizzard_rate"
+name = "Whiteout"
+desc = "Blizzard Rail: +20% fire rate"
+effect = "w_fire_rate"
+value = 0.20
+max_stacks = 2
+weapon = "blizzard"
+
+[[upgrade]]
+id = "w_siege_power"
+name = "Thermite"
+desc = "Ashfall: +30 damage to the reap"
+effect = "w_damage_add"
+value = 30
+max_stacks = 2
+weapon = "siege"
+
+[[upgrade]]
+id = "w_siege_rate"
+name = "Bombardment"
+desc = "Ashfall: +25% fire rate"
+effect = "w_fire_rate"
+value = 0.25
+max_stacks = 2
+weapon = "siege"
+
+[[upgrade]]
+id = "w_chaos_power"
+name = "Unstable Core"
+desc = "Chaos Sphere: +15 damage"
+effect = "w_damage_add"
+value = 15
+max_stacks = 2
+weapon = "chaos"
+
+[[upgrade]]
+id = "w_chaos_rate"
+name = "Ricochet Tuning"
+desc = "Chaos Sphere: +20% fire rate"
+effect = "w_fire_rate"
+value = 0.20
+max_stacks = 2
+weapon = "chaos"
+
+[[upgrade]]
+id = "w_sunder_power"
+name = "Sunder Charge"
+desc = "Sundering Core: +20 damage per tick"
+effect = "w_nova_power"
+value = 20
+max_stacks = 2
+weapon = "sunder"
+
+[[upgrade]]
+id = "w_sunder_rate"
+name = "Faster Ring"
+desc = "Sundering Core: +20% fire rate"
+effect = "w_fire_rate"
+value = 0.20
+max_stacks = 2
+weapon = "sunder"
+
+[[upgrade]]
+id = "w_tidewhip_power"
+name = "Deep Current"
+desc = "Tidal Lash: +16 damage"
+effect = "w_damage_add"
+value = 16
+max_stacks = 2
+weapon = "tidewhip"
+
+[[upgrade]]
+id = "w_tidewhip_rate"
+name = "Spring Tide"
+desc = "Tidal Lash: +22% fire rate"
+effect = "w_fire_rate"
+value = 0.22
+max_stacks = 2
+weapon = "tidewhip"
+
+[[upgrade]]
+id = "w_seraph_power"
+name = "Wing Polish"
+desc = "Seraph Array: +25 damage"
+effect = "w_damage_add"
+value = 25
+max_stacks = 2
+weapon = "seraph"
+
+[[upgrade]]
+id = "w_seraph_wings"
+name = "Winged Host"
+desc = "Seraph Array: +1 wing"
+effect = "w_proj_add"
+value = 1
+max_stacks = 2
+weapon = "seraph"
+
+[[upgrade]]
+id = "w_horizon_power"
+name = "Singularity Tuning"
+desc = "Event Horizon: +20 damage"
+effect = "w_damage_add"
+value = 20
+max_stacks = 2
+weapon = "eventhorizon"
+
+[[upgrade]]
+id = "w_horizon_wells"
+name = "Deeper Well"
+desc = "Event Horizon: +1 gravity well"
+effect = "w_proj_add"
+value = 1
+max_stacks = 2
+weapon = "eventhorizon"
+
 # --- Unique items (one-time, rule-changing) ----------------------------------
 
 [[upgrade]]
@@ -659,7 +952,7 @@ kind = "unique"
 [[upgrade]]
 id = "uw_beam_prism"
 name = "Prism Lance"
-desc = "Solar Lance: fires 3 parallel beams at once"
+desc = "Solar Lance: three beams at once — forward, left and right"
 effect = "w_unique_prism"
 value = 3
 max_stacks = 1
@@ -705,6 +998,136 @@ value = 1
 max_stacks = 1
 kind = "unique"
 weapon = "pulsar"
+
+[[upgrade]]
+id = "uw_railgun_slug"
+name = "Magnetic Slug"
+desc = "Rail Rifle: the slug homes onto the nearest enemy"
+effect = "w_unique_homing"
+value = 1
+max_stacks = 1
+kind = "unique"
+weapon = "railgun"
+
+[[upgrade]]
+id = "uw_lure_bell"
+name = "Deep Toll"
+desc = "Grave Bell: 35% harder pull, 20% wider core and reach, and one more bell at a time"
+effect = "w_unique_bell"
+value = 1
+max_stacks = 1
+kind = "unique"
+weapon = "lure"
+
+[[upgrade]]
+id = "uw_tesla_gravitic"
+name = "Gravitic Field"
+desc = "Tesla Coil: jumps reach 50% further and stop decaying so hard"
+effect = "w_unique_gravitic"
+value = 1
+max_stacks = 1
+kind = "unique"
+weapon = "tesla"
+
+[[upgrade]]
+id = "uw_blizzard_storm"
+name = "White Squall"
+desc = "Blizzard Rail: +4 jumps and no damage decay"
+effect = "w_unique_thunderlord"
+value = 4
+max_stacks = 1
+kind = "unique"
+weapon = "blizzard"
+
+[[upgrade]]
+id = "uw_siege_molten"
+name = "Molten Crater"
+desc = "Ashfall: the burning ground is 80% hotter, 25% wider and lasts much longer"
+effect = "w_unique_molten"
+value = 1
+max_stacks = 1
+kind = "unique"
+weapon = "siege"
+
+[[upgrade]]
+id = "uw_chaos_echo"
+name = "Detonation Chain"
+desc = "Chaos Sphere: every bounce splashes area damage around the hit"
+effect = "w_unique_area"
+value = 1.6
+max_stacks = 1
+kind = "unique"
+weapon = "chaos"
+
+[[upgrade]]
+id = "uw_sunder_supernova"
+name = "Event Collapse"
+desc = "Sundering Core: ring expands faster, wider, and hits harder"
+effect = "w_unique_supernova"
+value = 1
+max_stacks = 1
+kind = "unique"
+weapon = "sunder"
+
+[[upgrade]]
+id = "uw_tidewhip_lash"
+name = "Undertow"
+desc = "Tidal Lash: a 35% wider lash that flings 40% harder and reaches further"
+effect = "w_unique_lash"
+value = 1
+max_stacks = 1
+kind = "unique"
+weapon = "tidewhip"
+
+# --- Abilities (J / K / L) ----------------------------------------------------
+# The three abilities are live from the first second of a run, so these cards
+# never unlock anything — they only make the keys come back sooner or hit
+# harder. See docs/mechanics.md for the full numbers.
+
+[[upgrade]]
+id = "u_ability_haste"
+name = "Combat Reflexes"
+desc = "All abilities recharge 25% faster"
+effect = "ability_haste"
+value = 0.25
+max_stacks = 3
+kind = "unique"
+
+[[upgrade]]
+id = "u_ability_might"
+name = "Heavy Hands"
+desc = "Overload: a wider blast that hits 30 harder and shoves 3 further"
+effect = "ability_might"
+value = 1
+max_stacks = 2
+kind = "unique"
+
+[[upgrade]]
+id = "u_ability_phase"
+name = "Phase Memory"
+desc = "Phase Dash: +1.2 distance and +0.2s of invulnerability on arrival"
+effect = "ability_phase"
+value = 1
+max_stacks = 2
+kind = "unique"
+
+[[upgrade]]
+id = "u_ability_stasis"
+name = "Deep Freeze"
+desc = "Stasis: +1s of duration, and the slowed world drops another 0.08x"
+effect = "ability_stasis"
+value = 1
+max_stacks = 2
+kind = "unique"
+
+[[upgrade]]
+id = "u_ability_echo"
+name = "Cascade"
+desc = "Every ability also fires a 40% Overload at the same spot"
+effect = "ability_echo"
+value = 0.4
+max_stacks = 1
+kind = "unique"
 
 # --- Milestones (every power-of-two level from 4 on) -------------------------
 

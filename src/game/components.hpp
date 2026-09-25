@@ -229,6 +229,26 @@ struct NovaRing {
   core::render::Color color{1.0F, 1.0F, 1.0F, 1.0F};
 };
 
+// Grave Bell (lure): a planted beacon that taunts the horde. The defining
+// mechanic is the DRAG — anything caught inside `reach` is walked toward the
+// bell, so a stationary beacon keeps funneling enemies into a small kill zone
+// instead of the player having to hold a knife fight there. It is the only
+// weapon that fights from a fixed spot, which is what makes it a good partner
+// for fast melee and a bad one to stand next to.
+struct Lure {
+  float damage = 14.0F;    // damage per second inside the core
+  int pierce = 0;          // reduces crowd damage falloff
+  float radius = 1.4F;     // damage core radius
+  float reach = 3.6F;      // outer edge where the drag starts
+  float pull = 5.0F;       // inward drag, world units per second
+  float life = 5.0F;       // seconds left before it dies
+  float maxLife = 5.0F;    // original lifetime (render fade)
+  float tickRate = 0.15F;  // damage ticks per second
+  float tickTimer = 0.0F;
+  int weaponIndex = -1;    // owning weapon slot (-1 = orphaned)
+  core::render::Color color{0.6F, 0.4F, 1.0F, 1.0F};
+};
+
 struct Xp {
   float value = 1.0F;
 };

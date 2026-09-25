@@ -2407,7 +2407,7 @@ TEST_CASE("Void Gyre zones drag enemies inward and scale with projectiles") {
   REQUIRE(g.debugCounts().vortices == 5);
 }
 
-TEST_CASE("Prism Array locks one beam per projectile onto separate targets") {
+TEST_CASE("Prism Array ricochets its locked beams, once per pierce") {
   const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
   int prism = -1;
   for (std::size_t i = 0; i < content.weapons.size(); ++i) {
@@ -2419,27 +2419,35 @@ TEST_CASE("Prism Array locks one beam per projectile onto separate targets") {
   g.testDisableWaves();
   g.testClearWeapons();
   g.stats().fireRateBonus = 100.0F; // fire every tick
-  // Four targets in a row, all well inside the lock range. Four projectiles
-  // means four locks, so the crowd is split across separate beams.
-  for (int i = 0; i < 4; ++i) {
-    g.testSpawnEnemyAt(3.0F + static_cast<float>(i) * 0.8F, 0.0F);
+  // Six targets in a tight line, all inside the ricochet reach, so a beam that
+  // reflects has somewhere to go.
+  for (int i = 0; i < 6; ++i) {
+    g.testSpawnEnemyAt(3.0F + static_cast<float>(i) * 1.0F, 0.0F);
   }
   g.testAddWeapon(prism);
   game::FrameInput in{};
   g.advance(1.0F / 60.0F, in);
-  // Four projectiles => four independent locked beams, not one fat beam.
-  REQUIRE(g.debugCounts().beams == 4);
+  // A beam that only reached its own target would draw exactly one segment per
+  // lock. The base pierce already reflects, so there is strictly more.
+  const int beams = g.debugCounts().beams;
+  REQUIRE(beams > 6);
 
-  // Every one of them does real work: all four separate targets lose HP, which
-  // a single-target beam could never manage.
+  // Pierce IS the number of reflections: adding one draws one more segment per
+  // locked beam, which is what makes the pierce card a real upgrade here.
+  g.testAddWeaponUpgrade(0, "pierce_add", 1.0F);
+  g.advance(1.0F / 60.0F, in);
+  REQUIRE(g.debugCounts().beams > beams);
+
+  // Every one of the beams does real work: all six separate targets lose HP,
+  // which a single-target beam could never manage.
   for (int i = 0; i < 30; ++i) g.advance(1.0F / 60.0F, in);
   const auto hps = g.testEnemyHps();
-  REQUIRE(hps.size() == 4);
+  REQUIRE(hps.size() == 6);
   int damaged = 0;
   for (const float hp : hps) {
     if (hp < 100000.0F) ++damaged;
   }
-  REQUIRE(damaged == 4);
+  REQUIRE(damaged == 6);
 }
 
 TEST_CASE("Test sandbox rolls back XP, items, kills and bestiary on exit") {
@@ -2482,7 +2490,9 @@ TEST_CASE("Test sandbox rolls back XP, items, kills and bestiary on exit") {
   g.testSpawnTieredEnemyAt(2.0F, 0.0F, 1);
   g.testKillFirstEnemy();
   REQUIRE(g.kills() > kills0);
-  REQUIRE(g.xp() > xp0);
+  // The sandbox pays out no experience at all: the grant above is dropped on
+  // the floor, so there is no way to grind levels inside it.
+  REQUIRE(g.xp() == Catch::Approx(xp0));
   REQUIRE(g.testBestiaryKills(0) > 0);
 
   // Leaving rolls the whole run back: no leaked XP, items, kills or HP.
@@ -2497,9 +2507,12 @@ TEST_CASE("Test sandbox rolls back XP, items, kills and bestiary on exit") {
   // that closed the sandbox is the next normal-speed tick.
   REQUIRE(g.simTime() == Catch::Approx(time0 + 1.0F / 60.0F).margin(0.02F));
   REQUIRE(g.stats().damageMul == Catch::Approx(1.0F));
-  REQUIRE(g.playerHp() == Catch::Approx(hp1));
   REQUIRE(g.testBestiaryKills(0) == 0);
   REQUIRE(g.testTimeScale() == 1);
+  // ...and the run is over: the sandbox is a cheat tool, so the cheat is not
+  // cashed in. The report still shows the REAL run (kills/level/time above).
+  REQUIRE(g.state() == game::RunState::GameOver);
+  REQUIRE(g.playerHp() == 0.0F);
 }
 
 TEST_CASE("Test sandbox keeps the real horde but drops its own injected fodder") {
@@ -2580,16 +2593,36 @@ TEST_CASE("Test sandbox item picker grants on demand and max-all fills it") {
   REQUIRE(g.upgradeStacks(static_cast<std::size_t>(hpCard)) ==
           content.upgrades[static_cast<std::size_t>(hpCard)].maxStacks);
 
-  // R maxes every item in the sandbox.
+  // R maxes every item in the sandbox. A card that needs a weapon the player
+  // does not own cannot be applied even here, so the invariant is narrower than
+  // "every card": every weapon-agnostic card AND every card of the armed weapon
+  // ends up maxed.
   game::FrameInput fill{};
   fill.restart = true;
   g.advance(1.0F / 60.0F, fill);
-  int maxed = 0;
+  int globalCards = 0;
+  int maxedGlobal = 0;
+  int ownedCards = 0;
+  int maxedOwned = 0;
   for (std::size_t i = 0; i < content.upgrades.size(); ++i) {
-    if (content.upgrades[i].kind == "milestone") continue;
-    if (g.upgradeStacks(i) == content.upgrades[i].maxStacks) ++maxed;
+    const auto& def = content.upgrades[i];
+    if (def.kind == "milestone") continue;
+    const bool isMaxed = g.upgradeStacks(i) == def.maxStacks;
+    if (def.weapon.empty()) {
+      ++globalCards;
+      maxedGlobal += isMaxed ? 1 : 0;
+      continue;
+    }
+    bool armed = false;
+    for (const auto& id : g.armedWeaponIds()) armed = armed || id == def.weapon;
+    if (!armed) continue;
+    ++ownedCards;
+    maxedOwned += isMaxed ? 1 : 0;
   }
-  REQUIRE(maxed > static_cast<int>(content.upgrades.size()) / 2);
+  REQUIRE(globalCards > 20);
+  REQUIRE(maxedGlobal == globalCards);
+  REQUIRE(ownedCards > 0);
+  REQUIRE(maxedOwned == ownedCards);
 }
 
 TEST_CASE("Test sandbox immortality and on-demand death") {
@@ -2665,7 +2698,7 @@ TEST_CASE("Test sandbox difficulty clock only speeds up the sandbox") {
   REQUIRE(g.simTime() == Catch::Approx(entryTime + 1.0F / 60.0F).margin(0.02F));
 }
 
-TEST_CASE("Test sandbox rerolls have no budget") {
+TEST_CASE("The test sandbox never levels up, so it can never be rerolled") {
   const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
   game::Game g{content, 75};
   g.testDisableWaves();
@@ -2679,21 +2712,25 @@ TEST_CASE("Test sandbox rerolls have no budget") {
   g.advance(1.0F / 60.0F, open);
   REQUIRE(g.testMode());
 
-  // Level up in the sandbox, then reroll far past the normal single charge.
+  // Experience is refused inside the sandbox, so the level-up card screen (and
+  // with it the sandbox's free rerolls) is unreachable: grinding levels with a
+  // cheat is the one thing the hermetic rollback used to leave open.
   g.grantXp(1000.0F);
   g.advance(1.0F / 60.0F, in);
-  REQUIRE(g.state() == game::RunState::LevelUp);
-  for (int i = 0; i < 12; ++i) {
-    game::FrameInput roll{};
-    roll.restart = true;
-    g.advance(1.0F / 60.0F, roll);
-    REQUIRE(g.state() == game::RunState::LevelUp);
-  }
-  // Leaving the sandbox clears the pending level-up, so the run is playable.
+  REQUIRE(g.xp() == 0.0F);
+  REQUIRE(g.level() == 1);
+  REQUIRE(g.state() == game::RunState::Playing);
+  // R tries "max every item" in here, which is still the sandbox's job.
+  game::FrameInput fill{};
+  fill.restart = true;
+  g.advance(1.0F / 60.0F, fill);
+  REQUIRE(g.stats().damageMul > 1.0F);
+  REQUIRE(g.state() == game::RunState::Playing);
+  // Leaving the sandbox ends the run.
   game::FrameInput close{};
   close.testModeToggle = true;
   g.advance(1.0F / 60.0F, close);
-  REQUIRE(g.state() == game::RunState::Playing);
+  REQUIRE(g.state() == game::RunState::GameOver);
 }
 
 // --- Round 11: menu repeat, max-all soft-lock, displacement resistance -------
@@ -2749,11 +2786,17 @@ TEST_CASE("A maxed-out build still finishes its level-up") {
   game::FrameInput in{};
   g.advance(1.0F / 60.0F, in);
 
-  game::FrameInput open{};
-  open.testModeToggle = true;
-  g.advance(1.0F / 60.0F, open);
-  REQUIRE(g.testMode());
-  g.testMaxAllItems();
+  // Max the build the way a well-played run would, WITHOUT the sandbox: the
+  // sandbox cannot level up any more, so the stacks are granted directly (which
+  // is exactly what its "max all" cheat does internally).
+  for (int pass = 0; pass < 64; ++pass) {
+    bool progressed = false;
+    for (std::size_t i = 0; i < content.upgrades.size(); ++i) {
+      if (content.upgrades[i].kind == "milestone") continue;
+      progressed |= g.testGrantUpgrade(static_cast<int>(i));
+    }
+    if (!progressed) break;
+  }
 
   // The reported bug: "after max all the game hangs while offering the one
   // upgrade it has left". Level up repeatedly and never be offered a card that
@@ -2766,6 +2809,16 @@ TEST_CASE("A maxed-out build still finishes its level-up") {
   for (int guard = 0; guard < 200 && g.state() == game::RunState::LevelUp; ++guard) {
     for (const auto& c : g.upgradeChoices()) {
       if (c.kind == game::Choice::Kind::Skip) continue;
+      if (c.kind == game::Choice::Kind::Weapon) {
+        const auto& wdef = content.weapons[static_cast<std::size_t>(c.index)];
+        CAPTURE(wdef.id);
+        // A weapon card for a weapon the player already owns is a dead pick:
+        // choosing it used to consume nothing and brick the run.
+        bool armed = false;
+        for (const auto& id : g.armedWeaponIds()) armed = armed || id == wdef.id;
+        REQUIRE_FALSE(armed);
+        continue;
+      }
       REQUIRE(c.kind == game::Choice::Kind::Upgrade);
       const auto& def = content.upgrades[static_cast<std::size_t>(c.index)];
       if (!def.weapon.empty()) {
@@ -2887,8 +2940,7 @@ TEST_CASE("Test sandbox rolls back the state it used to leak") {
   for (std::size_t i = 0; i < after.size(); ++i) {
     REQUIRE(after[i] == Catch::Approx(entryEnemyHp[i]));
   }
-  // Player HP, weapons, XP and the unique-item state are all rolled back.
-  REQUIRE(g.playerHp() == Catch::Approx(entryHp));
+  // Weapons, XP and the unique-item state are all rolled back...
   REQUIRE(g.armedWeaponIds().size() == 1);
   REQUIRE(g.armedWeaponIds().front() == content.weapons[0].id);
   REQUIRE(g.xp() == Catch::Approx(0.0F));
@@ -2897,6 +2949,10 @@ TEST_CASE("Test sandbox rolls back the state it used to leak") {
   // Nothing sandbox-only survives: no injected fodder, no stray projectiles.
   REQUIRE(g.debugCounts().projectiles == 0);
   REQUIRE(g.testTimeScale() == 1);
+  // ...but the player does not survive either: leaving the sandbox ends the run.
+  REQUIRE(g.state() == game::RunState::GameOver);
+  REQUIRE(g.playerHp() == 0.0F);
+  REQUIRE(g.playerHp() < entryHp);
 }
 
 TEST_CASE("Champions wait for elites to be easy, overlords for champions") {
@@ -3084,4 +3140,389 @@ TEST_CASE("The upgrade pool is not dominated by dead stat cards") {
   REQUIRE(offense >= 25);
   // Momentum is a real build axis, not one lonely card.
   REQUIRE(momentum >= 4);
+}
+
+// --- Second-wave weapons, abilities and the fixes on top ---------------------
+
+namespace {
+
+// Index of a weapon by id (-1 when the id is not in the roster).
+int weaponIndex(const game::Content& content, const char* id) {
+  for (std::size_t i = 0; i < content.weapons.size(); ++i) {
+    if (content.weapons[i].id == id) return static_cast<int>(i);
+  }
+  return -1;
+}
+
+} // namespace
+
+TEST_CASE("The roster is 32 weapons: 18 base, 10 evolutions, 4 supers") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  int base = 0;
+  int evo = 0;
+  int super = 0;
+  for (const auto& w : content.weapons) {
+    if (w.prereqs.size() >= 3) {
+      ++super;
+    } else if (w.prereqs.size() == 2) {
+      ++evo;
+    } else {
+      REQUIRE(w.prereqs.empty());
+      ++base;
+    }
+  }
+  CAPTURE(base);
+  CAPTURE(evo);
+  CAPTURE(super);
+  REQUIRE(base == 18);
+  REQUIRE(evo == 10);
+  REQUIRE(super == 4);
+  REQUIRE(content.weapons.size() == 32);
+
+  // Every evolution's prerequisites actually exist, and a super really is
+  // reachable (three base weapons, not two evolutions of each other).
+  for (const auto& w : content.weapons) {
+    for (const auto& req : w.prereqs) {
+      CAPTURE(w.id);
+      CAPTURE(req);
+      REQUIRE(content.weapon(req) != nullptr);
+    }
+  }
+  for (const auto& w : content.weapons) {
+    if (w.prereqs.size() < 3) continue;
+    for (const auto& req : w.prereqs) {
+      const auto* base_def = content.weapon(req);
+      REQUIRE(base_def != nullptr);
+      REQUIRE(base_def->prereqs.empty());
+    }
+  }
+}
+
+// One enemy, one game, so `testEnemyHps()` (whose order is unspecified) can
+// never be read as a positional claim.
+static float hpAfterHit(const game::Content& content, int weapon, std::uint32_t seed,
+                        float ex, float ey, int ticks) {
+  game::Game g{content, seed};
+  g.testDisableWaves();
+  g.testClearWeapons();
+  game::FrameInput in{};
+  g.advance(1.0F / 60.0F, in);
+  g.testAddWeapon(weapon);
+  g.testSpawnEnemyAt(ex, ey);
+  for (int i = 0; i < ticks; ++i) g.advance(1.0F / 60.0F, in);
+  const auto hps = g.testEnemyHps();
+  if (hps.size() != 1) return -1.0F;
+  return hps.front();
+}
+
+TEST_CASE("Dagger blades also grind the inside of the ring") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  const int dagger = weaponIndex(content, "dagger");
+  REQUIRE(dagger >= 0);
+
+  // Hugging the player at 0.5 units, with the blades riding a 1.3 circle: no
+  // blade ever touches it. The reported bug was that this took literally
+  // nothing while the ring spun harmlessly overhead.
+  const float inside = hpAfterHit(content, dagger, 201, 0.5F, 0.0F, 20);
+  CAPTURE(inside);
+  REQUIRE(inside < 100000.0F);
+  // Past the ring, nothing reaches: 2.5 units is outside both the blades and
+  // the interior sweep.
+  const float outside = hpAfterHit(content, dagger, 201, 2.5F, 0.0F, 20);
+  CAPTURE(outside);
+  REQUIRE(outside == Catch::Approx(100000.0F));
+}
+
+TEST_CASE("Prism Lance spreads the beam into front, left and right") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  const int beam = weaponIndex(content, "beam");
+  REQUIRE(beam >= 0);
+
+  game::Game g{content, 202};
+  g.testDisableWaves();
+  g.testClearWeapons();
+  g.testAddWeapon(beam);
+  g.testSpawnEnemyAt(4.0F, 0.0F);
+  game::FrameInput in{};
+  g.advance(1.0F / 60.0F, in);
+
+  // Plain Lance: one line.
+  REQUIRE(g.testBeamAngles().size() == 1);
+
+  // "Prism Lance" is exactly three beams — the complaint was that it read as
+  // "+2 projectiles" because they were stacked on the aim line.
+  g.testAddWeaponUpgrade(0, "w_unique_prism", 3.0F);
+  // The Lance is a 1.6s weapon and its beams live 0.25s, so only one volley is
+  // ever on screen: wait for the next one and there is nothing to confuse.
+  for (int i = 0; i < 100; ++i) g.advance(1.0F / 60.0F, in);
+  auto three = g.testBeamAngles();
+  REQUIRE(three.size() == 3);
+  std::sort(three.begin(), three.end());
+  // Front, and roughly 17 degrees either side: three genuinely different lines.
+  REQUIRE(three[0] == Catch::Approx(-0.30F).margin(0.01F));
+  REQUIRE(three[1] == Catch::Approx(0.0F).margin(0.01F));
+  REQUIRE(three[2] == Catch::Approx(0.30F).margin(0.01F));
+}
+
+TEST_CASE("Barbed Whip lashes the arc in front, the Scythe still reaps a circle") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  const int whip = weaponIndex(content, "whip");
+  const int scythe = weaponIndex(content, "scythe");
+  REQUIRE(whip >= 0);
+  REQUIRE(scythe >= 0);
+
+  // A pair: one straight ahead, one off to the side. Both weapons aim at the
+  // nearest enemy, so they both hit the one in front — the difference is what
+  // happens to the one at the side, which is inside the circle but outside a
+  // whip's arc.
+  const auto wounded = [ticks = 3](game::Game& g) {
+    g.testSpawnEnemyAt(2.0F, 0.0F);
+    g.testSpawnEnemyAt(2.0F, 2.5F);
+    for (int i = 0; i < ticks; ++i) g.advance(1.0F / 60.0F, game::FrameInput{});
+    int hits = 0;
+    for (const float hp : g.testEnemyHps()) hits += hp < 100000.0F ? 1 : 0;
+    return hits;
+  };
+
+  game::Game w{content, 203};
+  w.testDisableWaves();
+  w.testClearWeapons();
+  w.advance(1.0F / 60.0F, game::FrameInput{});
+  w.testAddWeapon(whip);
+  // A whip covers the arc you are facing, not the whole world.
+  REQUIRE(wounded(w) == 1);
+
+  game::Game s{content, 203};
+  s.testDisableWaves();
+  s.testClearWeapons();
+  s.advance(1.0F / 60.0F, game::FrameInput{});
+  s.testAddWeapon(scythe);
+  // The scythe is the weapon that reaps the full circle, so it takes both.
+  REQUIRE(wounded(s) == 2);
+}
+
+TEST_CASE("Siege Mortar lobs over the horde and cooks where it lands") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  const int mortar = weaponIndex(content, "mortar");
+  REQUIRE(mortar >= 0);
+
+  // Right in the shell's flight path: a fused shell ignores what it flies over.
+  const float passed = hpAfterHit(content, mortar, 204, 1.5F, 0.0F, 90);
+  CAPTURE(passed);
+  REQUIRE(passed == Catch::Approx(100000.0F));
+  // Where the arc comes back down (~8 units out with proj_speed 9): cooked.
+  const float landed = hpAfterHit(content, mortar, 204, 8.3F, 0.0F, 90);
+  CAPTURE(landed);
+  REQUIRE(landed < 100000.0F);
+}
+
+TEST_CASE("Grave Bell taunts prey into its core") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  const int lure = weaponIndex(content, "lure");
+  REQUIRE(lure >= 0);
+  const auto& def = content.weapons[static_cast<std::size_t>(lure)];
+
+  // The bell is planted 1.1 units BEHIND the target, so the target always lands
+  // inside the core. The interesting case is the bystander: one inside the
+  // taunt reach has to be dragged in (and only then does it die), one outside
+  // it walks away untouched.
+  const auto bells = [ticks = 90](game::Game& g, float by) {
+    g.testSpawnEnemyAt(5.0F, 0.0F);
+    g.testSpawnEnemyAt(3.9F, by);
+    for (int i = 0; i < ticks; ++i) g.advance(1.0F / 60.0F, game::FrameInput{});
+    int hits = 0;
+    for (const float hp : g.testEnemyHps()) hits += hp < 100000.0F ? 1 : 0;
+    return hits;
+  };
+
+  game::Game inReach{content, 205};
+  inReach.testDisableWaves();
+  inReach.testClearWeapons();
+  inReach.advance(1.0F / 60.0F, game::FrameInput{});
+  inReach.testAddWeapon(lure);
+  inReach.testSpawnEnemyAt(5.0F, 0.0F);
+  inReach.testSpawnEnemyAt(3.9F, 3.2F);
+  inReach.advance(1.0F / 60.0F, game::FrameInput{});
+  REQUIRE(inReach.debugCounts().lures == 1);
+  // The bell keeps at most its own cap alive: a taunt is not a wall of beacons.
+  REQUIRE(inReach.debugCounts().lures <= static_cast<std::size_t>(def.lureMaxBeacons));
+  for (int i = 0; i < 90; ++i) inReach.advance(1.0F / 60.0F, game::FrameInput{});
+  // 3.2 units from the bell: outside the kill core, inside `lure_reach`, so it
+  // is dragged in and dies with the target.
+  int hits = 0;
+  for (const float hp : inReach.testEnemyHps()) hits += hp < 100000.0F ? 1 : 0;
+  REQUIRE(hits == 2);
+  // The drag is what did it: prey that started outside the core ends up in it.
+  REQUIRE(inReach.testFirstEnemyDistToLure() <= def.lureRadius);
+
+  game::Game outOfReach{content, 205};
+  outOfReach.testDisableWaves();
+  outOfReach.testClearWeapons();
+  outOfReach.advance(1.0F / 60.0F, game::FrameInput{});
+  outOfReach.testAddWeapon(lure);
+  // 6.0 units from the bell is beyond `lure_reach`, so only the target dies.
+  REQUIRE(bells(outOfReach, 6.0F) == 1);
+}
+
+TEST_CASE("Phase Dash, Overload and Stasis are live from the first second") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 206};
+  g.testDisableWaves();
+  g.testClearWeapons();
+  g.testAddWeapon(0);
+  game::FrameInput in{};
+  g.advance(1.0F / 60.0F, in);
+
+  // Nothing to unlock, nothing to pick: all three are ready on tick one.
+  REQUIRE(g.abilityReady(game::Game::Ability::Blink));
+  REQUIRE(g.abilityReady(game::Game::Ability::Burst));
+  REQUIRE(g.abilityReady(game::Game::Ability::Stasis));
+  REQUIRE(g.abilityCooldown(game::Game::Ability::Blink) == Catch::Approx(5.0F));
+  REQUIRE(g.abilityCooldown(game::Game::Ability::Burst) == Catch::Approx(14.0F));
+  REQUIRE(g.abilityCooldown(game::Game::Ability::Stasis) == Catch::Approx(30.0F));
+
+  // J: the dash moves the player and buys invulnerability on arrival.
+  g.testSpawnEnemyAt(-6.0F, 0.0F);
+  const float x0 = g.testPlayerX();
+  g.advance(1.0F / 60.0F, in);
+  g.testTriggerAbility(game::Game::Ability::Blink);
+  const float x1 = g.testPlayerX();
+  CAPTURE(x1);
+  REQUIRE(x1 < x0 - 2.0F);
+  REQUIRE(g.testIframes() > 0.0F);
+  REQUIRE_FALSE(g.abilityReady(game::Game::Ability::Blink));
+  // The cooldown is a real gate: a second press mid-cooldown does nothing.
+  g.advance(1.0F / 60.0F, in);
+  g.testTriggerAbility(game::Game::Ability::Blink);
+  REQUIRE(g.testPlayerX() == Catch::Approx(x1));
+
+  // K: the blast hurts and shoves whatever is standing on the player.
+  g.testSpawnEnemyAt(1.0F, 0.0F);
+  const auto before = g.testEnemyHps();
+  g.advance(1.0F / 60.0F, in);
+  g.testTriggerAbility(game::Game::Ability::Burst);
+  const auto after = g.testEnemyHps();
+  REQUIRE(before.size() == 2);
+  REQUIRE(after.size() == 2);
+  float lost = 0.0F;
+  for (std::size_t i = 0; i < after.size(); ++i) lost += before[i] - after[i];
+  REQUIRE(lost > 0.0F);
+  REQUIRE_FALSE(g.abilityReady(game::Game::Ability::Burst));
+}
+
+TEST_CASE("Stasis slows the world without slowing the player") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 207};
+  g.testDisableWaves();
+  g.testClearWeapons();
+  g.testAddWeapon(0);
+  game::FrameInput in{};
+  g.advance(1.0F / 60.0F, in);
+
+  // A real, moving enemy far enough away that it cannot reach the player during
+  // the measurement windows. A champion, not a bat: a plain bat has 8 HP and the
+  // wand in the corner would kill it before it had taken a single measured step.
+  g.testSpawnTieredEnemyAt(14.0F, 0.0F, 2);
+  for (int i = 0; i < 40; ++i) g.advance(1.0F / 60.0F, in);
+
+  const float d0 = g.testFirstEnemyDistToPlayer();
+  for (int i = 0; i < 10; ++i) g.advance(1.0F / 60.0F, in);
+  const float normalStep = (d0 - g.testFirstEnemyDistToPlayer()) / 10.0F;
+  REQUIRE(normalStep > 0.0F);
+  REQUIRE(g.worldTimeScale() == Catch::Approx(1.0F));
+
+  g.testTriggerAbility(game::Game::Ability::Stasis);
+  g.advance(1.0F / 60.0F, in);
+  REQUIRE(g.stasisRemaining() > 0.0F);
+  REQUIRE(g.worldTimeScale() < 1.0F);
+  REQUIRE(g.worldTimeScale() >= 0.1F);
+
+  const float d1 = g.testFirstEnemyDistToPlayer();
+  for (int i = 0; i < 10; ++i) g.advance(1.0F / 60.0F, in);
+  const float slowStep = (d1 - g.testFirstEnemyDistToPlayer()) / 10.0F;
+  CAPTURE(normalStep);
+  CAPTURE(slowStep);
+  REQUIRE(slowStep > 0.0F);
+  REQUIRE(slowStep < normalStep);
+  // The player keeps full speed: only the hostile side of the world is slowed.
+  REQUIRE(g.worldTimeScale() < 1.0F);
+  REQUIRE_FALSE(g.abilityReady(game::Game::Ability::Stasis));
+}
+
+TEST_CASE("Ability cards retune the keys, they never unlock them") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  const auto find = [&content](const char* effect) {
+    for (std::size_t i = 0; i < content.upgrades.size(); ++i) {
+      if (content.upgrades[i].effect == effect) return static_cast<int>(i);
+    }
+    return -1;
+  };
+  const int haste = find("ability_haste");
+  const int phase = find("ability_phase");
+  const int stasis = find("ability_stasis");
+  const int echo = find("ability_echo");
+  REQUIRE(haste >= 0);
+  REQUIRE(phase >= 0);
+  REQUIRE(stasis >= 0);
+  REQUIRE(echo >= 0);
+
+  game::Game g{content, 208};
+  g.testDisableWaves();
+  g.testClearWeapons();
+  g.testAddWeapon(0);
+  game::FrameInput in{};
+  g.advance(1.0F / 60.0F, in);
+
+  // Haste shortens every cooldown, floor included.
+  REQUIRE(g.testGrantUpgrade(haste));
+  REQUIRE(g.abilityCooldown(game::Game::Ability::Blink) < 5.0F);
+  REQUIRE(g.abilityCooldown(game::Game::Ability::Stasis) < 30.0F);
+  // Phase Memory lengthens the dash and the mercy window.
+  const float dist0 = g.stats().blinkDist;
+  const float iframes0 = g.stats().blinkIframes;
+  REQUIRE(g.testGrantUpgrade(phase));
+  REQUIRE(g.stats().blinkDist > dist0);
+  REQUIRE(g.stats().blinkIframes > iframes0);
+  // Deep Freeze extends Stasis.
+  const float dur0 = g.stats().stasisDuration;
+  REQUIRE(g.testGrantUpgrade(stasis));
+  REQUIRE(g.stats().stasisDuration > dur0);
+  // Cascade makes every ability throw a scaled-down Overload as well.
+  REQUIRE(g.testGrantUpgrade(echo));
+  g.testSpawnEnemyAt(-5.0F, 0.0F);
+  const auto before = g.testEnemyHps();
+  g.advance(1.0F / 60.0F, in);
+  g.testTriggerAbility(game::Game::Ability::Blink);
+  const auto after = g.testEnemyHps();
+  REQUIRE(before.size() == 1);
+  REQUIRE(after.size() == 1);
+  REQUIRE(after[0] < before[0]);
+}
+
+TEST_CASE("The sandbox rolls the ability cooldowns back with everything else") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 209};
+  g.testDisableWaves();
+  g.testClearWeapons();
+  g.testAddWeapon(0);
+  game::FrameInput in{};
+  g.advance(1.0F / 60.0F, in);
+
+  game::FrameInput open{};
+  open.testModeToggle = true;
+  g.advance(1.0F / 60.0F, open);
+  REQUIRE(g.testMode());
+  g.testTriggerAbility(game::Game::Ability::Burst);
+  g.advance(1.0F / 60.0F, in);
+  REQUIRE(g.abilityCooldownRemaining(game::Game::Ability::Burst) > 0.0F);
+
+  game::FrameInput close{};
+  close.testModeToggle = true;
+  g.advance(1.0F / 60.0F, close);
+  // Everything the sandbox spent is restored...
+  REQUIRE(g.abilityCooldownRemaining(game::Game::Ability::Burst) == 0.0F);
+  REQUIRE(g.stasisRemaining() == 0.0F);
+  REQUIRE(g.worldTimeScale() == 1.0F);
+  // ...except the run itself, which the sandbox ends.
+  REQUIRE(g.state() == game::RunState::GameOver);
 }

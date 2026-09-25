@@ -159,19 +159,184 @@ sweep_knockback = 3.0
 [[weapon]]
 id = "beam"
 name = "Solar Lance"
-desc = "Instant hitscan beam — deletes a line."
+desc = "Instant hitscan beam. Slow to swing, but it deletes a whole line at once."
 attack_type = "beam"
-damage = 90.0
-cooldown = 2.50
+damage = 130.0
+cooldown = 1.60
 projectiles = 1
 proj_speed = 0.0
 proj_life = 0.0
 pierce = 0
 spread = 0.0
 proj_color = [1.0, 1.0, 0.75, 1.0]
-beam_range = 10.0
-beam_width = 0.4
-beam_duration = 0.2
+beam_range = 12.0
+beam_width = 0.6
+beam_duration = 0.25
+
+# --- Base weapons, second wave ------------------------------------------------
+# Same rules as the first block: no `requires` means the weapon can be rolled as
+# an ordinary weapon card, and any two of these can seed an evolution. Each one
+# leans on a field the first wave did not need, so they do not play like reskins:
+# pierce-heavy slug, wide fast volley, lobbed shell, ricocheting puck, planted
+# beacon, tight fast cone, self-centered ring, player-centered lash, short chain.
+
+[[weapon]]
+id = "railgun"
+name = "Rail Rifle"
+desc = "One hypervelocity slug. Slow to load, punches through an entire rank."
+attack_type = "projectile"
+damage = 78.0
+cooldown = 1.80
+projectiles = 1
+proj_speed = 40.0
+proj_life = 1.2
+pierce = 6
+spread = 0.0
+proj_color = [1.0, 0.95, 0.7, 1.0]
+
+[[weapon]]
+id = "shard"
+name = "Frost Shards"
+desc = "A tight volley of fast shards that shreds whatever walks into it."
+attack_type = "projectile"
+damage = 12.0
+cooldown = 0.45
+projectiles = 4
+proj_speed = 20.0
+proj_life = 1.2
+pierce = 0
+spread = 0.34
+proj_color = [0.70, 0.92, 1.0, 1.0]
+
+[[weapon]]
+id = "mortar"
+name = "Siege Mortar"
+desc = "Lobs a shell over the crowd. It ignores whatever it flies over and cooks where it lands."
+attack_type = "bomb"
+damage = 62.0
+cooldown = 2.40
+projectiles = 1
+proj_speed = 9.0
+proj_life = 2.6
+pierce = 0
+# A salvo card is only honest if extra shells land somewhere different.
+spread = 0.22
+proj_color = [1.0, 0.6, 0.3, 1.0]
+bomb_arc_height = 3.2
+bomb_explode_radius = 2.6
+bomb_knockback = 6.0
+# A fuse means no contact detonation: the shell arcs clean over the first rank.
+bomb_fuse = 0.35
+
+[[weapon]]
+id = "pinball"
+name = "Pinball Puck"
+desc = "A white-hot puck that keeps ricocheting between bodies until it burns out."
+attack_type = "bounce"
+damage = 20.0
+cooldown = 1.60
+projectiles = 1
+proj_speed = 13.0
+proj_life = 7.0
+pierce = 2
+spread = 0.0
+proj_color = [0.95, 0.85, 0.5, 1.0]
+bounce_count = 6
+bounce_range = 3.5
+bounce_damage_mul = 0.85
+bounce_infinite = false
+
+[[weapon]]
+id = "lure"
+name = "Grave Bell"
+desc = "Plants a bell that hauls the horde into its core. It fights from where it stands, not from where you stand."
+attack_type = "lure"
+damage = 0.0
+cooldown = 2.60
+projectiles = 1
+proj_speed = 0.0
+proj_life = 0.0
+pierce = 0
+spread = 0.0
+proj_color = [0.72, 0.45, 1.0, 1.0]
+lure_radius = 1.5
+lure_reach = 4.2
+lure_pull = 5.5
+lure_dps = 18.0
+lure_duration = 5.0
+lure_tick_rate = 0.15
+lure_max_beacons = 2
+
+[[weapon]]
+id = "drill"
+name = "Jackhammer Drill"
+desc = "A narrow, extremely fast cone of steel. Point blank, nothing survives it."
+attack_type = "cone"
+damage = 7.0
+cooldown = 0.55
+projectiles = 1
+proj_speed = 0.0
+proj_life = 0.0
+pierce = 0
+spread = 0.0
+proj_color = [0.88, 0.92, 1.0, 1.0]
+cone_angle = 0.45
+cone_range = 3.4
+cone_tick_rate = 0.05
+
+[[weapon]]
+id = "shockcore"
+name = "Shock Core"
+desc = "A ring of pressure that blows itself outward from where you are standing."
+attack_type = "nova"
+damage = 20.0
+cooldown = 2.20
+projectiles = 1
+proj_speed = 0.0
+proj_life = 0.0
+pierce = 0
+spread = 0.0
+proj_color = [0.60, 0.88, 1.0, 1.0]
+nova_max_radius = 3.6
+nova_expand_speed = 6.0
+nova_damage_per_tick = 14.0
+nova_tick_rate = 0.10
+
+[[weapon]]
+id = "whip"
+name = "Barbed Whip"
+desc = "Lashes the arc in front of you, whether or not anything is standing in it."
+attack_type = "sweep"
+damage = 26.0
+cooldown = 0.70
+projectiles = 1
+proj_speed = 0.0
+proj_life = 0.0
+pierce = 0
+spread = 0.0
+proj_color = [1.0, 0.88, 0.65, 1.0]
+sweep_angle = 1.9
+sweep_radius = 2.8
+sweep_knockback = 3.0
+# A lead sweep is centered in FRONT of the player instead of on the prey.
+sweep_lead = 1.8
+
+[[weapon]]
+id = "tesla"
+name = "Tesla Coil"
+desc = "Lightning that keeps jumping. One target is never enough."
+attack_type = "chain"
+damage = 11.0
+cooldown = 0.65
+projectiles = 1
+proj_speed = 0.0
+proj_life = 0.0
+pierce = 0
+spread = 0.0
+proj_color = [0.70, 0.85, 1.0, 1.0]
+chain_jump_range = 2.8
+chain_max_jumps = 3
+chain_damage_mul = 0.6
 
 # --- Evolutions (A+B = C) ----------------------------------------------------
 
@@ -269,6 +434,102 @@ orbit_speed = 2.6
 beam_range = 6.0
 beam_width = 0.5
 
+[[weapon]]
+id = "blizzard"
+name = "Blizzard Rail"
+desc = "Rail Rifle + Frost Shards. One slug comes apart mid-flight into a storm of shards that keeps jumping."
+attack_type = "chain"
+damage = 22.0
+cooldown = 0.50
+projectiles = 1
+proj_speed = 0.0
+proj_life = 0.0
+pierce = 0
+spread = 0.0
+proj_color = [0.75, 0.95, 1.0, 1.0]
+requires = ["railgun", "shard"]
+chain_jump_range = 3.4
+chain_max_jumps = 7
+chain_damage_mul = 0.65
+
+[[weapon]]
+id = "siege"
+name = "Ashfall"
+desc = "Siege Mortar + Grave Bell. The bell gathers the horde and the shells land inside the crowd it gathered."
+attack_type = "inferno"
+damage = 72.0
+cooldown = 1.80
+projectiles = 1
+proj_speed = 0.0
+proj_life = 0.0
+pierce = 0
+spread = 0.0
+proj_color = [1.0, 0.50, 0.20, 1.0]
+requires = ["mortar", "lure"]
+sweep_angle = 6.2832
+sweep_radius = 3.8
+sweep_knockback = 5.0
+zone_radius = 2.4
+zone_dps = 34.0
+zone_duration = 3.0
+
+[[weapon]]
+id = "chaos"
+name = "Chaos Sphere"
+desc = "Pinball + Void Orb. A screaming orb that never stops bouncing, until it wears itself out."
+attack_type = "bounce"
+damage = 30.0
+cooldown = 1.60
+projectiles = 1
+proj_speed = 17.0
+proj_life = 12.0
+pierce = 8
+spread = 0.0
+proj_color = [0.80, 0.50, 1.0, 1.0]
+requires = ["pinball", "orb"]
+bounce_count = 14
+bounce_range = 3.8
+bounce_damage_mul = 0.9
+bounce_infinite = false
+
+[[weapon]]
+id = "sunder"
+name = "Sundering Core"
+desc = "Shock Core + Soul Scythe. A pressure ring wide enough to reach the far side of a horde, reaping everyone it crosses."
+attack_type = "nova"
+damage = 55.0
+cooldown = 1.60
+projectiles = 1
+proj_speed = 0.0
+proj_life = 0.0
+pierce = 0
+spread = 0.0
+proj_color = [0.70, 0.92, 1.0, 1.0]
+requires = ["shockcore", "scythe"]
+nova_max_radius = 6.5
+nova_expand_speed = 5.0
+nova_damage_per_tick = 40.0
+nova_tick_rate = 0.12
+
+[[weapon]]
+id = "tidewhip"
+name = "Tidal Lash"
+desc = "Barbed Whip + Storm Shuriken. A wide, fast lash that flings everything it touches back into the crowd."
+attack_type = "sweep"
+damage = 34.0
+cooldown = 0.55
+projectiles = 1
+proj_speed = 0.0
+proj_life = 0.0
+pierce = 0
+spread = 0.0
+proj_color = [0.60, 0.95, 1.0, 1.0]
+requires = ["whip", "shuriken"]
+sweep_angle = 3.1
+sweep_radius = 3.4
+sweep_knockback = 5.0
+sweep_lead = 2.2
+
 # --- Super evolutions (A+B+C = super) ----------------------------------------
 # Supers are deliberately NOT stat-bumps of an existing evolution: each one
 # introduces a mechanic nothing else in the pool has.
@@ -314,4 +575,48 @@ requires = ["flame", "beam", "crossbow"]
 prism_range = 11.0
 prism_width = 0.5
 prism_max_targets = 5
+# How far a reflected beam can jump to its next victim. Pierce IS the number of
+# reflections, so a pierce card visibly turns one beam into a zig-zag.
+prism_ricochet = 4.5
 beam_duration = 0.18
+
+[[weapon]]
+id = "seraph"
+name = "Seraph Array"
+desc = "Drill + Crossbow + Barbed Whip. Heavy wings of light walk a slow circle around you, cutting and shoving everything they cross."
+attack_type = "halo"
+damage = 60.0
+cooldown = 0.90
+projectiles = 3
+proj_speed = 0.0
+proj_life = 0.0
+pierce = 6
+spread = 0.0
+proj_color = [1.0, 0.96, 0.62, 1.0]
+requires = ["drill", "crossbow", "whip"]
+orbit_speed = 3.1
+beam_range = 8.0
+beam_width = 0.62
+halo_knockback = 2.4
+
+[[weapon]]
+id = "eventhorizon"
+name = "Event Horizon"
+desc = "Rail Rifle + Shock Core + Ember Sprayer. Four gravity wells circle you, dragging the horde in and grinding it against the cores."
+attack_type = "vortex"
+damage = 48.0
+cooldown = 1.00
+projectiles = 4
+proj_speed = 0.0
+proj_life = 0.0
+pierce = 6
+spread = 0.0
+proj_color = [0.52, 0.36, 0.92, 1.0]
+requires = ["railgun", "shockcore", "flame"]
+vortex_radius = 1.5
+vortex_reach = 3.2
+vortex_pull = 6.0
+vortex_orbit = 3.0
+vortex_orbit_speed = 1.9
+vortex_tick_rate = 0.10
+

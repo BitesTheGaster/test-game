@@ -49,7 +49,8 @@ def fmt(x: float) -> str:
 def weapons_md() -> str:
     ws = load("weapons.toml")
     base = [w for w in ws if not w.get("requires")]
-    evo = [w for w in ws if w.get("requires")]
+    evo = [w for w in ws if len(w.get("requires", [])) == 2]
+    sup = [w for w in ws if len(w.get("requires", [])) >= 3]
 
     def _w(w):
         extra = []
@@ -57,23 +58,37 @@ def weapons_md() -> str:
         if w.get("homing"): extra.append("homing")
         if w.get("bounces", 0) > 0: extra.append("bounce" + str(w["bounces"]))
         if w.get("strength", 0.0) > 0.0: extra.append("knock")
+        if w.get("bounce_infinite"): extra.append("eternal")
+        if w.get("bomb_fuse", 0.0) > 0.0: extra.append("fused")
+        if w.get("lure_radius", 0.0) > 0.0: extra.append("taunt")
+        if w.get("sweep_lead", 0.0) > 0.0: extra.append("lead-lash")
+        if w.get("prism_ricochet", 0.0) > 0.0: extra.append("ricochet")
         return " ".join(extra)
-    rows = [[w["name"], w["id"], fmt(w["damage"]), fmt(w["cooldown"]),
-             fmt(w["projectiles"]), fmt(w["proj_speed"]), fmt(w["pierce"]),
-             fmt(w.get("spread", 0.16)),
+    rows = [[w["name"], w["id"], w["attack_type"], fmt(w["damage"]),
+             fmt(w["cooldown"]), fmt(w["projectiles"]), fmt(w["proj_speed"]),
+             fmt(w["pierce"]), fmt(w.get("spread", 0.16)),
              "yes" if w.get("starter") else "", _w(w), md_escape(w["desc"])]
             for w in base]
     s = "### Base weapons\n\n"
-    s += table(["Name", "ID", "Damage", "Cooldown (s)", "Projectiles",
+    s += table(["Name", "ID", "Attack", "Damage", "Cooldown (s)", "Projectiles",
                 "Proj. speed", "Pierce", "Spread (rad)", "Starter",
                 "Traits", "Description"], rows)
 
-    rows = [[w["name"], w["id"], " + ".join(w["requires"]), fmt(w["damage"]),
-             fmt(w["cooldown"]), fmt(w["projectiles"]), fmt(w["pierce"]),
-             fmt(w.get("area", 0.0)), md_escape(w["desc"])] for w in evo]
+    rows = [[w["name"], w["id"], w["attack_type"], " + ".join(w["requires"]),
+             fmt(w["damage"]), fmt(w["cooldown"]), fmt(w["projectiles"]),
+             fmt(w["pierce"]), fmt(w.get("area", 0.0)), _w(w),
+             md_escape(w["desc"])] for w in evo]
     s += "\n\n### Evolutions (A + B = C)\n\n"
-    s += table(["Name", "ID", "Requires", "Damage", "Cooldown (s)",
-                "Projectiles", "Pierce", "Area", "Description"], rows)
+    s += table(["Name", "ID", "Attack", "Requires", "Damage", "Cooldown (s)",
+                "Projectiles", "Pierce", "Area", "Traits", "Description"], rows)
+
+    rows = [[w["name"], w["id"], w["attack_type"], " + ".join(w["requires"]),
+             fmt(w["damage"]), fmt(w["cooldown"]), fmt(w["projectiles"]),
+             fmt(w["pierce"]), fmt(w.get("area", 0.0)), _w(w),
+             md_escape(w["desc"])] for w in sup]
+    s += "\n\n### Super evolutions (A + B + C)\n\n"
+    s += table(["Name", "ID", "Attack", "Requires", "Damage", "Cooldown (s)",
+                "Projectiles", "Pierce", "Area", "Traits", "Description"], rows)
     return s
 
 
@@ -133,7 +148,9 @@ python3 tools/gendocs.py
 ```
 
 **Totals:** {len(ws)} weapons ({len([w for w in ws if not w.get('requires')])} base +
-{len([w for w in ws if w.get('requires')])} evolutions), {len(es)} enemies.
+{len([w for w in ws if len(w.get('requires', [])) == 2])} evolutions +
+{len([w for w in ws if len(w.get('requires', [])) >= 3])} super evolutions),
+{len(es)} enemies.
 
 {weapons_md()}
 

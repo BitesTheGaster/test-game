@@ -29,6 +29,7 @@ enum class AttackType : std::uint8_t {
   Halo,         // beams orbiting the player (evolution)
   Vortex,       // rotating suction zones that drag enemies inward (evolution)
   Prism,        // N separate beams, each locked onto its own target (evolution)
+  Lure,         // planted beacon that hauls enemies into its kill zone
 };
 
 struct WeaponDef {
@@ -117,6 +118,18 @@ struct WeaponDef {
   float prismRange = 9.0F;        // max distance a locked beam can reach
   float prismWidth = 0.45F;
   int prismMaxTargets = 5;        // hard cap on simultaneously locked beams
+  float prismRicochet = 4.0F;     // how far a beam can jump to its next victim
+
+  // Lure: a planted beacon. Enemies inside `lureReach` are dragged toward it and
+  // anything inside `lureRadius` is cut up, so the beacon does the crowd control
+  // while the rest of the arsenal does the damage.
+  float lureRadius = 1.4F;        // damage core
+  float lureReach = 3.6F;         // outer edge where the drag starts
+  float lurePull = 5.0F;          // inward drag (world units / sec)
+  float lureDps = 14.0F;          // damage per second inside the core
+  float lureDuration = 5.0F;      // seconds a beacon stays planted
+  float lureTickRate = 0.15F;     // damage ticks per second
+  int lureMaxBeacons = 2;         // beacons alive at once
 };
 
 struct EnemyDef {

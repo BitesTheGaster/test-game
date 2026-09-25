@@ -2,16 +2,17 @@
 
 Vampire Survivors-like roguelike. C++20, SDL3 + OpenGL 3.3, CMake + vcpkg.
 
-Multi-weapon build-your-arsenal roguelike: 16 weapons (incl. 5 evolutions and
-2 three-weapon super evolutions), 18 enemy types with elite/champion/overlord
-traits, 96 upgrades (normal / unique / milestone), an opening **3-weapon pick**
-instead of a fixed starter, a **momentum kill chain** that only pays while you
-are actively killing, an **adaptive tribunal director** that opens champions
-when elites stop being a problem and overlords when champions do, regenerating
-shield + defense + lifesteal, an H-key heal, defense-scaled invulnerability
-frames, pierce that cancels AoE damage falloff, knockback with an Impact
-multiplier, an Esc **bestiary**, and a difficulty ramp that accelerates after
-6 minutes.
+Multi-weapon build-your-arsenal roguelike: 32 weapons (incl. 10 evolutions and
+4 three-weapon super evolutions), 18 enemy types with elite/champion/overlord
+traits, 141 upgrades (normal / unique / milestone), an opening **3-weapon pick**
+instead of a fixed starter, three **active abilities** on `J` / `K` / `L` that
+are live from the first second and gated only by cooldown, a **momentum kill
+chain** that only pays while you are actively killing, an **adaptive tribunal
+director** that opens champions when elites stop being a problem and overlords
+when champions do, regenerating shield + defense + lifesteal, an H-key heal,
+defense-scaled invulnerability frames, pierce that cancels AoE damage falloff,
+knockback with an Impact multiplier, an Esc **bestiary**, and a difficulty ramp
+that accelerates after 6 minutes.
 
 ## Documentation
 
@@ -59,16 +60,25 @@ Run: `./build/debug/test-game`.
 | Key         | Action                                    |
 |-------------|-------------------------------------------|
 | WASD / arrows | Move (attacks fire automatically)         |
+| J           | **Phase Dash** — teleport along your movement (or at the nearest enemy), with i-frames (5 s) |
+| K           | **Overload** — radial damage + knockback (14 s) |
+| L           | **Stasis** — the world slows to 35%, you do not (30 s) |
+| H           | Guaranteed 50% max-HP heal (30 s cooldown) |
 | 1 / 2 / 3 / 4 / 5 | Pick the matching card on level-up   |
 | R           | Reroll the level-up choice (1 free per level, more with Second Chance) |
 | Esc         | Pause / resume — overlays your character sheet |
 | B           | While paused: toggle the **bestiary** (kills, stats, elite+ variants) |
 | R (after death) | Restart                              |
 | T           | Toggle **weapon test mode** (live run only) |
-| 1 / 2       | In test mode: previous / next weapon (all 16 incl. evolutions & supers) |
+| 1 / 2       | In test mode: previous / next weapon (all 32 incl. evolutions & supers) |
 | 3           | In test mode: apply a maxed-out build boost (damage/projectiles/pierce/fire rate) |
 | 4           | In test mode: toggle enemy waves |
-| 5           | In test mode: exit back to the run |
+| 5           | In test mode: exit back to the run — **which ends the run** |
+| E / I / F / X / R | In test mode: item picker / immortality / difficulty clock / kill me / max every item |
+
+The test sandbox is a **hermetic** rig, not a cheat: it pays no XP, never pays a
+skin or outline unlock, and leaving it drops you on the game-over screen. See
+[docs/mechanics.md](docs/mechanics.md#weapon-test-mode).
 
 ## Assets: where to put textures
 
@@ -102,7 +112,8 @@ without recompiling.
 Balance lives in `assets/data/*.toml`, loaded at startup — no rebuild needed:
 
 - `weapons.toml` — damage, cooldown, projectile count/speed/pierce/spread,
-  `starter` flags and `requires` evolution pairs
+  `starter` flags, per-attack fields (`beam_*`, `nova_*`, `lure_*`, `sweep_*`,
+  `vortex_*`, `prism_*`, …) and `requires` evolution pairs
 - `enemies.toml` — hp, speed, contact damage, radius, xp, spawn time
   (`unlock_at`), weight, color, shape
 - `upgrades.toml` — level-up cards: `kind` (`normal` / `unique` / `milestone`),
@@ -114,11 +125,14 @@ delay = base / (1 + bonus)), `speed_mul`, `pickup_mul`, `max_hp_add`,
 `lifesteal_add`, `shield_add`, `xp_mul`, `knockback_mul` (Impact), plus the
 unique-item effects (`fan`, `thorns`, `extra_choice`, `reroll_add`,
 `adrenaline`, `black_hole`, `chain`, `blood_price`, `ice_blood`, `last_stand`,
-`knockback_retaliate`), per-weapon effects (`w_damage_add`, `w_proj_add`,
-`w_pierce_add`, `w_fire_rate`), and the one-per-weapon unique effects
-(`w_unique_homing`, `w_unique_area`, `w_unique_vortex`,
-`w_unique_hearthfire`, `w_unique_cataclysm`, `w_unique_harvest`,
-`w_unique_prism`, `w_unique_thunderlord`, `w_unique_supernova`).
+`knockback_retaliate`, `ability_haste`, `ability_might`, `ability_phase`,
+`ability_stasis`, `ability_echo`), per-weapon effects (`w_damage_add`,
+`w_proj_add`, `w_pierce_add`, `w_fire_rate`, `w_lure_power`, `w_nova_power`),
+and the one-per-weapon unique effects (`w_unique_homing`, `w_unique_area`,
+`w_unique_vortex`, `w_unique_hearthfire`, `w_unique_cataclysm`,
+`w_unique_harvest`, `w_unique_prism`, `w_unique_thunderlord`,
+`w_unique_supernova`, `w_unique_molten`, `w_unique_everflame`,
+`w_unique_arcsaw`, `w_unique_bell`, `w_unique_gravitic`, `w_unique_lash`).
 
 Regenerate the content reference docs after touching the TOML:
 
