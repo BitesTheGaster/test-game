@@ -67,10 +67,17 @@ struct PlayerStats {
 
   // Defense: one curve yields both a flat and a percent reduction.
   float defense = 0.0F;
-  // Lifesteal: chance-based. L% = L% chance per damaging hit to heal
-  // `lifestealHeal` HP; at L >= 100 the first point is guaranteed.
+  // Lifesteal: chance-based, but it only rolls on a KILL (not on every hit).
+  // L% = L% chance per slain enemy to heal `lifestealHeal` HP; at L >= 100 the
+  // first point is guaranteed. Tying it to kills (instead of per-damage) is
+  // what keeps a many-hit weapon (e.g. the Halo) from out-healing the fight:
+  // the number of procs is bounded by kills, not by hit count.
   float lifesteal = 0.0F;
   int lifestealHeal = 1; // HP per proc (Vampiric Heart unique raises to 2)
+  // Armor pierce: subtracted from an enemy's defense before mitigation, so
+  // this is the "пробитие брони" stat — it is what lets a build cut through
+  // the flat+percent defense curve that late/elite enemies grow into.
+  float armorPierce = 0.0F;
   // Shield: regenerating damage buffer (see rules in game.hpp docs).
   float shieldMax = 0.0F;
   // XP gain multiplier (Scholar-style items).
@@ -206,6 +213,12 @@ public:
   }
   // Test helper: current HP of the first Enemy in the registry (-1 if none).
   [[nodiscard]] float testFirstEnemyHp() const;
+  // Test helper: damage-aura radius/dps of the first Enemy carrying an aura
+  // (0 if none), so the per-tier aura sizes can be asserted.
+  [[nodiscard]] float testFirstAuraRadius() const;
+  [[nodiscard]] float testFirstAuraDps() const;
+  // Test helper: true when the first Enemy can shoot (has the Archer trait).
+  [[nodiscard]] bool testFirstCanShoot() const;
   // Test helper: overwrite the first enemy's current HP (death-boundary tests).
   void testSetFirstEnemyHp(float hp);
   // Test helper: route a raw damage packet through applyEnemyDamage() on the
@@ -250,6 +263,31 @@ public:
   // Test helper: kill the first live Enemy through the normal kill path (so
   // the bestiary records it). No-op when the registry has no enemies.
   void testKillFirstEnemy();
+  // Highest tier slain this run (0 none, 1 elite, 2 champion, 3 overlord), and
+  // the enemy def index that achieved it. Drives the bestiary's "strongest
+  // kill" line.
+  [[nodiscard]] int strongestKilledTier() const { return strongestKilledTier_; }
+  [[nodiscard]] int strongestKilledDef() const { return strongestKilledDef_; }
+  // Bitmask (1<<tier) of every tier killed at least once this run. Used both by
+  // the bestiary and to unlock the elite/champion/overlord player outlines.
+  [[nodiscard]] std::uint8_t tierKillMask() const { return tierKillMask_; }
+  // --- Enemy-type retirement -------------------------------------------------
+  // When an overlord of a given enemy type spawns, that type is "retired": it
+  // no longer spawns, which stops the same overlord from repeating forever.
+  // The 3 most recently unlocked types are exempt so the spawn pool can never
+  // dry up (there is always something new to fight).
+  void retireEnemyType(int def);
+  [[nodiscard]] bool typeRetired(int def) const;
+  // Full spawn-eligibility rule used by pickDef (unlocked AND not retired,
+  // unless it is one of the 3 most recent types).
+  [[nodiscard]] bool typeCanSpawn(int def) const;
+  // Test helpers for the retirement rule.
+  void testRetireType(int def) { retireEnemyType(def); }
+  [[nodiscard]] bool testTypeRetired(int def) const { return typeRetired(def); }
+  [[nodiscard]] bool testTypeCanSpawn(int def) const { return typeCanSpawn(def); }
+  // Test helper: whether a def index is among the 3 most recently unlocked
+  // types (the ones exempt from retirement).
+  [[nodiscard]] bool testTypeIsRecent(int def) const;
 
   // Debug introspection for tests: how many live entities each attack type has.
   struct DebugCounts {
@@ -424,10 +462,15 @@ private:
   // then normals), shuffled. Used to offer several weapon cards at once.
   std::vector<int> collectWeaponGrants();
   void spawnEnemy(const PendingSpawn& p);
+  // Recomputes recentTypes_: the 3 highest-unlock_at enemy types, which are
+  // exempt from overlord retirement so the spawn pool never runs dry.
+  void refreshRecentTypes();
   void applyEnemyDamage(entt::entity e, float dmg);
   void killEnemy(entt::entity e);
   void chainBolt(float x, float y, float dmg);
-  void tryLifesteal(entt::entity source); // chance-based heal on a damaging hit
+  // Lifesteal now rolls on a KILL (not per hit) so a many-hit weapon cannot
+  // out-heal the fight; see the definition for the full rationale.
+  void tryLifestealOnKill(entt::entity source);
   void applyKnockback(entt::entity e, float angle, float force);
   // Repulsion Field unique: shove an enemy that just damaged the player.
   void retaliateKnockback(entt::entity attacker);
@@ -485,6 +528,18 @@ private:
   float lastStandCd_ = 0.0F;          // low-HP iframe unique cooldown
   std::vector<int> bestiaryKills_;    // kills per content enemy index
   std::vector<std::uint8_t> bestiaryTiers_; // bitmask of tiers killed
+  // Enemy types retired by an overlord spawn (bit per content enemy index).
+  // The 3 most recently unlocked types stay eligible regardless, so the pool
+  // can never empty out.
+  std::vector<std::uint8_t> retiredTypes_;
+  // Bit per type: is this one of the 3 most recently unlocked? Recomputed as
+  // more types unlock over the run.
+  std::vector<std::uint8_t> recentTypes_;
+  // Strongest enemy killed this run: the tier and the enemy def that reached it.
+  int strongestKilledTier_ = 0;
+  int strongestKilledDef_ = -1;
+  // Bit per tier (1<<tier) of tiers killed at least once this run.
+  std::uint8_t tierKillMask_ = 0;
   float moveX_ = 0.0F; // latched input for fixed steps
   float moveY_ = 0.0F;
 

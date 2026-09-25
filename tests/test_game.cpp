@@ -76,10 +76,17 @@ TEST_CASE("applyUpgrade supports the defense / shield / lifesteal tree") {
   REQUIRE(de.valid);
   REQUIRE(s.defense == Catch::Approx(25.0F));
 
-  // Lifesteal is a per-hit percentage now (150 = 100% for 1 HP + 50% for a 2nd).
+  // Lifesteal is a per-KILL percentage now (150 = 100% for 1 HP + 50% for a 2nd).
   const auto ls = game::applyUpgrade(s, "lifesteal_add", 150.0F);
   REQUIRE(ls.valid);
   REQUIRE(s.lifesteal == Catch::Approx(150.0F));
+
+  // Armor pierce ("пробитие брони") is its own additive stat.
+  const auto ap = game::applyUpgrade(s, "armor_pierce_add", 40.0F);
+  REQUIRE(ap.valid);
+  REQUIRE(s.armorPierce == Catch::Approx(40.0F));
+  REQUIRE(game::applyUpgrade(s, "armor_pierce_add", 15.0F).valid);
+  REQUIRE(s.armorPierce == Catch::Approx(55.0F));
 
   const auto sh = game::applyUpgrade(s, "shield_add", 60.0F);
   REQUIRE(sh.valid);
@@ -357,6 +364,163 @@ TEST_CASE("Bestiary records kills and the elite+ variants slain") {
   REQUIRE((g.testBestiaryTiers(0) & (1 << 2)) != 0);
 }
 
+TEST_CASE("An overlord retires its enemy type, but the 3 newest types stay eligible") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 11};
+  g.testDisableWaves();
+
+  // The 3 most recently unlocked types are exempt from retirement.
+  const int n = static_cast<int>(content.enemies.size());
+  REQUIRE(n >= 3);
+  int recentCount = 0;
+  int oldType = -1;
+  int recentType = -1;
+  for (int i = 0; i < n; ++i) {
+    if (g.testTypeIsRecent(i)) {
+      ++recentCount;
+      if (recentType < 0) recentType = i;
+    } else if (oldType < 0) {
+      oldType = i;
+    }
+  }
+  REQUIRE(recentCount == 3);
+  REQUIRE(oldType >= 0);
+  REQUIRE(recentType >= 0);
+
+  // An OLD (non-recent) type that is already unlocked can spawn, then gets
+  // retired and can no longer spawn. The Bat is unlocked at t=0, so it is
+  // always eligible regardless of retirement.
+  REQUIRE(content.enemies[static_cast<std::size_t>(oldType)].unlockAt <= 0.0F);
+  REQUIRE(g.testTypeCanSpawn(oldType));
+  g.testRetireType(oldType);
+  REQUIRE(g.testTypeRetired(oldType));
+  REQUIRE_FALSE(g.testTypeCanSpawn(oldType));
+
+  // Retiring a "recent" type marks it retired, but the newest-3 exemption
+  // keeps it eligible ONCE it has unlocked. (A recent type may still be locked
+  // early in a run, so drive the clock via the can-spawn rule only after
+  // checking the recent bit is set.)
+  g.testRetireType(recentType);
+  REQUIRE(g.testTypeRetired(recentType));
+  REQUIRE(g.testTypeIsRecent(recentType));
+  // A retired recent type is exempt from the retirement filter, so it can
+  // spawn as soon as its unlock time arrives. It is locked at t=0, so assert
+  // the unlock gate is the only thing blocking it.
+  const bool unlockedNow = content.enemies[static_cast<std::size_t>(recentType)].unlockAt <= 0.0F;
+  REQUIRE(g.testTypeCanSpawn(recentType) == unlockedNow);
+
+  // Retirement is per-run: a fresh Game starts with everything spawnable again.
+  game::Game fresh{content, 11};
+  fresh.testDisableWaves();
+  REQUIRE_FALSE(fresh.testTypeRetired(oldType));
+  REQUIRE(fresh.testTypeCanSpawn(oldType));
+}
+
+TEST_CASE("Bestiary tracks the strongest enemy killed this run") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 12};
+  g.testDisableWaves();
+
+  REQUIRE(g.strongestKilledTier() == 0);
+  REQUIRE(g.strongestKilledDef() == -1);
+
+  // A normal kill is the weakest tier.
+  g.testSpawnTieredEnemyAt(1.0F, 0.0F, 0);
+  g.testKillFirstEnemy();
+  REQUIRE(g.strongestKilledTier() == 0);
+  REQUIRE((g.tierKillMask() & (1 << 0)) != 0);
+
+  // Killing a champion upgrades the record and stays there.
+  g.testSpawnTieredEnemyAt(2.0F, 0.0F, 2);
+  g.testKillFirstEnemy();
+  REQUIRE(g.strongestKilledTier() == 2);
+  REQUIRE((g.tierKillMask() & (1 << 2)) != 0);
+  // The elite tier was never killed, so its bit stays clear even though the
+  // champion outranks it.
+  REQUIRE((g.tierKillMask() & (1 << 1)) == 0);
+
+  // A weaker kill afterwards must not downgrade the record.
+  g.testSpawnTieredEnemyAt(3.0F, 0.0F, 0);
+  g.testKillFirstEnemy();
+  REQUIRE(g.strongestKilledTier() == 2);
+
+  // An overlord becomes the new strongest and unlocks its outline bit.
+  g.testSpawnTieredEnemyAt(4.0F, 0.0F, 3);
+  g.testKillFirstEnemy();
+  REQUIRE(g.strongestKilledTier() == 3);
+  REQUIRE((g.tierKillMask() & (1 << 3)) != 0);
+}
+
+TEST_CASE("Lifesteal heals on a kill, not on a non-lethal hit") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 13};
+  g.testDisableWaves();
+  g.testAddWeapon(0);
+
+  // 100% lifesteal => every kill heals the full amount. Start wounded.
+  REQUIRE(game::applyUpgrade(g.stats(), "lifesteal_add", 100.0F).valid);
+  g.testSetPlayerHp(40.0F);
+  REQUIRE(g.playerHp() == Catch::Approx(40.0F));
+
+  // A high-HP, stationary target: hit it repeatedly but never kill it.
+  g.testSpawnEnemyAt(1.0F, 0.0F);
+  g.testDamageFirstEnemy(1.0F); // survives: 100000 HP
+  g.testDamageFirstEnemy(1.0F);
+  g.testDamageFirstEnemy(1.0F);
+
+  // No healing yet: lifesteal is kill-triggered, not per hit.
+  REQUIRE(g.playerHp() == Catch::Approx(40.0F));
+
+  // Now kill it: exactly one proc heals 1 HP (lifestealHeal defaults to 1).
+  g.testSetFirstEnemyHp(1.0F);
+  g.testDamageFirstEnemy(100.0F);
+  REQUIRE(g.playerHp() > 40.0F);
+}
+
+TEST_CASE("Armor pierce reduces the defense an enemy actually applies") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+
+  // Defense has a 30s grace period and only starts growing after it, so the
+  // comparison must happen late in a run where defense is actually non-zero.
+  // Both runs are advanced by the same amount so simTime (and therefore
+  // defense) is identical in both.
+  game::Game plain{content, 14};
+  plain.testDisableWaves();
+  game::Game pierced{content, 14};
+  pierced.testDisableWaves();
+  // Give both runs a weapon: the run otherwise sits in the starter pick
+  // (RunState::LevelUp), where the fixed timestep does not advance simTime.
+  plain.testAddWeapon(0);
+  pierced.testAddWeapon(0);
+  REQUIRE(game::applyUpgrade(pierced.stats(), "armor_pierce_add", 100000.0F).valid);
+
+  // 120s of simulated time (7200 fixed steps at 60Hz), no waves.
+  game::FrameInput idle{};
+  for (int i = 0; i < 7200; ++i) {
+    plain.advance(1.0F / 60.0F, idle);
+    pierced.advance(1.0F / 60.0F, idle);
+  }
+
+  // Sanity: defense must be active at this point, otherwise the test proves
+  // nothing. enemyDefense is (t-30)/25 * tierMul; at t=120 champion (2.0x) => ~7.2.
+  REQUIRE(game::enemyDefense(plain.simTime(), 2) > 0.0F);
+
+  plain.testSpawnTieredEnemyAt(5.0F, 0.0F, 2); // champion
+  plain.testSetFirstEnemyHp(100000.0F);
+  plain.testDamageFirstEnemy(100.0F);
+  const float dealtWithout = 100000.0F - plain.testFirstEnemyHp();
+
+  pierced.testSpawnTieredEnemyAt(5.0F, 0.0F, 2);
+  pierced.testSetFirstEnemyHp(100000.0F);
+  pierced.testDamageFirstEnemy(100.0F);
+  const float dealtWith = 100000.0F - pierced.testFirstEnemyHp();
+
+  // A pierced hit lands harder...
+  REQUIRE(dealtWith > dealtWithout);
+  // ...and with enough pierce to zero out defense, it lands at full value.
+  REQUIRE(dealtWith == Catch::Approx(100.0F).margin(0.01F));
+}
+
 TEST_CASE("Bestiary overlay opens with B while paused") {
   const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
   game::Game g{content, 10};
@@ -566,6 +730,59 @@ TEST_CASE("Enemy separation speed is clamped (no vacuum darting)") {
   }
   // Clamp is max(speed * 2.5, 4.0); test enemies are speed 0 -> 4.0 u/s cap.
   REQUIRE(worst <= 4.0001F);
+}
+
+TEST_CASE("Tier damage auras grow: champion bigger than elite, overlord biggest") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+
+  game::Game eliteGame{content, 21};
+  eliteGame.testDisableWaves();
+  eliteGame.testSpawnTieredEnemyAt(10.0F, 0.0F, 1, game::TraitAura);
+  const float eliteR = eliteGame.testFirstAuraRadius();
+  const float eliteDps = eliteGame.testFirstAuraDps();
+  REQUIRE(eliteR > 0.0F);
+  REQUIRE(eliteDps > 0.0F);
+
+  game::Game champGame{content, 21};
+  champGame.testDisableWaves();
+  champGame.testSpawnTieredEnemyAt(10.0F, 0.0F, 2, game::TraitAura);
+  const float champR = champGame.testFirstAuraRadius();
+  const float champDps = champGame.testFirstAuraDps();
+
+  game::Game overlordGame{content, 21};
+  overlordGame.testDisableWaves();
+  overlordGame.testSpawnTieredEnemyAt(10.0F, 0.0F, 3, game::TraitAura);
+  const float overlordR = overlordGame.testFirstAuraRadius();
+  const float overlordDps = overlordGame.testFirstAuraDps();
+
+  // Champion aura is clearly bigger than an elite's...
+  REQUIRE(champR > eliteR);
+  REQUIRE(champDps > eliteDps);
+  // ...and an overlord's is bigger still than the champion's.
+  REQUIRE(overlordR > champR);
+  REQUIRE(overlordDps > champDps);
+}
+
+TEST_CASE("Shooting enemies keep their distance instead of charging the player") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 22};
+  g.testDisableWaves();
+  g.testAddWeapon(0);
+  g.testSetPlayerHp(100000.0F); // survive the contact ticks
+
+  // An archer spawned right next to the player must retreat, not close in.
+  g.testSpawnTieredEnemyAt(1.0F, 0.0F, 1, game::TraitArcher);
+  REQUIRE(g.testFirstCanShoot());
+
+  const float startDist = g.testFirstEnemyDistToPlayer();
+  REQUIRE(startDist == Catch::Approx(1.0F).margin(0.01F));
+
+  // Simulate: it should move AWAY, so the distance grows.
+  for (int f = 0; f < 30; ++f) {
+    g.advance(1.0F / 60.0F, game::FrameInput{});
+  }
+  const float laterDist = g.testFirstEnemyDistToPlayer();
+  REQUIRE(laterDist > startDist);
 }
 
 TEST_CASE("Orbit daggers stay evenly spaced when projectiles are added") {

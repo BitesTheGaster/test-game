@@ -277,10 +277,39 @@ max_stacks = 3
 [[upgrade]]
 id = "leech_soul"
 name = "Soulfeed"
-desc = "+12% lifesteal"
+desc = "+12% lifesteal (on kill)"
 effect = "lifesteal_add"
 value = 12
 max_stacks = 2
+
+# --- Armor pierce tree --------------------------------------------------------
+# Armor pierce subtracts from an enemy's defense before its flat+percent
+# mitigation runs, so these are the anti-armour answer to late-game defense
+# (including the Armored trait and champion/overlord defense scaling).
+
+[[upgrade]]
+id = "sunder"
+name = "Sunder Edge"
+desc = "+15 armor pierce"
+effect = "armor_pierce_add"
+value = 15
+max_stacks = 4
+
+[[upgrade]]
+id = "sunder_great"
+name = "Keen Sunder"
+desc = "+40 armor pierce"
+effect = "armor_pierce_add"
+value = 40
+max_stacks = 2
+
+[[upgrade]]
+id = "armor_cracker"
+name = "Armor-Cracker"
+desc = "+80 armor pierce"
+effect = "armor_pierce_add"
+value = 80
+max_stacks = 1
 
 # --- Weapon-focused cards (only appear for owned weapons) ---------------------
 

@@ -136,6 +136,10 @@ UpgradeEffectResult applyUpgrade(PlayerStats& stats, std::string_view effect, fl
     stats.lifesteal += value;
     return {true, 0.0F, 0.0F};
   }
+  if (effect == "armor_pierce_add") {
+    stats.armorPierce += value;
+    return {true, 0.0F, 0.0F};
+  }
   if (effect == "lifesteal_heal") {
     // Vampiric Heart: each lifesteal proc heals 2 instead of 1.
     stats.lifestealHeal = static_cast<int>(value);
@@ -303,6 +307,16 @@ void Game::reset() {
   // Bestiary progress resets with the run.
   bestiaryKills_.assign(content_.enemies.size(), 0);
   bestiaryTiers_.assign(content_.enemies.size(), 0);
+
+  // Overlord retirements are per-run: a fresh run re-opens every type.
+  retiredTypes_.assign(content_.enemies.size(), 0);
+  strongestKilledTier_ = 0;
+  strongestKilledDef_ = -1;
+  tierKillMask_ = 0;
+  // Seed the "3 most recent" exemption set. As more types unlock this is
+  // recomputed in refreshRecentTypes().
+  recentTypes_.assign(content_.enemies.size(), 0);
+  refreshRecentTypes();
 
   // The opening 3-weapon pick replaces the old random starter weapon.
   starterChoicePending_ = true;
@@ -601,6 +615,41 @@ void Game::updateEnemies() {
     if (dist > 0.001F) {
       dx /= dist;
       dy /= dist;
+    }
+
+    // Ranged enemies kite instead of charging: they hold a preferred stand-off
+    // band, back away when the player closes in, close the gap when the player
+    // runs away, and strafe sideways while inside the band. Without this an
+    // archer simply walked into melee range, which wasted the whole point of
+    // the Archer trait (and made ranged enemies strictly worse melee).
+    if (traits != nullptr && traits->shootCooldown > 0.0F) {
+      constexpr float kPreferred = 5.0F;  // comfortable shooting range
+      constexpr float kTooClose = 3.2F;   // start backing off below this
+      constexpr float kTooFar = 7.0F;    // close in above this
+      if (dist > 0.001F) {
+        float seekX = dx;
+        float seekY = dy;
+        if (dist < kTooClose) {
+          // Too close: retreat directly away from the player.
+          seekX = -dx;
+          seekY = -dy;
+        } else if (dist <= kTooFar && dist >= kTooClose) {
+          // In the band: stop closing and strafe perpendicular so the player
+          // has to keep moving to line up a shot.
+          // Strafe direction flips slowly to avoid a perfectly static orbit.
+          const float side = std::sin(simTime_ * 0.7F + t.x * 0.3F) >= 0.0F ? 1.0F : -1.0F;
+          seekX = -dy * side;
+          seekY = dx * side;
+        }
+        // Replace the seek vector with the kiting one.
+        dx = seekX;
+        dy = seekY;
+        const float sl = length(dx, dy);
+        if (sl > 0.001F) {
+          dx /= sl;
+          dy /= sl;
+        }
+      }
     }
 
     // Separation from neighbours via spatial hash.
@@ -1251,8 +1300,13 @@ void Game::applyEnemyDamage(entt::entity e, float dmg) {
   const bool hadShield = tr != nullptr && tr->shield > 0.0F;
   // Enemy defense runs through the SAME flat+percent curve as the player's
   // (mitigateDamage), and grows over the run so late enemies tank more.
+  // Armor pierce subtracts from that defense first (clamped at 0), so a pierce
+  // build cuts through the flat+percent curve instead of being flattened by it.
   if (tr != nullptr && tr->defense > 0.0F) {
-    dmg = mitigateDamage(dmg, tr->defense);
+    const float effectiveDefense = std::max(0.0F, tr->defense - stats_.armorPierce);
+    if (effectiveDefense > 0.0F) {
+      dmg = mitigateDamage(dmg, effectiveDefense);
+    }
   }
   if (tr != nullptr && tr->shield > 0.0F) {
     const float absorbed = std::min(tr->shield, dmg);
@@ -1300,17 +1354,31 @@ void Game::killEnemy(entt::entity e) {
   ++kills_;
 
   // Bestiary: remember the type and which tier variant was slain.
+  int slainTier = 0;
+  if (const auto* tr = registry_.try_get<EnemyTraits>(e); tr != nullptr) {
+    slainTier = std::clamp(static_cast<int>(tr->tier), 0, 3);
+  }
+  // Tier unlock mask + strongest-kill tracking (used by the bestiary and by
+  // the elite/champion/overlord player-outline unlocks).
+  tierKillMask_ = static_cast<std::uint8_t>(tierKillMask_ | (1u << slainTier));
+  if (slainTier > strongestKilledTier_) {
+    strongestKilledTier_ = slainTier;
+    strongestKilledDef_ = registry_.try_get<Enemy>(e) != nullptr
+                              ? registry_.get<Enemy>(e).def
+                              : -1;
+  }
   if (const auto* en = registry_.try_get<Enemy>(e);
       en != nullptr && en->def >= 0 &&
       static_cast<std::size_t>(en->def) < bestiaryKills_.size()) {
     const std::size_t di = static_cast<std::size_t>(en->def);
     ++bestiaryKills_[di];
-    int tier = 0;
-    if (const auto* tr = registry_.try_get<EnemyTraits>(e); tr != nullptr) {
-      tier = std::clamp(static_cast<int>(tr->tier), 0, 3);
-    }
-    bestiaryTiers_[di] = static_cast<std::uint8_t>(bestiaryTiers_[di] | (1u << tier));
+    bestiaryTiers_[di] = static_cast<std::uint8_t>(bestiaryTiers_[di] | (1u << slainTier));
   }
+
+  // Lifesteal fires on the kill itself, using the slain enemy's lifesteal
+  // resistance. This is the single point where healing can trigger, which is
+  // what bounds procs by kills rather than by hits.
+  tryLifestealOnKill(e);
 
   // Blood price: every 20 kills detonates a burst around the player.
   ++bloodKills_;
@@ -1373,12 +1441,19 @@ void Game::chainBolt(float x, float y, float dmg) {
   }
 }
 
-// Chance-based lifesteal: a damaging hit with lifesteal L has L% chance to
-// heal 1 HP. L >= 100 guarantees the first point and rolls the excess
-// (L - 100)% for a second point. The Vampiric Heart unique heals 2 per proc.
-// The damaged enemy's lifesteal resistance scales the chance down (50% res
+// Lifesteal now rolls on a KILL, not on every hit. With lifesteal L, each
+// slain enemy has an L% chance to heal `lifestealHeal` HP; at L >= 100 the
+// first point is guaranteed and the excess (L - 100)% rolls a second point.
+// The Vampiric Heart unique heals 2 per proc.
+//
+// Why kill-based: a many-hit weapon (Halo, Beam, chains) lands dozens of small
+// hits per second, so per-hit lifesteal healed far faster than any enemy could
+// kill the player — the exact opposite of the intended risk/reward. Bounding
+// procs by KILLS instead of hits keeps vampirism strong (an overlord kill is
+// still a big payoff) while making it scale with how much you actually clear.
+// The slain enemy's lifesteal resistance scales the chance down (50% res
 // halves it), so late/elite enemies are much harder to drain.
-void Game::tryLifesteal(entt::entity source) {
+void Game::tryLifestealOnKill(entt::entity source) {
   if (stats_.lifesteal <= 0.0F) return;
   if (player_ == entt::null || !registry_.valid(player_)) return;
   auto& hp = registry_.get<Health>(player_);
@@ -1488,11 +1563,12 @@ void Game::updateProjectiles() {
       const float hitR = r.r + er.r;
       if (dx * dx + dy * dy > hitR * hitR) return;
 
-      // Damage, then roll chance-based lifesteal.
+      // Damage. Lifesteal no longer rolls here — it fires on the kill itself
+      // (see killEnemy), so a many-hit weapon cannot heal per tick. `dealt` is
+      // still needed to know the hit actually landed (for chain lightning).
       const float hpBefore = eh->hp;
       applyEnemyDamage(enemy, pr.damage);
       const float dealt = hpBefore - eh->hp;
-      if (dealt > 0.0F) tryLifesteal(enemy);
 
       // Knockback on hit.
       if (pr.strength > 0.0F && player_ != entt::null) {
@@ -1593,10 +1669,7 @@ void Game::updateOrbitBlades() {
       auto* eh = registry_.try_get<Health>(en);
       if (eh == nullptr || eh->hp <= 0.0F) continue;
 
-      const float hpBefore = eh->hp;
       applyEnemyDamage(en, damage);
-      const float dealt = hpBefore - eh->hp;
-      if (dealt > 0.0F) tryLifesteal(en);
       spawnParticles(et.x, et.y, {0.85F, 0.9F, 1.0F, 1.0F}, 2, 2.0F);
     }
   }
@@ -1665,9 +1738,7 @@ void Game::updateHaloBeams() {
     for (std::size_t hi = 0; hi < hits.size(); ++hi) {
       auto* eh = registry_.try_get<Health>(hits[hi]);
       if (eh == nullptr) continue;
-      const float hpBefore = eh->hp;
       applyEnemyDamage(hits[hi], damage * dt * haloMul);
-      if (hpBefore - eh->hp > 0.0F) tryLifesteal(hits[hi]);
       // The spoke shoves what it touches outward (super halo).
       if (knockback > 0.0F) {
         applyKnockback(hits[hi], hb.angle, knockback * dt);
@@ -1881,7 +1952,6 @@ void Game::updateBoomerangProjectiles() {
           auto* teh = registry_.try_get<Health>(thits[ti]);
           if (teh == nullptr) continue;
           applyEnemyDamage(thits[ti], bp.trailDamage * trailMul);
-          if (thp[ti] - teh->hp > 0.0F) tryLifesteal(thits[ti]);
         }
         spawnParticles(t.x, t.y, {0.55F, 1.0F, 1.0F, 0.6F}, 3, 2.0F);
       }
@@ -1902,10 +1972,7 @@ void Game::updateBoomerangProjectiles() {
       const float hitR = r.r + er.r;
       if (dx * dx + dy * dy > hitR * hitR) return;
 
-      const float hpBefore = eh->hp;
       applyEnemyDamage(enemy, bp.damage);
-      const float dealt = hpBefore - eh->hp;
-      if (dealt > 0.0F) tryLifesteal(enemy);
 
       spawnParticles(et.x, et.y, {0.6F, 0.9F, 1.0F, 1.0F}, 3, 3.0F);
       --bp.pierce;
@@ -1998,10 +2065,7 @@ void Game::updateBounceProjectiles() {
       const float scaledDamage =
           bp.damage * std::powf(bp.damageMul, static_cast<float>(bp.bounceCount));
       const int pierce = bp.pierce + stats_.pierceAdd; (void)pierce;
-      const float hpBefore = eh->hp;
       applyEnemyDamage(enemy, scaledDamage);
-      const float dealt = hpBefore - eh->hp;
-      if (dealt > 0.0F) tryLifesteal(enemy);
 
       // "Echo Detonation" unique: every bounce splashes area damage (falloff).
       if (bp.splashRadius > 0.0F) {
@@ -2118,10 +2182,7 @@ void Game::updateBeamEffects() {
       const entt::entity en = bline[bi];
       auto* eh = registry_.try_get<Health>(en);
       if (eh == nullptr) continue;
-      const float hpBefore = eh->hp;
       applyEnemyDamage(en, be.damage * stats_.damageMul / 60.0F * beamMul);
-      const float dealt = hpBefore - eh->hp;
-      if (dealt > 0.0F) tryLifesteal(en);
       spawnParticles(bhx[bi], bhy[bi], {1.0F, 1.0F, 0.75F, 1.0F}, 2, 2.0F);
     }
   }
@@ -2183,9 +2244,7 @@ void Game::updateZoneEffects() {
       for (std::size_t zi = 0; zi < zhits.size(); ++zi) {
         auto* eh = registry_.try_get<Health>(zhits[zi]);
         if (eh == nullptr) continue;
-        const float hpBefore = eh->hp;
         applyEnemyDamage(zhits[zi], dmg * zoneMul);
-        if (hpBefore - eh->hp > 0.0F) tryLifesteal(zhits[zi]);
         spawnParticles(zhx[zi], zhy[zi], {1.0F, 0.4F, 0.15F, 1.0F}, 2, 2.0F);
       }
     }
@@ -2234,10 +2293,7 @@ void Game::updateChainLightning() {
     const float damage = cl.damage * stats_.damageMul * std::powf(cl.damageMul, static_cast<float>(cl.jumpsDone));
     auto* eh = registry_.try_get<Health>(nextTarget);
     if (eh && eh->hp > 0.0F) {
-      const float hpBefore = eh->hp;
       applyEnemyDamage(nextTarget, damage);
-      const float dealt = hpBefore - eh->hp;
-      if (dealt > 0.0F) tryLifesteal(nextTarget);
 
       const auto& targetT = registry_.get<Transform>(nextTarget);
       spawnParticles(targetT.x, targetT.y, {0.55F, 1.0F, 1.0F, 1.0F}, 8, 4.0F);
@@ -2303,9 +2359,7 @@ void Game::updateNovaRing() {
       for (std::size_t ni = 0; ni < nhits.size(); ++ni) {
         auto* eh = registry_.try_get<Health>(nhits[ni]);
         if (eh == nullptr) continue;
-        const float hpBefore = eh->hp;
         applyEnemyDamage(nhits[ni], nr.damagePerTick * stats_.damageMul * novaMul);
-        if (hpBefore - eh->hp > 0.0F) tryLifesteal(nhits[ni]);
         spawnParticles(nhx[ni], nhy[ni], {0.5F, 0.3F, 1.0F, 1.0F}, 4, 3.0F);
       }
     }
@@ -2414,6 +2468,48 @@ void Game::currentScales(float& hp, float& speed, float& touch) const {
   touch = 1.0F + simTime_ / 1500.0F;
 }
 
+// Overlord retirement: once an overlord of type X has spawned, X is retired
+// and stops appearing, so the run does not keep throwing the same boss at you.
+// The 3 most recently unlocked types are exempt (refreshRecentTypes) which
+// guarantees the pool never empties; if somehow every type is retired we fall
+// back to the exempt set, and ultimately to everything unlocked.
+void Game::refreshRecentTypes() {
+  recentTypes_.assign(content_.enemies.size(), 0);
+  if (content_.enemies.empty()) return;
+  // Find the indices of the 3 highest unlock_at values.
+  std::vector<std::size_t> order(content_.enemies.size());
+  for (std::size_t i = 0; i < order.size(); ++i) order[i] = i;
+  std::partial_sort(order.begin(), order.end(), order.end(),
+                    [this](std::size_t a, std::size_t b) {
+                      return content_.enemies[a].unlockAt > content_.enemies[b].unlockAt;
+                    });
+  const std::size_t take = std::min<std::size_t>(3, order.size());
+  for (std::size_t k = 0; k < take; ++k) recentTypes_[order[k]] = 1;
+}
+
+void Game::retireEnemyType(int def) {
+  if (def < 0 || static_cast<std::size_t>(def) >= retiredTypes_.size()) return;
+  retiredTypes_[static_cast<std::size_t>(def)] = 1;
+}
+
+bool Game::typeRetired(int def) const {
+  if (def < 0 || static_cast<std::size_t>(def) >= retiredTypes_.size()) return false;
+  return retiredTypes_[static_cast<std::size_t>(def)] != 0;
+}
+
+bool Game::testTypeIsRecent(int def) const {
+  if (def < 0 || static_cast<std::size_t>(def) >= recentTypes_.size()) return false;
+  return recentTypes_[static_cast<std::size_t>(def)] != 0;
+}
+
+bool Game::typeCanSpawn(int def) const {
+  if (def < 0 || static_cast<std::size_t>(def) >= content_.enemies.size()) return false;
+  if (simTime_ < content_.enemies[static_cast<std::size_t>(def)].unlockAt) return false;
+  if (!typeRetired(def)) return true;
+  // Retired, but exempt because it is one of the 3 newest types.
+  return testTypeIsRecent(def);
+}
+
 void Game::spawnWave() {
   if (!wavesEnabled_) return;
   if (content_.enemies.empty()) return;
@@ -2431,19 +2527,27 @@ void Game::spawnWave() {
   // distance by 10:00; after that the distance no longer changes.
   const float spawnDist = kSpawnDist * std::min(2.0F, 1.0F + simTime_ / 600.0F);
 
-  // Weighted pick among unlocked enemy types (regular spawn + horde bursts).
+  // Weighted pick among unlocked, non-retired enemy types (regular spawn +
+  // horde bursts). If retirement ever emptied the pool, fall back so the
+  // game can never stop spawning.
   auto pickDef = [&]() -> int {
     float totalWeight = 0.0F;
     for (const auto& def : content_.enemies) {
-      if (simTime_ >= def.unlockAt) {
+      if (typeCanSpawn(static_cast<int>(&def - content_.enemies.data()))) {
         totalWeight += def.weight;
       }
     }
-    if (totalWeight <= 0.0F) return -1;
+    if (totalWeight <= 0.0F) {
+      for (const auto& def : content_.enemies) {
+        if (simTime_ >= def.unlockAt) totalWeight += def.weight;
+      }
+      if (totalWeight <= 0.0F) return -1;
+    }
     float roll = unit(rng_) * totalWeight;
     for (std::size_t i = 0; i < content_.enemies.size(); ++i) {
       const auto& candidate = content_.enemies[i];
       if (simTime_ < candidate.unlockAt) continue;
+      if (!typeCanSpawn(static_cast<int>(i))) continue;
       roll -= candidate.weight;
       if (roll <= 0.0F) return static_cast<int>(i);
     }
@@ -2522,17 +2626,22 @@ void Game::spawnWave() {
     const float y = pt.y + std::sin(angle) * spawnDist;
 
     // Per-member elite/champion/overlord rolls (each enemy rolls
-    // independently). Elites from 45s, champions from 120s, overlords from
-    // 300s; chances creep up with time.
+    // independently). Elites from 45s, champions from 180s, overlords from
+    // 420s; chances creep up with time.
+    //
+    // Champions/overlords were pushed back this round (120->180s, 300->420s)
+    // so the player has time to build anti-armour and multi-weapon coverage
+    // before the heavy tiers arrive. Their power is deliberately UNCHANGED —
+    // an overlord is meant to be the difficulty spike, not a soft one.
     const float eliteChance = std::min(0.15F, 0.05F + simTime_ * 0.0005F);
     // Champions and overlords are intentionally rarer: one unlucky fast tank
     // should not decide an entire run.
     const float champChance = std::min(0.03F, 0.008F + simTime_ * 0.00015F);
     const float overlordChance =
-        simTime_ >= 300.0F ? std::min(0.012F, 0.004F + (simTime_ - 300.0F) * 0.00005F) : 0.0F;
+        simTime_ >= 420.0F ? std::min(0.012F, 0.004F + (simTime_ - 420.0F) * 0.00005F) : 0.0F;
     bool memberElite = simTime_ >= 45.0F && unit(rng_) < eliteChance;
-    bool memberChampion = simTime_ >= 120.0F && unit(rng_) < champChance;
-    const bool memberOverlord = simTime_ >= 300.0F && unit(rng_) < overlordChance;
+    bool memberChampion = simTime_ >= 180.0F && unit(rng_) < champChance;
+    const bool memberOverlord = simTime_ >= 420.0F && unit(rng_) < overlordChance;
     if (memberChampion) memberElite = true;
     if (memberOverlord) {
       memberElite = true;
@@ -2578,6 +2687,17 @@ void Game::spawnWave() {
           default: break;
         }
       }
+    } else {
+      // Over time, more and more of the ordinary (tier 0) enemies learn to
+      // shoot. The chance ramps from 0 at ~60s to a 25% cap by ~7 minutes, so
+      // the early game stays melee-only and a late horde genuinely mixes
+      // ranged threats into the swarm. This is separate from the elite trait
+      // roll above, which is how "elite archers" have always worked.
+      const float rangedChance =
+          simTime_ >= 60.0F ? std::min(0.25F, (simTime_ - 60.0F) / 1320.0F) : 0.0F;
+      if (rangedChance > 0.0F && unit(rng_) < rangedChance) {
+        mTraits |= TraitArcher;
+      }
     }
 
     PendingSpawn pending{};
@@ -2585,6 +2705,12 @@ void Game::spawnWave() {
     pending.y = y;
     pending.t = kSpawnTelegraph;
     pending.def = defIndex;
+    // An overlord retires its own type: it will not spawn again this run, so
+    // the same boss cannot repeat forever. The 3 newest types stay eligible.
+    if (memberOverlord) {
+      retireEnemyType(defIndex);
+      refreshRecentTypes();
+    }
     pending.hpMul = std::max(1.0F, mHpMul);
     pending.touchMul = mTouchMul;
     pending.speedMul = mSpeedMul;
@@ -2648,8 +2774,24 @@ void Game::spawnEnemy(const PendingSpawn& p) {
     tr.shootTimer = 0.4F;
   }
   if (p.traits & TraitAura) {
-    tr.auraRadius = 1.6F + (p.tier >= 2 ? 0.4F : 0.0F);
-    tr.auraDps = 5.0F + simTime_ / 45.0F + (p.tier >= 2 ? 6.0F : 0.0F);
+    // Aura size and damage scale hard with the tier: an elite's aura is a
+    // small nuisance, a champion's covers real ground you must walk out of,
+    // and an overlord's is a zone you cannot stand in at all. Radius grows
+    // more than damage so the threat is *space control*, not just chip damage.
+    switch (p.tier) {
+      case 3:
+        tr.auraRadius = 4.2F;
+        tr.auraDps = 18.0F + simTime_ / 40.0F;
+        break;
+      case 2:
+        tr.auraRadius = 2.9F;
+        tr.auraDps = 11.0F + simTime_ / 45.0F;
+        break;
+      default:
+        tr.auraRadius = 1.7F;
+        tr.auraDps = 5.0F + simTime_ / 50.0F;
+        break;
+    }
   }
   registry_.emplace<EnemyTraits>(e, tr);
 }
@@ -3560,6 +3702,30 @@ std::size_t Game::debugEnemyCount() const {
   return registry_.view<Enemy>().size();
 }
 
+float Game::testFirstAuraRadius() const {
+  for (const auto e : registry_.view<EnemyTraits>()) {
+    const auto& t = registry_.get<EnemyTraits>(e);
+    if (t.auraRadius > 0.0F) return t.auraRadius;
+  }
+  return 0.0F;
+}
+
+float Game::testFirstAuraDps() const {
+  for (const auto e : registry_.view<EnemyTraits>()) {
+    const auto& t = registry_.get<EnemyTraits>(e);
+    if (t.auraRadius > 0.0F) return t.auraDps;
+  }
+  return 0.0F;
+}
+
+bool Game::testFirstCanShoot() const {
+  for (const auto e : registry_.view<EnemyTraits>()) {
+    const auto& t = registry_.get<EnemyTraits>(e);
+    if (t.shootCooldown > 0.0F) return true;
+  }
+  return false;
+}
+
 std::vector<float> Game::testEnemySpeeds() const {
   std::vector<float> out;
   auto view = registry_.view<Transform, Velocity, Enemy>();
@@ -3720,12 +3886,17 @@ void Game::renderPlayerStats(core::render::Batcher& b, float px, float py) {
   std::string speedRow = "SPEED X" + fit1(stats_.speedMul) + "     PICKUP X" +
                          fit1(stats_.pickupMul);
   if (stats_.lifesteal > 0.0F) {
-    speedRow += "   LIFE " + std::to_string(static_cast<int>(stats_.lifesteal)) + "%";
+    // Lifesteal rolls per KILL, not per hit — label it so that is not a
+    // surprise: "+12% per kill".
+    speedRow += "   LIFE " + std::to_string(static_cast<int>(stats_.lifesteal)) + "%/KILL";
     if (stats_.lifestealHeal >= 2) speedRow += " X2";
   }
   rows.push_back(speedRow);
   rows.push_back("PROJECTILES +" + std::to_string(stats_.projAdd) + "   PIERCE +" +
                  std::to_string(stats_.pierceAdd));
+  if (stats_.armorPierce > 0.0F) {
+    rows.push_back("ARMOR PIERCE " + std::to_string(static_cast<int>(stats_.armorPierce)));
+  }
   if (stats_.extraChoice > 0) {
     rows.push_back("+1 CARD PER LEVEL-UP");
   }
@@ -3793,6 +3964,25 @@ void Game::renderBestiary(core::render::Batcher& b, float px, float py) {
                 static_cast<double>(hpS), static_cast<double>(spS), static_cast<double>(tchS));
   b.text(px * 0.5F - b.textWidth(1.8F, buf) * 0.5F, 54.0F, 1.8F, violet, buf);
 
+  // Strongest enemy killed this run (the headline the player cares about).
+  {
+    const char* tierName = "NONE";
+    Color tierCol = dim;
+    switch (strongestKilledTier_) {
+      case 3: tierName = "OVERLORD"; tierCol = Color{0.85F, 0.35F, 1.0F, 1.0F}; break;
+      case 2: tierName = "CHAMPION"; tierCol = Color{1.0F, 0.45F, 0.10F, 1.0F}; break;
+      case 1: tierName = "ELITE";    tierCol = Color{1.0F, 0.85F, 0.20F, 1.0F}; break;
+      default: break;
+    }
+    std::string line = "STRONGEST KILL THIS RUN: ";
+    line += tierName;
+    if (strongestKilledDef_ >= 0 &&
+        static_cast<std::size_t>(strongestKilledDef_) < content_.enemies.size()) {
+      line += " — " + content_.enemies[static_cast<std::size_t>(strongestKilledDef_)].name;
+    }
+    b.text(px * 0.5F - b.textWidth(2.0F, line) * 0.5F, 78.0F, 2.0F, tierCol, line);
+  }
+
   std::vector<int> found;
   for (std::size_t i = 0; i < bestiaryKills_.size(); ++i) {
     if (bestiaryKills_[i] > 0) found.push_back(static_cast<int>(i));
@@ -3807,11 +3997,15 @@ void Game::renderBestiary(core::render::Batcher& b, float px, float py) {
   const int perCol = 9;
   const float colW = twoCols ? (px - 100.0F) * 0.5F : px - 80.0F;
   const float startX = 50.0F;
-  const float startY = 92.0F;
-  const float rowH = 50.0F;
+  const float startY = 112.0F;
+  // Taller rows: each entry now carries base stats, live-scaled stats,
+  // defense + resistances, and the tier ability line.
+  const float rowH = 66.0F;
   const Color eliteGold{1.0F, 0.85F, 0.20F, 1.0F};
   const Color champOrange{1.0F, 0.45F, 0.10F, 1.0F};
   const Color overlordViolet{0.85F, 0.35F, 1.0F, 1.0F};
+  const Color statBlue{0.60F, 0.78F, 0.92F, 1.0F};
+  const Color resOrange{1.0F, 0.72F, 0.45F, 1.0F};
 
   for (std::size_t fi = 0; fi < found.size(); ++fi) {
     const int col = static_cast<int>(fi) / perCol;
@@ -3832,21 +4026,44 @@ void Game::renderBestiary(core::render::Batcher& b, float px, float py) {
     }
 
     b.text(x + 46.0F, y, 2.0F, white, def.name);
-    std::snprintf(buf, sizeof(buf), "HP %d  SPD %.1f  DMG %d  XP %d",
+    // Base stats.
+    std::snprintf(buf, sizeof(buf), "HP %d  SPD %.1f  DMG %d  XP %d  R %.2f",
                   static_cast<int>(def.hp), static_cast<double>(def.speed),
-                  static_cast<int>(def.touch), static_cast<int>(def.xp));
-    b.text(x + 46.0F, y + 20.0F, 1.4F, dim, buf);
-    std::snprintf(buf, sizeof(buf), "NOW: HP %d  DMG %d",
-                  static_cast<int>(def.hp * hpS), static_cast<int>(def.touch * tchS));
-    b.text(x + 46.0F, y + 33.0F, 1.4F, Color{0.6F, 0.78F, 0.92F, 1.0F}, buf);
+                  static_cast<int>(def.touch), static_cast<int>(def.xp),
+                  static_cast<double>(def.radius));
+    b.text(x + 46.0F, y + 19.0F, 1.35F, dim, buf);
+    // Live-scaled stats (what it actually is right now).
+    std::snprintf(buf, sizeof(buf), "NOW HP %d  DMG %d  DEF %d",
+                  static_cast<int>(def.hp * hpS), static_cast<int>(def.touch * tchS),
+                  static_cast<int>(enemyDefense(simTime_, 0)));
+    b.text(x + 46.0F, y + 32.0F, 1.35F, statBlue, buf);
+
+    // Armor + resistances: the tier/flag dependent numbers the player needs to
+    // know before picking an armor-pierce or lifesteal build.
+    const float baseLsRes =
+        enemyLifestealResistance(simTime_, 0, false) * 100.0F;
+    const float baseKbRes =
+        enemyKnockbackResistance(simTime_, 0, false) * 100.0F;
+    std::snprintf(buf, sizeof(buf),
+                  "LIFESTEAL RES %d%%   KNOCKBACK RES %d%%   +%d%% PIERCE IGNORES",
+                  static_cast<int>(baseLsRes), static_cast<int>(baseKbRes),
+                  static_cast<int>(stats_.armorPierce));
+    b.text(x + 46.0F, y + 45.0F, 1.3F, resOrange, buf);
+
+    // Tier abilities: what the elite/champion/overlord variants of this type
+    // can roll, and which tiers the player has actually slain (badges).
+    const std::uint8_t tiers = bestiaryTiers_[static_cast<std::size_t>(idx)];
+    std::string abil = "ABILITIES: FAST ARMOR REGEN EXPLO VENOM VAMP SHIELD HEAVY SHOOT AURA RESIST";
+    // Truncate to what fits the column; the badges convey the rest.
+    if (abil.size() > 52) abil.resize(52);
+    b.text(x + 46.0F, y + 57.0F, 1.05F, violet, abil);
 
     std::snprintf(buf, sizeof(buf), "KILLS %d", bestiaryKills_[static_cast<std::size_t>(idx)]);
     b.text(x + colW - 96.0F, y, 1.5F, gold, buf);
 
     // Tier badges: only the elite+ variants actually slain are lit.
-    const std::uint8_t tiers = bestiaryTiers_[static_cast<std::size_t>(idx)];
     float bx = x + colW - 88.0F;
-    const float by = y + 20.0F;
+    const float by = y + 19.0F;
     if ((tiers & (1u << 1)) != 0u) { b.text(bx, by, 1.7F, eliteGold, "E"); bx += 20.0F; }
     if ((tiers & (1u << 2)) != 0u) { b.text(bx, by, 1.7F, champOrange, "C"); bx += 20.0F; }
     if ((tiers & (1u << 3)) != 0u) { b.text(bx, by, 1.7F, overlordViolet, "O"); }
