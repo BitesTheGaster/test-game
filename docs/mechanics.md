@@ -40,6 +40,7 @@ curves. Tables of all content are generated into
 | Move speed | Base × `speedMul` |
 | Damage / cooldown | Global multipliers applying to every weapon |
 | Projectiles / pierce | Additive buffs applied to every weapon |
+| **Kill chain** | The one stat that cannot be hoarded; see [Momentum](#momentum) |
 
 **Cross-weapon couplings** — stats are not siloed per weapon:
 
@@ -66,6 +67,31 @@ So stacking can approach but never reach zero cooldown: +25% fire rate fires
 `w_fire_rate` (Wand Channeling, Shuriken Cyclone) bonuses all add into the
 same `1 + bonus` denominator. The Spreadshot unique doubles its bonus the same
 way (+100% fire rate).
+
+### Momentum
+
+Everything else on this page is **flat**: a card you take at level 12 is worth
+exactly as much at level 40, so a finished build has nothing left to do but
+walk. Momentum is the one thing that cannot be banked.
+
+- **Every kill adds a stack** to the chain (`momentumGain`, 1 by default).
+- Each stack is worth **+1.5% damage** and **+0.5% fire rate**, up to a cap of
+  **20** stacks — a live ceiling of **+30% damage / +10% fire rate** that has to
+  be re-earned every single time.
+- The chain goes **cold 3 seconds after your last kill**. A bar under the kill
+  counter shows exactly how much patience is left.
+- **A real hit costs you the chain**: it is halved, minus two, floored at zero.
+  Damage-over-time and auras deliberately do *not* break it, so an enemy damage
+  aura is not an instant chain-killer.
+- The multipliers are applied at runtime to every damage, cooldown and movement
+  calculation (they are *not* folded into the flat stats, so the character
+  sheet still shows the build you actually own next to the live chain).
+
+The point is a decision, not a bonus: standing *in* the horde is the only way to
+keep the chain fed and also the only way to lose it. Four cards bend it —
+**Blood Surge** (+1% damage per stack), **Rampage** (+4% move speed per stack),
+**Deep Reserves** (+2 s of patience) and the **Bloodthirst** unique (twice the
+stacks per kill, double the cap, +3 s of patience).
 
 ### Defense
 
@@ -215,10 +241,15 @@ Each stack adds one slot, so a fully-stacked build can hold **7** weapons.
 
 ## Level-ups
 
-XP per level: `7 + 5·(level−1) + 0.85·(level−1)·level`. Overflow XP carries into
+XP per level: `12 + 9·(level−1) + 2.6·(level−1)·level`. Overflow XP carries into
 the next level; if it purchases another level immediately, another card choice
 queues. Picked-up XP is scaled by the **XP multiplier** (`xpMul`): Scholar and
 Lorekeeper cards add `+12%` and `+30%` respectively, stacking additively.
+
+**This curve is the pacing of the game.** Level-ups are picks, and picks are the
+only thing that makes a run interesting, so it is deliberately steep: level 32
+costs ~33 000 XP and level 64 ~246 000. With the old, much cheaper curve a build
+was maxed out about four minutes in and everything after that was an empty walk.
 
 ### Choice generation
 
@@ -236,8 +267,12 @@ Each level-up shows **3 cards, plus** one extra per `extraChoice`
 3. **Normal pool** — all remaining slots are filled from non-consumed normal
    upgrades. Weapon-tagged cards (`weapon = "wand"` etc.) only appear while
    that weapon is owned.
-4. **Fallback** — if the pool is exhausted the game never bricks; the first
-   still-stackable upgrade is offered instead.
+4. **Fallback** — if the pool is exhausted the game never bricks: the first
+   still-**applicable** upgrade is offered (weapon-tagged cards for weapons the
+   player does not own are skipped, since picking one could not do anything).
+   If literally nothing is left, a **"nothing left, continue"** card completes
+   the level-up. A pick that cannot be applied is never allowed to eat the
+   level-up — that used to leave the run stuck on the card screen forever.
 
 ### Reroll
 
@@ -359,9 +394,11 @@ relative `weight`, and `color`/`shape`.
 - Enemy type is picked by **weighted roll among unlocked types** (`simTime >=
   unlockAt`), so the roster rotates in over time.
 - From ~45 s enemies arrive in **clusters** instead of one-at-a-time
-  trickles, and packs grow every minute (up to ~9 enemies per pack).
+  trickles, and packs grow over the run (up to ~8 enemies per pack).
 - Every ~40–50 s a **horde burst** spawns a full ring of 10–24 enemies from
-  every side at once, with telegraphs ringing the whole screen.
+  every side at once, with telegraphs ringing the whole screen. The ring is
+  called out with a `HORDE INCOMING` banner 2 s before it lands, so the player
+  gets to decide whether to hold the line or disengage.
 
 ### Enemy separation
 
@@ -379,9 +416,14 @@ warm-up and difficulty bites hard from ~90 s:
 
 ```text
 t < 30 s :  interval = 1.2 − t·0.005         (1.20 s → 1.05 s)
-30–90 s  :  interval = max(0.45, 1.05 − (t−30)·0.01)   (→ 0.45 s)
-t ≥ 90 s :  interval = max(0.12, 0.45 − (t−90)·0.004) (→ min 0.12 s)
+30–90 s  :  interval = max(0.50, 1.05 − (t−30)·0.0092)  (→ 0.50 s)
+t ≥ 90 s :  interval = max(0.20, 0.50 − (t−90)·0.003)   (→ min 0.20 s)
 ```
+
+The 0.20 s floor is deliberate: at 0.12 s the game threw around thirty enemies
+a second at the player, which no build can answer and which just ends the run
+early. Five packs a second keeps the screen full while still being something
+you can fight your way out of.
 
 - Enemy HP also scales globally. Up to the 6-minute mark it is multiplied by
   `1 + t/70`; **after 6 minutes the ramp steepens** (`+ (t−360)/45`), so the
@@ -401,14 +443,15 @@ Elite-and-above enemies are rolled per spawn from elapsed time `t`. Every one
 of them gets **all** of its base stats boosted (so they never simply melt), on
 top of the traits they roll:
 
-| Roll | Becomes | Chance | HP | Touch | Speed | XP |
-|------|---------|--------|----|-------|-------|----|
-| t ≥ 45 s | Elite (tier 1) | 5% → 15% | ×4 | ×1.5 | ×1.15 | ×3 |
-| t ≥ 120 s | Champion (tier 2) | ~1% → 3% | ×7 | ×2.5 | ×1.3 | ×5 |
-| t ≥ 300 s | Overlord (tier 3) | ~0.4% → 1.2% | ×14 | ×4 | ×1.5 | ×10 |
+| Roll | Becomes | Gate | HP | Touch | Speed | XP |
+|------|---------|------|----|-------|-------|----|
+| t ≥ 45 s | Elite (tier 1) | on the clock | ×4 | ×1.5 | ×1.15 | ×3 |
+| t ≥ 90 s | Champion (tier 2) | **once elites are routine** | ×7 | ×2.5 | ×1.3 | ×5 |
+| t ≥ 240 s | Overlord (tier 3) | **once champions are routine** | ×14 | ×4 | ×1.5 | ×10 |
 
-Champions and overlords are deliberately **rarer** than in earlier builds: a
-single unlucky fast tank should not decide a run.
+Elites open on a timer (5% per spawn, creeping to 15%). **Champions and
+overlords are not on a clock at all** — they answer to how well the player is
+doing. See [Adaptive tribunal director](#adaptive-tribunal-director).
 
 - Tougher tiers are **larger** (elite ×1.35, champion ×1.6, overlord ×2.0).
 - Strength is shown by a **coloured outline** around the enemy — elite **gold**,
@@ -437,6 +480,30 @@ resistant`. Traits never repeat on the same enemy:
 | Archer | Shoots aimed projectiles at the player periodically |
 | Aura | Burns the player with a damage aura while they stand inside it |
 | Resistant | Strong lifesteal + knockback resistance and extra defense |
+
+### Adaptive tribunal director
+
+The heavy tiers are gated on **performance, not time**. A per-tier *handling
+score* rises by 1.0 per elite killed (1.25 per champion) and bleeds away at
+`1/30` per second, so only recent form counts:
+
+| Tier | Opens when | Score needed | Fed by |
+|------|-----------|--------------|--------|
+| Champion | elite pressure ≥ 7 **and** t ≥ 90 s | 7 | elite kills |
+| Overlord | champion pressure ≥ 6 **and** t ≥ 240 s | 6 | champion kills |
+
+- The **spawn chance** then scales with how far *above* the line the player is:
+  `clamp((pressure − threshold) · 0.006, 0, 5%)` for champions and
+  `· 0.003, 0, 2%` for overlords. A dominant build gets a real fight, a
+  merely competent one gets an occasional champion.
+- Gates are **hysteretic**: once earned a tier stays open for a 20 s grace
+  window, so a dry patch of five seconds does not slam the door shut. After the
+  grace the tier shuts again and the run gets easier — a struggling player is
+  never buried.
+- Opening a tier announces it with a **HUD banner** (`CHAMPION TRIBUNAL OPEN`),
+  and the bestiary shows each gate's live progress as a percentage.
+- The tiers' **power is unchanged**: only their timing follows the player.
+- Elites stay on the clock, so a fresh run still meets its first one at 45 s.
 
 ### Enemy defense & resistances
 

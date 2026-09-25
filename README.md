@@ -4,11 +4,14 @@ Vampire Survivors-like roguelike. C++20, SDL3 + OpenGL 3.3, CMake + vcpkg.
 
 Multi-weapon build-your-arsenal roguelike: 16 weapons (incl. 5 evolutions and
 2 three-weapon super evolutions), 18 enemy types with elite/champion/overlord
-traits, 88 upgrades (normal / unique / milestone), an opening **3-weapon pick**
-instead of a fixed starter, regenerating shield + defense + lifesteal, an
-H-key heal, defense-scaled invulnerability frames, pierce that cancels AoE
-damage falloff, knockback with an Impact multiplier, an Esc **bestiary**, and
-a difficulty ramp that accelerates after 6 minutes.
+traits, 96 upgrades (normal / unique / milestone), an opening **3-weapon pick**
+instead of a fixed starter, a **momentum kill chain** that only pays while you
+are actively killing, an **adaptive tribunal director** that opens champions
+when elites stop being a problem and overlords when champions do, regenerating
+shield + defense + lifesteal, an H-key heal, defense-scaled invulnerability
+frames, pierce that cancels AoE damage falloff, knockback with an Impact
+multiplier, an Esc **bestiary**, and a difficulty ramp that accelerates after
+6 minutes.
 
 ## Documentation
 

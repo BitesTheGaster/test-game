@@ -189,6 +189,18 @@ Headless Catch2 tests in `tests/test_game.cpp` construct a `Game` directly
 - Milestone offering at level 5
 - Reroll budget accounting
 - Projectile/weapon stat accumulation
+- Menu key repeat (`core::input::KeyRepeat`): fires on the press, waits out the
+  initial delay, then paces itself and never bursts after a frame hitch
+- A maxed-out build still completing its level-up (the no-applicable-card
+  fallback, the "nothing left, continue" card and the skip/recovery path)
+- Displacement resistance: Void Gyre drag and every shove shrink against an
+  enemy's live knockback resistance
+- The adaptive tribunal director: champions gated on elite handling, overlords
+  on champion handling, both reversible, both with hysteresis
+- The momentum kill chain: it feeds on kills, pays out as damage/fire rate, is
+  halved by a hit, goes cold on a timer and respects its cap
+- Upgrade-pool shape: no dead stat family may outnumber the offensive core
+- `xpForLevel` monotonicity and a pacing floor, so a run cannot max out early
 
 Run everything (configure + build + test) with:
 

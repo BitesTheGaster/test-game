@@ -35,9 +35,9 @@ python3 tools/gendocs.py
 | Void Nova | nova | orb + hammer | 40 | 1.8 | 1 | 0 | 0 | Orb + Hammer. Expanding ring of destruction. |
 | Inferno | inferno | flame + scythe | 60 | 1.6 | 1 | 0 | 0 | Sprayer + Scythe. Reaps a circle and leaves burning ground. |
 | Pulsar | pulsar | beam + shuriken | 12 | 0.9 | 1 | 2 | 0 | Shuriken + Lance. Light-chakram dragging a burning laser trail. |
-| Radiant Halo | halo | dagger + beam | 55 | 1 | 2 | 4 | 0 | Dagger + Lance. Blades of light orbit you, reaping all they touch. |
-| Void Gyre | vortex | dagger + scythe + orb | 55 | 1 | 3 | 4 | 0 | Dagger + Scythe + Void Orb. Suction zones circle you and drag prey into their cores. More projectiles = more AND bigger zones. |
-| Prism Array | prism | flame + beam + crossbow | 60 | 0.9 | 4 | 3 | 0 | Sprayer + Lance + Crossbow. One locked beam per projectile, each on a different enemy — a crowd gets shredded from several angles at once. |
+| Radiant Halo | halo | dagger + beam | 40 | 1 | 2 | 4 | 0 | Dagger + Lance. Blades of light orbit you, reaping all they touch. |
+| Void Gyre | vortex | dagger + scythe + orb | 40 | 1 | 3 | 4 | 0 | Dagger + Scythe + Void Orb. Suction zones circle you and drag prey into their cores. More projectiles = more AND bigger zones (up to a cap). |
+| Prism Array | prism | flame + beam + crossbow | 42 | 1.05 | 4 | 2 | 0 | Sprayer + Lance + Crossbow. One locked beam per projectile, each on a different enemy — a crowd gets shredded from several angles at once. |
 
 ---
 
@@ -76,27 +76,30 @@ python3 tools/gendocs.py
 | Battle Haste | haste | fire_rate | 0.09 | 5 |  |  | +9% fire rate |
 | Split Shot | multi | proj_add | 1 | 4 |  |  | +1 projectile |
 | Impact | impact | knockback_mul | 0.45 | 3 |  |  | +45% knockback from all your attacks and bursts |
-| Swift Boots | boots | speed_mul | 0.12 | 4 |  |  | +12% move speed |
-| Vigor | vigor | max_hp_add | 20 | 6 |  |  | +20 max HP and heal 20 |
-| Soul Magnet | magnet | pickup_mul | 0.6 | 4 |  |  | +60% pickup range |
-| Scholar | scholar | xp_mul | 0.12 | 5 |  |  | +12% experience gained |
-| Lorekeeper | lorekeeper | xp_mul | 0.3 | 3 |  |  | +30% experience gained |
+| Swift Boots | boots | speed_mul | 0.12 | 2 |  |  | +12% move speed |
+| Vigor | vigor | max_hp_add | 20 | 4 |  |  | +20 max HP and heal 20 |
+| Soul Magnet | magnet | pickup_mul | 0.6 | 2 |  |  | +60% pickup range |
+| Scholar | scholar | xp_mul | 0.12 | 3 |  |  | +12% experience gained |
+| Lorekeeper | lorekeeper | xp_mul | 0.3 | 2 |  |  | +30% experience gained |
 | Piercing Shots | pierce | pierce_add | 1 | 3 |  |  | +1 pierce |
+| Blood Surge | surge_chain | momentum_damage | 1 | 2 |  |  | Kill chain: +1% damage per stack |
+| Rampage | rampage | momentum_speed | 4 | 1 |  |  | Kill chain: +4% move speed per stack |
+| Deep Reserves | deep_reserves | momentum_window | 2 | 1 |  |  | Kill chain: 2 more seconds before it goes cold |
 | Regeneration | regen | regen_add | 1 | 4 |  |  | +1 HP per second |
 | Might | might | damage_mul | 0.25 | 4 |  |  | +25% damage |
 | Quickdraw | quickdraw | fire_rate | 0.13 | 3 |  |  | +13% fire rate |
 | Twin Cast | twin_shot | proj_add | 1 | 2 |  |  | +1 projectile |
-| Windrunner | windrunner | speed_mul | 0.08 | 6 |  |  | +8% move speed |
-| Iron Constitution | constitution | max_hp_add | 35 | 4 |  |  | +35 max HP and heal 35 |
+| Windrunner | windrunner | speed_mul | 0.08 | 3 |  |  | +8% move speed |
+| Iron Constitution | constitution | max_hp_add | 35 | 3 |  |  | +35 max HP and heal 35 |
 | Bulwark | bulwark | max_hp_add | 50 | 2 |  |  | +50 max HP and heal 50 |
 | Vitality | vitality | regen_add | 2 | 2 |  |  | +2 HP per second |
-| Treasure Sense | treasure | pickup_mul | 1 | 2 |  |  | +100% pickup range |
-| Harvester | harvester | pickup_mul | 0.8 | 2 |  |  | +80% pickup range |
+| Treasure Sense | treasure | pickup_mul | 1 | 1 |  |  | +100% pickup range |
+| Harvester | harvester | pickup_mul | 0.8 | 1 |  |  | +80% pickup range |
 | Garrote Bolts | garrote | pierce_add | 2 | 1 |  |  | +2 pierce |
 | Battle Echoes | echoes | fire_rate | 0.19 | 2 |  |  | +19% fire rate |
 | Barrage | barrage | proj_add | 2 | 1 |  |  | +2 projectiles |
 | Fervor | fervor | damage_mul | 0.35 | 2 |  |  | +35% damage |
-| Gale Steps | gale | speed_mul | 0.15 | 2 |  |  | +15% move speed |
+| Gale Steps | gale | speed_mul | 0.15 | 1 |  |  | +15% move speed |
 | Heartwood | heartwood | max_hp_add | 70 | 1 |  |  | +70 max HP and heal 70 |
 | Surge | surge | fire_rate | 0.25 | 1 |  |  | +25% fire rate |
 | Stony Pledge | pledge | defense_add | 10 | 4 |  |  | +10 defense |
@@ -104,7 +107,7 @@ python3 tools/gendocs.py
 | Minor Ward | ward_small | shield_add | 15 | 3 |  |  | +15 regenerating shield |
 | Runic Ward | ward_great | shield_add | 30 | 2 |  |  | +30 regenerating shield |
 | Gilded Fangs | leech_gold | lifesteal_add | 4 | 3 |  |  | +4% lifesteal |
-| Soulfeed | leech_soul | lifesteal_add | 6 | 2 |  |  | +6% lifesteal (on kill) |
+| Soulfeed | leech_soul | lifesteal_add | 6 | 2 |  |  | +6% lifesteal |
 | Sunder Edge | sunder | armor_pierce_add | 15 | 4 |  |  | +15 armor pierce |
 | Keen Sunder | sunder_great | armor_pierce_add | 40 | 2 |  |  | +40 armor pierce |
 | Armor-Cracker | armor_cracker | armor_pierce_add | 80 | 1 |  |  | +80 armor pierce |
@@ -146,6 +149,7 @@ python3 tools/gendocs.py
 | Return Tempest | uw_shuriken_tempest | w_unique_area | 2.5 | 1 | shuriken |  | Storm Shuriken: returning blades detonate a 2.5-area burst |
 | Echo Detonation | uw_orb_echo | w_unique_area | 1.5 | 1 | orb |  | Void Orb: every bounce splashes half damage around the hit |
 | Reaper's Harvest | uw_scythe_harvest | w_unique_harvest | 3 | 1 | scythe |  | Soul Scythe: sweeps restore 3 HP per kill |
+| Bloodthirst | uw_bloodthirst | momentum_bloodthirst | 1 | 1 |  |  | Kill chain: twice the stacks, twice the length, 3s longer before it goes cold |
 | Prism Lance | uw_beam_prism | w_unique_prism | 3 | 1 | beam |  | Solar Lance: fires 3 parallel beams at once |
 | Thunderlord | uw_storm_thunderlord | w_unique_thunderlord | 4 | 1 | storm |  | Storm Caller: +4 chain jumps and no damage decay |
 | Supernova | uw_nova_supernova | w_unique_supernova | 1 | 1 | nova |  | Void Nova: ring expands faster, wider, and hits harder |
@@ -175,7 +179,7 @@ python3 tools/gendocs.py
 | Starlight Ward | m128_starlight | shield_add | 500 | 1 |  | 128 | MILESTONE: +500 regenerating shield |
 | Overdrive | m128_overdrive | damage_mul | 2 | 1 |  | 128 | MILESTONE: +200% damage |
 
-**Totals:** 92 upgrades (49 normal, 25 unique, 18 milestones).
+**Totals:** 96 upgrades (52 normal, 26 unique, 18 milestones).
 
 
 ---
