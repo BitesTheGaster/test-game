@@ -104,7 +104,10 @@ python3 tools/gendocs.py
 | Minor Ward | ward_small | shield_add | 15 | 3 |  |  | +15 regenerating shield |
 | Runic Ward | ward_great | shield_add | 30 | 2 |  |  | +30 regenerating shield |
 | Gilded Fangs | leech_gold | lifesteal_add | 8 | 3 |  |  | +8% lifesteal |
-| Soulfeed | leech_soul | lifesteal_add | 12 | 2 |  |  | +12% lifesteal |
+| Soulfeed | leech_soul | lifesteal_add | 12 | 2 |  |  | +12% lifesteal (on kill) |
+| Sunder Edge | sunder | armor_pierce_add | 15 | 4 |  |  | +15 armor pierce |
+| Keen Sunder | sunder_great | armor_pierce_add | 40 | 2 |  |  | +40 armor pierce |
+| Armor-Cracker | armor_cracker | armor_pierce_add | 80 | 1 |  |  | +80 armor pierce |
 | Wand Focus | w_wand_power | w_damage_add | 8 | 3 | wand |  | Arcane Wand: +8 damage |
 | Wand Channeling | w_wand_speed | w_fire_rate | 0.16 | 2 | wand |  | Arcane Wand: +16% fire rate |
 | Dagger Honing | w_dagger_power | w_damage_add | 5 | 3 | dagger |  | Throwing Dagger: +5 damage each |
@@ -171,7 +174,7 @@ python3 tools/gendocs.py
 | Starlight Ward | m128_starlight | shield_add | 500 | 1 |  | 128 | MILESTONE: +500 regenerating shield |
 | Overdrive | m128_overdrive | damage_mul | 2 | 1 |  | 128 | MILESTONE: +200% damage |
 
-**Totals:** 88 upgrades (45 normal, 25 unique, 18 milestones).
+**Totals:** 91 upgrades (48 normal, 25 unique, 18 milestones).
 
 
 ---

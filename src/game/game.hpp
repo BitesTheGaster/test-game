@@ -5,6 +5,7 @@
 #include "core/sim/spatial_hash.hpp"
 #include "game/components.hpp"
 #include "game/content.hpp"
+#include "game/profile.hpp"
 
 #include <entt/entity/registry.hpp>
 
@@ -16,6 +17,12 @@
 #include <vector>
 
 namespace game {
+
+// The game's title. Invented for round 9: the premise is a gauntlet run
+// through a monster council's three tribunals (elite / champion / overlord),
+// which is exactly how the spawn tiers and the bestiary are built.
+inline constexpr const char* kGameName = "HOLLOW TRIBUNAL";
+inline constexpr const char* kGameSubtitle = "THREE TRIBUNALS. ONE SURVIVOR.";
 
 // Word-wraps `str` into lines of at most `maxChars` characters (word-based,
 // single words longer than the limit overflow their own line). Shared between
@@ -36,6 +43,12 @@ struct FrameInput {
   bool testModeToggle = false; // T: open/close the weapon test mode
   bool heal = false;           // H: guaranteed 50% max-HP heal (cooldown-gated)
   bool bestiary = false;       // B: toggle the bestiary while paused
+  // --- Main menu --------------------------------------------------------------
+  bool menuUp = false;    // Up / W
+  bool menuDown = false;  // Down / S
+  bool menuLeft = false;  // Left / A
+  bool menuRight = false; // Right / D
+  bool menuConfirm = false; // Enter / Space: activate the highlighted row
 };
 
 // Attack-speed formula: the final delay between shots is
@@ -185,6 +198,49 @@ public:
   // True while the bestiary overlay is open (paused).
   [[nodiscard]] bool bestiaryOpen() const { return bestiaryOpen_; }
 
+  // --- Profile (skins / outline unlocks) -------------------------------------
+  // The profile is OWNED BY THE CALLER (main() loads it from disk and keeps it
+  // alive for the process lifetime). Game only mutates it in place — it never
+  // touches the filesystem — so tests can hand in a plain local object and
+  // assert on the results.
+  // Attaching a profile repaints the player immediately: the constructor's
+  // reset() already ran with no profile, so a saved skin would otherwise not
+  // show up until the player changed it in the menu.
+  void setProfile(Profile* profile) {
+    profile_ = profile;
+    syncedUnlocks_ = 0;
+    applyProfileToPlayer();
+  }
+  [[nodiscard]] Profile* profile() const { return profile_; }
+  // Test helper: the player's rendered body colour, so tests can assert that
+  // the profile's skin actually reaches the Sprite.
+  [[nodiscard]] core::render::Color testPlayerColor() const;
+  // Test helper: the resolved outline colour (alpha 0 when no outline is worn).
+  [[nodiscard]] core::render::Color testOutlineColor() const { return outlineColor_; }
+  // Pushes newly earned tier unlocks (from kills) into the profile. Called
+  // automatically on every kill; safe to call again.
+  void syncProfileUnlocks();
+  // True when the profile changed since the last consumeProfileDirty(), so
+  // main() knows it should write it back to disk. Returns and clears the flag.
+  bool consumeProfileDirty();
+
+  // --- Main menu --------------------------------------------------------------
+  // The menu is a Game-level overlay so it can reuse the same renderer. Tests
+  // never open it, so `advance()` behaves exactly as before by default.
+  void openMenu() { menuOpen_ = true; }
+  void closeMenu() { menuOpen_ = false; }
+  [[nodiscard]] bool menuOpen() const { return menuOpen_; }
+  // Highlighted row, exposed for tests and for the renderer.
+  [[nodiscard]] int menuSelection() const { return menuSelection_; }
+  // Set when the player picks QUIT in the menu; main() watches this to break
+  // its loop. Cleared by consumeQuitRequest().
+  [[nodiscard]] bool quitRequested() const { return quitRequested_; }
+  bool consumeQuitRequest() {
+    const bool q = quitRequested_;
+    quitRequested_ = false;
+    return q;
+  }
+
   // Test/debug hooks.
   void grantXp(float amount);
   // Test helper: add weapon by index (bypasses normal level-up flow)
@@ -198,7 +254,9 @@ public:
   void testSpawnEnemyAt(float x, float y);
   // Test helper: place an elite/champion/overlord enemy (tier 1..3) so tests
   // can inspect the guaranteed stat boosts, resistances and trait flags.
-  void testSpawnTieredEnemyAt(float x, float y, int tier, std::uint32_t traits = 0);
+  // `def` selects the content enemy type (default: the first one).
+  void testSpawnTieredEnemyAt(float x, float y, int tier, std::uint32_t traits = 0,
+                              int def = 0);
   // Test helper: tier of every live Enemy (0 normal, 1 elite, 2 champion, 3
   // overlord). Order unspecified.
   [[nodiscard]] std::vector<int> testEnemyTiers() const;
@@ -479,6 +537,14 @@ private:
   void damagePlayerDirect(float amount); // no thorns trigger (DoT auras)
   void spawnParticles(float x, float y, core::render::Color c, int count, float speed);
   void renderPlayerStats(core::render::Batcher& b, float px, float py);
+  // Main menu overlay: title, the four rows (START / SKIN / OUTLINE / QUIT)
+  // and the live skin+outline preview.
+  void renderMainMenu(core::render::Batcher& b, float px, float py);
+  // Handles one frame of menu input (navigation + activation). Runs before any
+  // gameplay input so the menu is fully modal.
+  void updateMainMenu(const FrameInput& input);
+  // Skin + outline applied to the player Sprite, and the ring drawn around it.
+  void applyProfileToPlayer();
   // Bestiary overlay (paused, B): discovered enemy types, their stats,
   // appearance, kill counts and which elite+ variants have been slain.
   void renderBestiary(core::render::Batcher& b, float px, float py);
@@ -540,6 +606,23 @@ private:
   int strongestKilledDef_ = -1;
   // Bit per tier (1<<tier) of tiers killed at least once this run.
   std::uint8_t tierKillMask_ = 0;
+
+  // --- Profile / main menu state ---------------------------------------------
+  // Not owned: main() owns the Profile and keeps it alive. Null in tests that
+  // do not care, in which case skins stay at the default and nothing is
+  // unlocked.
+  Profile* profile_ = nullptr;
+  bool profileDirty_ = false;
+  // Unlock bits already pushed into the profile, so syncProfileUnlocks() only
+  // reports genuinely new unlocks.
+  UnlockMask syncedUnlocks_ = 0;
+  bool menuOpen_ = false;
+  int menuSelection_ = 0; // 0 START, 1 SKIN, 2 OUTLINE, 3 QUIT
+  bool quitRequested_ = false;
+  // The selected outline is drawn as a ring around the player; this caches the
+  // resolved color so render() does not touch the profile pointer.
+  core::render::Color outlineColor_{0.0F, 0.0F, 0.0F, 0.0F};
+
   float moveX_ = 0.0F; // latched input for fixed steps
   float moveY_ = 0.0F;
 

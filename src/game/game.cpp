@@ -323,6 +323,12 @@ void Game::reset() {
   choosingStarter_ = false;
   bestiaryOpen_ = false;
 
+  // Profile unlocks are EARNED ACROSS RUNS, so a reset does not clear them —
+  // but the run-local "already pushed" set does, so a new run re-reports any
+  // tier earned in the previous one (harmless: unlockTier is idempotent).
+  syncedUnlocks_ = 0;
+  syncProfileUnlocks();
+
   // Weapon test mode is a session-level sandbox; a fresh run starts clean.
   testMode_ = false;
   testBoosted_ = false;
@@ -344,12 +350,128 @@ void Game::reset() {
   // No starter weapon is granted; advance() opens the three-weapon pick.
   weaponCount_ = 0;
 
+  // Paint the freshly created player with the profile's skin/outline.
+  applyProfileToPlayer();
+
   camX_ = 0.0F;
   camY_ = 0.0F;
   timestep_.reset();
 }
 
+void Game::syncProfileUnlocks() {
+  if (profile_ == nullptr) return;
+  // tierKillMask_ bit t is set once a tier-t enemy has died. Map that to the
+  // profile's tier-1-based unlock bits and push only the new ones.
+  for (int tier = 1; tier <= 3; ++tier) {
+    const UnlockMask bit = static_cast<UnlockMask>(1u << (tier - 1));
+    if ((tierKillMask_ & (1u << tier)) == 0u) continue;
+    if ((syncedUnlocks_ & bit) != 0u) continue;
+    if (profile_->unlockTier(tier)) profileDirty_ = true;
+    syncedUnlocks_ = static_cast<UnlockMask>(syncedUnlocks_ | bit);
+  }
+}
+
+bool Game::consumeProfileDirty() {
+  const bool dirty = profileDirty_;
+  profileDirty_ = false;
+  return dirty;
+}
+
+core::render::Color Game::testPlayerColor() const {
+  if (player_ == entt::null || !registry_.valid(player_)) return core::render::Color{};
+  return registry_.get<Sprite>(player_).color;
+}
+
+void Game::applyProfileToPlayer() {
+  if (player_ == entt::null || !registry_.valid(player_)) return;
+  auto& sprite = registry_.get<Sprite>(player_);
+  if (profile_ != nullptr) {
+    const auto& skins = skinPalette();
+    const int skin = std::clamp(profile_->skin, 0, static_cast<int>(skins.size()) - 1);
+    sprite.color = skins[static_cast<std::size_t>(skin)].color;
+    // Resolve the outline color once here so the render path never has to
+    // reach back into the profile.
+    if (profile_->canUseOutline(profile_->outline) &&
+        profile_->outline < static_cast<int>(outlinePalette().size())) {
+      outlineColor_ = outlinePalette()[static_cast<std::size_t>(profile_->outline)].color;
+    } else {
+      outlineColor_ = core::render::Color{0.0F, 0.0F, 0.0F, 0.0F};
+    }
+  } else {
+    sprite.color = core::render::Color{0.55F, 0.85F, 1.0F, 1.0F};
+    outlineColor_ = core::render::Color{0.0F, 0.0F, 0.0F, 0.0F};
+  }
+}
+
+void Game::updateMainMenu(const FrameInput& input) {
+  constexpr int kRows = 4; // START, SKIN, OUTLINE, QUIT
+  if (input.menuUp) {
+    menuSelection_ = (menuSelection_ + kRows - 1) % kRows;
+  } else if (input.menuDown) {
+    menuSelection_ = (menuSelection_ + 1) % kRows;
+  }
+  if (profile_ == nullptr) {
+    // Without a profile the cosmetic rows are inert, but START and QUIT must
+    // still work (tests and headless callers may not attach one).
+    if (input.menuConfirm && menuSelection_ == 0) menuOpen_ = false;
+    if (input.menuConfirm && menuSelection_ == 3) quitRequested_ = true;
+    return;
+  }
+
+  const int skins = static_cast<int>(skinPalette().size());
+  const int outlines = static_cast<int>(outlinePalette().size());
+  if (input.menuLeft || input.menuRight) {
+    const int dir = input.menuRight ? 1 : -1;
+    if (menuSelection_ == 1) { // SKIN
+      profile_->skin = ((profile_->skin + dir) % skins + skins) % skins;
+      profileDirty_ = true;
+      applyProfileToPlayer();
+    } else if (menuSelection_ == 2) { // OUTLINE
+      // Cycle but skip locked styles so the player never lands on one they
+      // cannot wear: step until an unlocked index is found (palette is tiny,
+      // and "None" is index 0 so the loop always terminates).
+      for (int step = 0; step < outlines; ++step) {
+        profile_->outline = ((profile_->outline + dir) % outlines + outlines) % outlines;
+        if (profile_->canUseOutline(profile_->outline)) break;
+      }
+      profileDirty_ = true;
+      applyProfileToPlayer();
+    }
+  }
+  if (!input.menuConfirm) return;
+  switch (menuSelection_) {
+    case 0: // START
+      menuOpen_ = false;
+      break;
+    case 1: // SKIN — advance to the next colour directly on confirm too
+      profile_->skin = (profile_->skin + 1) % skins;
+      profileDirty_ = true;
+      applyProfileToPlayer();
+      break;
+    case 2: // OUTLINE — same convenience
+      for (int step = 0; step < outlines; ++step) {
+        profile_->outline = (profile_->outline + 1) % outlines;
+        if (profile_->canUseOutline(profile_->outline)) break;
+      }
+      profileDirty_ = true;
+      applyProfileToPlayer();
+      break;
+    case 3: // QUIT
+      quitRequested_ = true;
+      break;
+    default:
+      break;
+  }
+}
+
 void Game::advance(float frameDt, const FrameInput& input) {
+  // The main menu is fully modal: it eats the whole frame and the simulation
+  // does not advance behind it.
+  if (menuOpen_) {
+    updateMainMenu(input);
+    timestep_.reset();
+    return;
+  }
   // Opening pick: the run starts weaponless and immediately offers three
   // starter weapons (unless a weapon is already equipped, e.g. in tests).
   if (state_ == RunState::Playing && starterChoicePending_ && weaponCount_ == 0) {
@@ -362,6 +484,13 @@ void Game::advance(float frameDt, const FrameInput& input) {
       state_ = RunState::Playing;
       bestiaryOpen_ = false;
     }
+  }
+  // ESC from game over returns to the main menu (the menu is where a fresh
+  // player starts, and R still restarts in place).
+  if (state_ == RunState::GameOver && input.togglePause) {
+    reset();
+    menuOpen_ = true;
+    return;
   }
   // While paused, B opens/closes the bestiary.
   if (state_ == RunState::Paused && input.bestiary) {
@@ -623,9 +752,11 @@ void Game::updateEnemies() {
     // archer simply walked into melee range, which wasted the whole point of
     // the Archer trait (and made ranged enemies strictly worse melee).
     if (traits != nullptr && traits->shootCooldown > 0.0F) {
-      constexpr float kPreferred = 5.0F;  // comfortable shooting range
-      constexpr float kTooClose = 3.2F;   // start backing off below this
-      constexpr float kTooFar = 7.0F;    // close in above this
+      // The stand-off band is defined by its two edges: back off below the
+      // inner one, hold position and strafe between them, and only close the
+      // gap above the outer one.
+      constexpr float kTooClose = 3.2F; // start backing off below this
+      constexpr float kTooFar = 7.0F;   // close in above this
       if (dist > 0.001F) {
         float seekX = dx;
         float seekY = dy;
@@ -1371,9 +1502,11 @@ void Game::killEnemy(entt::entity e) {
       en != nullptr && en->def >= 0 &&
       static_cast<std::size_t>(en->def) < bestiaryKills_.size()) {
     const std::size_t di = static_cast<std::size_t>(en->def);
-    ++bestiaryKills_[di];
+    bestiaryKills_[di]++;
     bestiaryTiers_[di] = static_cast<std::uint8_t>(bestiaryTiers_[di] | (1u << slainTier));
   }
+  // A tier-t kill earns that tier's player outline for good (all runs).
+  syncProfileUnlocks();
 
   // Lifesteal fires on the kill itself, using the slain enemy's lifesteal
   // resistance. This is the single point where healing can trigger, which is
@@ -3604,14 +3737,16 @@ void Game::testSpawnEnemyAt(float x, float y) {
   registry_.emplace<Xp>(e, 1.0F);
 }
 
-void Game::testSpawnTieredEnemyAt(float x, float y, int tier, std::uint32_t traits) {
+void Game::testSpawnTieredEnemyAt(float x, float y, int tier, std::uint32_t traits,
+                                  int def) {
   const int t = std::clamp(tier, 0, 3);
+  const int d = std::clamp(def, 0, static_cast<int>(content_.enemies.size()) - 1);
   const TierBuffs buffs = tierBuffs(t);
   PendingSpawn p{};
   p.x = x;
   p.y = y;
   p.t = 0.0F;
-  p.def = 0; // first content enemy
+  p.def = d;
   p.hpMul = rollTierHpMul(buffs, rng_);
   p.touchMul = buffs.touch;
   p.speedMul = buffs.speed;
@@ -3863,7 +3998,7 @@ void Game::renderPlayerStats(core::render::Batcher& b, float px, float py) {
   const core::render::Color teal{0.4F, 0.9F, 0.9F, 1.0F};
 
   std::vector<std::string> rows;
-  rows.push_back("LEVEL " + std::to_string(level_) + "      XP " +
+  rows.push_back(std::string(kGameName) + "   LV " + std::to_string(level_) + "      XP " +
                  std::to_string(static_cast<int>(xp_)) + "/" +
                  std::to_string(static_cast<int>(xpNext_)));
   rows.push_back("TIME " + std::to_string(static_cast<int>(simTime_)) + "S     KILLS " +
@@ -3902,6 +4037,19 @@ void Game::renderPlayerStats(core::render::Batcher& b, float px, float py) {
   }
   if (stats_.rerollCharges > 1) {
     rows.push_back("+1 REROLL PER LEVEL-UP");
+  }
+  // What the player is currently wearing, so the persistent cosmetics are
+  // discoverable from inside a run (and not only on the main menu).
+  if (profile_ != nullptr) {
+    const auto& skins = skinPalette();
+    const auto& outlines = outlinePalette();
+    const int skin = std::clamp(profile_->skin, 0, static_cast<int>(skins.size()) - 1);
+    const bool outlined = profile_->canUseOutline(profile_->outline) &&
+                          profile_->outline < static_cast<int>(outlines.size());
+    rows.push_back(std::string("SKIN ") + skins[static_cast<std::size_t>(skin)].name +
+                   "   OUTLINE " +
+                   (outlined ? outlines[static_cast<std::size_t>(profile_->outline)].name
+                             : "NONE"));
   }
 
   rows.push_back(""); // spacer
@@ -3978,10 +4126,101 @@ void Game::renderBestiary(core::render::Batcher& b, float px, float py) {
     line += tierName;
     if (strongestKilledDef_ >= 0 &&
         static_cast<std::size_t>(strongestKilledDef_) < content_.enemies.size()) {
-      line += " — " + content_.enemies[static_cast<std::size_t>(strongestKilledDef_)].name;
+      line += " - " + content_.enemies[static_cast<std::size_t>(strongestKilledDef_)].name;
     }
-    b.text(px * 0.5F - b.textWidth(2.0F, line) * 0.5F, 78.0F, 2.0F, tierCol, line);
+    b.text(px * 0.5F - b.textWidth(2.0F, line) * 0.5F, 74.0F, 2.0F, tierCol, line);
   }
+
+  // --- TRIBUNALS --------------------------------------------------------------
+  // The three elite+ tiers are the game's "tribunals": each one escalates how
+  // many random abilities a spawn rolls, on top of its fixed stat buffs. This
+  // panel is the reference the player reads before choosing between an
+  // armour-pierce build (armour) and a lifesteal build (life-steal resist).
+  const Color eliteGold{1.0F, 0.85F, 0.20F, 1.0F};
+  const Color champOrange{1.0F, 0.45F, 0.10F, 1.0F};
+  const Color overlordViolet{0.85F, 0.35F, 1.0F, 1.0F};
+  const Color statBlue{0.60F, 0.78F, 0.92F, 1.0F};
+  const Color resOrange{1.0F, 0.72F, 0.45F, 1.0F};
+
+  // Display names for the shared trait pool, in PickTrait order.
+  static const char* const kTraitNames[] = {
+      "FAST x1.7",  "ARMORED x2.5 HP", "REGEN",     "EXPLOSIVE", "VENOM",
+      "VAMPIRIC",  "SHIELDED",        "HEAVY x2 DMG", "SHOOT",   "DAMAGE AURA",
+      "RESIST +40 DEF",
+  };
+
+  struct Tribunal {
+    int tier;
+    const char* name;
+    const char* roman;
+    int unlockSec;
+    Color color;
+  };
+  const Tribunal tribunals[] = {
+      {1, "ELITE",    "I",   45,  eliteGold},
+      {2, "CHAMPION", "II",  180, champOrange},
+      {3, "OVERLORD", "III", 420, overlordViolet},
+  };
+
+  b.text(24.0F, 100.0F, 1.8F, gold, "TRIBUNALS");
+  const float tribW = (px - 48.0F) / 3.0F;
+  const float tribY = 122.0F;
+  const float tribH = 112.0F;
+  for (std::size_t ti = 0; ti < 3; ++ti) {
+    const auto& tb = tribunals[ti];
+    const float x = 24.0F + static_cast<float>(ti) * tribW;
+    const bool slain = (tierKillMask_ & (1u << tb.tier)) != 0u;
+    // Panel backdrop; a slain tribunal gets a brighter border strip so the
+    // player can see at a glance which ones they have actually faced.
+    b.rectTopLeft(x, tribY, tribW - 10.0F, tribH,
+                  Color{tb.color.r, tb.color.g, tb.color.b, slain ? 0.13F : 0.06F});
+    b.rectTopLeft(x, tribY, 4.0F, tribH, tb.color);
+
+    b.text(x + 14.0F, tribY + 8.0F, 1.9F, tb.color,
+           std::string(tb.roman) + ". " + tb.name);
+    const int traitCount = traitsForTier(tb.tier, simTime_);
+    const TierBuffs buffs = tierBuffs(tb.tier);
+    std::snprintf(buf, sizeof(buf), "FROM %ds   %d TRAIT%s   XP x%.0f",
+                  tb.unlockSec, traitCount, traitCount == 1 ? "" : "S",
+                  static_cast<double>(buffs.xp));
+    b.text(x + 14.0F, tribY + 26.0F, 1.25F, dim, buf);
+
+    std::snprintf(buf, sizeof(buf), "HP x%.0f-%.0f  DMG x%.1f  SPD x%.2f  DEF %d",
+                  static_cast<double>(buffs.hpMin), static_cast<double>(buffs.hpMax),
+                  static_cast<double>(buffs.touch), static_cast<double>(buffs.speed),
+                  static_cast<int>(enemyDefense(simTime_, tb.tier)));
+    b.text(x + 14.0F, tribY + 40.0F, 1.25F, statBlue, buf);
+
+    // Resistances at the current run time (they grow with it, so this is the
+    // live number, not a constant).
+    std::snprintf(buf, sizeof(buf), "LIFE RES %d%%  KB RES %d%%  (PIERCE %d)",
+                  static_cast<int>(enemyLifestealResistance(simTime_, tb.tier, false) * 100.0F),
+                  static_cast<int>(enemyKnockbackResistance(simTime_, tb.tier, false) * 100.0F),
+                  static_cast<int>(stats_.armorPierce));
+    b.text(x + 14.0F, tribY + 54.0F, 1.25F, resOrange, buf);
+
+    // The full ability pool, word-wrapped, with a "(rolls N)" note so the
+    // player knows how many they will actually get.
+    std::string pool;
+    for (const char* n : kTraitNames) {
+      if (!pool.empty()) pool += "  ";
+      pool += n;
+    }
+    const std::vector<std::string> lines = wrapWords(pool, 40);
+    float ly = tribY + 68.0F;
+    for (std::size_t li = 0; li < lines.size() && li < 3; ++li) {
+      b.text(x + 14.0F, ly, 1.15F, violet, lines[li]);
+      ly += 12.0F;
+    }
+
+    // Slain badge, bottom-right of the panel.
+    b.text(x + tribW - 78.0F, tribY + tribH - 16.0F, 1.3F,
+           slain ? tb.color : Color{0.4F, 0.4F, 0.45F, 1.0F},
+           slain ? "SLAIN" : "UNFACED");
+  }
+
+  // --- Discovered enemy types --------------------------------------------------
+  b.text(24.0F, tribY + tribH + 12.0F, 1.8F, gold, "ENEMIES");
 
   std::vector<int> found;
   for (std::size_t i = 0; i < bestiaryKills_.size(); ++i) {
@@ -3989,28 +4228,29 @@ void Game::renderBestiary(core::render::Batcher& b, float px, float py) {
   }
   if (found.empty()) {
     const std::string none = "NO ENEMIES SLAIN YET";
-    b.text(px * 0.5F - b.textWidth(2.5F, none) * 0.5F, py * 0.45F, 2.5F, dim, none);
+    b.text(px * 0.5F - b.textWidth(2.5F, none) * 0.5F, tribY + tribH + 50.0F, 2.5F, dim, none);
     return;
   }
 
-  const bool twoCols = found.size() > 9;
-  const int perCol = 9;
-  const float colW = twoCols ? (px - 100.0F) * 0.5F : px - 80.0F;
-  const float startX = 50.0F;
-  const float startY = 112.0F;
-  // Taller rows: each entry now carries base stats, live-scaled stats,
-  // defense + resistances, and the tier ability line.
-  const float rowH = 66.0F;
-  const Color eliteGold{1.0F, 0.85F, 0.20F, 1.0F};
-  const Color champOrange{1.0F, 0.45F, 0.10F, 1.0F};
-  const Color overlordViolet{0.85F, 0.35F, 1.0F, 1.0F};
-  const Color statBlue{0.60F, 0.78F, 0.92F, 1.0F};
-  const Color resOrange{1.0F, 0.72F, 0.45F, 1.0F};
+  const float startX = 24.0F;
+  const float startY = tribY + tribH + 32.0F;
+  // Four lines per entry: name/kills, base stats, live-scaled stats with
+  // defense, and the resistance line the player needs for build planning.
+  const float rowH = 62.0F;
+  // How many rows actually fit between the list header and the bottom of the
+  // window. Deriving it from the viewport (instead of hardcoding 6) keeps every
+  // discovered type reachable on short windows, and lets tall ones show more.
+  const float listBottom = py - 46.0F; // room for the "+N more" overflow note
+  const int perCol = std::clamp(static_cast<int>((listBottom - startY) / rowH), 2, 10);
+  const bool twoCols = found.size() > static_cast<std::size_t>(perCol);
+  const int colCount = twoCols ? 2 : 1;
+  const float colW = twoCols ? (px - 60.0F) * 0.5F : px - 60.0F;
+  const std::size_t shown =
+      std::min<std::size_t>(found.size(), static_cast<std::size_t>(perCol * colCount));
 
-  for (std::size_t fi = 0; fi < found.size(); ++fi) {
+  for (std::size_t fi = 0; fi < shown; ++fi) {
     const int col = static_cast<int>(fi) / perCol;
     const int row = static_cast<int>(fi) % perCol;
-    if (col >= (twoCols ? 2 : 1)) break;
     const int idx = found[fi];
     const auto& def = content_.enemies[static_cast<std::size_t>(idx)];
     const float x = startX + static_cast<float>(col) * colW;
@@ -4020,54 +4260,190 @@ void Game::renderBestiary(core::render::Batcher& b, float px, float py) {
     Color swatch = def.color;
     swatch.a = 1.0F;
     if (def.circle) {
-      b.circle(x + 20.0F, y + 18.0F, 13.0F, swatch);
+      b.circle(x + 16.0F, y + 16.0F, 12.0F, swatch);
     } else {
-      b.rectTopLeft(x + 7.0F, y + 5.0F, 26.0F, 26.0F, swatch);
+      b.rectTopLeft(x + 4.0F, y + 4.0F, 24.0F, 24.0F, swatch);
     }
 
-    b.text(x + 46.0F, y, 2.0F, white, def.name);
-    // Base stats.
+    b.text(x + 40.0F, y, 1.9F, white, def.name);
+    // Base stats, including armor-relevant defense at tier 0 and the radius.
     std::snprintf(buf, sizeof(buf), "HP %d  SPD %.1f  DMG %d  XP %d  R %.2f",
                   static_cast<int>(def.hp), static_cast<double>(def.speed),
                   static_cast<int>(def.touch), static_cast<int>(def.xp),
                   static_cast<double>(def.radius));
-    b.text(x + 46.0F, y + 19.0F, 1.35F, dim, buf);
-    // Live-scaled stats (what it actually is right now).
-    std::snprintf(buf, sizeof(buf), "NOW HP %d  DMG %d  DEF %d",
+    b.text(x + 40.0F, y + 18.0F, 1.3F, dim, buf);
+    // Live-scaled stats (what this type actually is right now).
+    std::snprintf(buf, sizeof(buf), "NOW  HP %d  DMG %d  ARMOR %d",
                   static_cast<int>(def.hp * hpS), static_cast<int>(def.touch * tchS),
                   static_cast<int>(enemyDefense(simTime_, 0)));
-    b.text(x + 46.0F, y + 32.0F, 1.35F, statBlue, buf);
+    b.text(x + 40.0F, y + 31.0F, 1.3F, statBlue, buf);
 
-    // Armor + resistances: the tier/flag dependent numbers the player needs to
-    // know before picking an armor-pierce or lifesteal build.
-    const float baseLsRes =
-        enemyLifestealResistance(simTime_, 0, false) * 100.0F;
-    const float baseKbRes =
-        enemyKnockbackResistance(simTime_, 0, false) * 100.0F;
+    // Resistances + how much of the armor the player's pierce currently
+    // removes (the actionable number for a lifesteal vs. pierce build).
     std::snprintf(buf, sizeof(buf),
-                  "LIFESTEAL RES %d%%   KNOCKBACK RES %d%%   +%d%% PIERCE IGNORES",
-                  static_cast<int>(baseLsRes), static_cast<int>(baseKbRes),
+                  "LIFE RES %d%%   KB RES %d%%   PIERCE IGNORES %d",
+                  static_cast<int>(enemyLifestealResistance(simTime_, 0, false) * 100.0F),
+                  static_cast<int>(enemyKnockbackResistance(simTime_, 0, false) * 100.0F),
                   static_cast<int>(stats_.armorPierce));
-    b.text(x + 46.0F, y + 45.0F, 1.3F, resOrange, buf);
-
-    // Tier abilities: what the elite/champion/overlord variants of this type
-    // can roll, and which tiers the player has actually slain (badges).
-    const std::uint8_t tiers = bestiaryTiers_[static_cast<std::size_t>(idx)];
-    std::string abil = "ABILITIES: FAST ARMOR REGEN EXPLO VENOM VAMP SHIELD HEAVY SHOOT AURA RESIST";
-    // Truncate to what fits the column; the badges convey the rest.
-    if (abil.size() > 52) abil.resize(52);
-    b.text(x + 46.0F, y + 57.0F, 1.05F, violet, abil);
+    b.text(x + 40.0F, y + 44.0F, 1.3F, resOrange, buf);
 
     std::snprintf(buf, sizeof(buf), "KILLS %d", bestiaryKills_[static_cast<std::size_t>(idx)]);
-    b.text(x + colW - 96.0F, y, 1.5F, gold, buf);
+    b.text(x + colW - 92.0F, y, 1.4F, gold, buf);
 
     // Tier badges: only the elite+ variants actually slain are lit.
-    float bx = x + colW - 88.0F;
-    const float by = y + 19.0F;
-    if ((tiers & (1u << 1)) != 0u) { b.text(bx, by, 1.7F, eliteGold, "E"); bx += 20.0F; }
-    if ((tiers & (1u << 2)) != 0u) { b.text(bx, by, 1.7F, champOrange, "C"); bx += 20.0F; }
-    if ((tiers & (1u << 3)) != 0u) { b.text(bx, by, 1.7F, overlordViolet, "O"); }
+    const std::uint8_t tiers = bestiaryTiers_[static_cast<std::size_t>(idx)];
+    float bx = x + colW - 84.0F;
+    const float by = y + 18.0F;
+    if ((tiers & (1u << 1)) != 0u) { b.text(bx, by, 1.6F, eliteGold, "E"); bx += 18.0F; }
+    if ((tiers & (1u << 2)) != 0u) { b.text(bx, by, 1.6F, champOrange, "C"); bx += 18.0F; }
+    if ((tiers & (1u << 3)) != 0u) { b.text(bx, by, 1.6F, overlordViolet, "O"); }
   }
+
+  // Never let a discovered type vanish without saying so: if the list had to
+  // stop early (a very short window with many types), show how many are hidden
+  // rather than silently dropping them.
+  if (shown < found.size()) {
+    const std::string more = "+" + std::to_string(found.size() - shown) +
+                             " MORE DISCOVERED (RESIZE THE WINDOW TO SEE THEM)";
+    b.text(startX, startY + static_cast<float>(perCol) * rowH + 6.0F, 1.5F, dim, more);
+  }
+}
+
+void Game::renderMainMenu(core::render::Batcher& b, float px, float py) {
+  using core::render::Color;
+  // Opaque backdrop: the menu is the app's first screen, not a pause blit.
+  b.rectTopLeft(0.0F, 0.0F, px, py, Color{0.06F, 0.04F, 0.10F, 1.0F});
+
+  const Color white{1.0F, 1.0F, 1.0F, 1.0F};
+  const Color gold{1.0F, 0.85F, 0.35F, 1.0F};
+  const Color dim{0.62F, 0.62F, 0.72F, 1.0F};
+  const Color violet{0.75F, 0.5F, 1.0F, 1.0F};
+
+  // --- Title block ------------------------------------------------------------
+  const float titleScale = 7.0F;
+  b.text(px * 0.5F - b.textWidth(titleScale, kGameName) * 0.5F, py * 0.13F, titleScale,
+         gold, kGameName);
+  b.text(px * 0.5F - b.textWidth(1.8F, kGameSubtitle) * 0.5F, py * 0.13F + 62.0F, 1.8F,
+         violet, kGameSubtitle);
+
+  // A thin rule under the title, drawn as a row of dots (screen space: px).
+  {
+    const float ruleW = std::min(px * 0.55F, 520.0F);
+    const int n = 60;
+    for (int k = 0; k <= n; ++k) {
+      const float t = static_cast<float>(k) / static_cast<float>(n);
+      b.circle(px * 0.5F - ruleW * 0.5F + ruleW * t, py * 0.13F + 88.0F, 1.5F,
+               Color{gold.r, gold.g, gold.b, 0.35F});
+    }
+  }
+
+  // --- Player preview (skin + outline) ---------------------------------------
+  // Draws the actual player colours so the menu is an honest preview of the
+  // run you are about to start.
+  {
+    const float cx = px * 0.5F;
+    const float cy = py * 0.40F;
+    Color body{0.55F, 0.85F, 1.0F, 1.0F};
+    Color ring{0.0F, 0.0F, 0.0F, 0.0F};
+    if (profile_ != nullptr) {
+      const auto& skins = skinPalette();
+      const int skin = std::clamp(profile_->skin, 0, static_cast<int>(skins.size()) - 1);
+      body = skins[static_cast<std::size_t>(skin)].color;
+      if (profile_->outline < static_cast<int>(outlinePalette().size()) &&
+          profile_->canUseOutline(profile_->outline)) {
+        ring = outlinePalette()[static_cast<std::size_t>(profile_->outline)].color;
+      }
+    }
+    // NOTE: this whole overlay is drawn in SCREEN space, so every radius here
+    // is in PIXELS, not world units. The preview is scaled up from the
+    // in-world player radius (0.35 world units at the gameplay zoom) purely so
+    // it reads as a character portrait.
+    constexpr float kPreviewR = 34.0F;
+    b.circle(cx, cy, kPreviewR, body);
+    b.circle(cx, cy, kPreviewR * 0.55F, Color{1.0F, 1.0F, 1.0F, 0.85F});
+    if (ring.a > 0.0F) {
+      const float pulse = 1.0F + 0.06F * std::sin(simTime_ * 3.5F);
+      const float rr = kPreviewR * 1.22F * pulse;
+      constexpr int kDots = 24;
+      for (int k = 0; k < kDots; ++k) {
+        const float a = (static_cast<float>(k) / static_cast<float>(kDots)) * 2.0F * kPi;
+        b.circle(cx + std::cos(a) * rr, cy + std::sin(a) * rr, 3.0F, ring);
+      }
+    }
+  }
+
+  // --- Menu rows --------------------------------------------------------------
+  const float rowY0 = py * 0.56F;
+  const float rowH = 42.0F;
+  const float rowX = px * 0.5F - 170.0F;
+  const float rowW = 340.0F;
+
+  struct Row {
+    const char* label;
+  };
+  const Row rows[] = {
+      {"START RUN"},
+      {"SKIN"},
+      {"OUTLINE"},
+      {"QUIT"},
+  };
+
+  const auto& skins = skinPalette();
+  const auto& outlines = outlinePalette();
+  for (int i = 0; i < 4; ++i) {
+    const float y = rowY0 + static_cast<float>(i) * rowH;
+    const bool sel = (i == menuSelection_);
+    const Color labelCol = sel ? gold : dim;
+    // Selection bar: a filled rounded-ish block behind the active row.
+    if (sel) {
+      b.rectTopLeft(rowX - 18.0F, y - 8.0F, rowW + 36.0F, 34.0F,
+                    Color{gold.r, gold.g, gold.b, 0.14F});
+      // Caret marker.
+      b.circle(rowX - 28.0F, y + 4.0F, 5.0F, gold);
+    }
+    b.text(rowX, y, 2.2F, labelCol, rows[static_cast<std::size_t>(i)].label);
+
+    // Value on the right of the row, with the left/right hint.
+    std::string value;
+    if (i == 1 && profile_ != nullptr) {
+      const int skin = std::clamp(profile_->skin, 0, static_cast<int>(skins.size()) - 1);
+      value = std::string("< ") + skins[static_cast<std::size_t>(skin)].name + " >";
+    } else if (i == 2) {
+      if (profile_ == nullptr) {
+        value = "< unavailable >";
+      } else if (profile_->canUseOutline(profile_->outline) &&
+                 profile_->outline < static_cast<int>(outlines.size())) {
+        value = std::string("< ") + outlines[static_cast<std::size_t>(profile_->outline)].name +
+                " >";
+      } else {
+        value = "< locked >";
+      }
+    }
+    if (!value.empty()) {
+      b.text(rowX + rowW - b.textWidth(1.6F, value), y + 2.0F, 1.6F,
+             sel ? white : dim, value);
+    }
+  }
+
+  // Locked-outline hint line: tells the player exactly what is still to earn.
+  if (profile_ != nullptr) {
+    std::string hint;
+    for (std::size_t i = 1; i < outlines.size(); ++i) {
+      if (!profile_->canUseOutline(static_cast<int>(i))) {
+        hint = std::string("LOCKED: ") + outlines[i].requirement;
+        break;
+      }
+    }
+    if (!hint.empty()) {
+      b.text(px * 0.5F - b.textWidth(1.5F, hint) * 0.5F, rowY0 + 4.0F * rowH + 18.0F, 1.5F,
+             Color{0.85F, 0.55F, 0.35F, 1.0F}, hint);
+    }
+  }
+
+  // Footer: controls + version-ish tagline.
+  const std::string footer = "[W/S or UP/DOWN] SELECT   [A/D or LEFT/RIGHT] CHANGE   [ENTER] CONFIRM";
+  b.text(px * 0.5F - b.textWidth(1.4F, footer) * 0.5F, py - 40.0F, 1.4F,
+         Color{0.5F, 0.5F, 0.6F, 1.0F}, footer);
 }
 
 void Game::spawnParticles(float x, float y, core::render::Color c, int count, float speed) {
@@ -4111,6 +4487,14 @@ int Game::upgradeStacks(std::size_t upgradeIndex) const {
 }
 
 void Game::render(core::render::Batcher& b, float alpha) {
+  // The main menu replaces the world entirely — no point rendering the game
+  // behind an opaque screen.
+  if (menuOpen_) {
+    b.setScreenView();
+    renderMainMenu(b, static_cast<float>(b.fbWidth()), static_cast<float>(b.fbHeight()));
+    b.flush();
+    return;
+  }
   using core::render::Color;
 
   const auto px = static_cast<float>(b.fbWidth());
@@ -4490,6 +4874,20 @@ void Game::render(core::render::Batcher& b, float alpha) {
     b.circle(x, y, r.r, c);
     if (poison_ <= 0.0F) {
       b.circle(x, y, r.r * 0.55F, Color{1.0F, 1.0F, 1.0F, 0.85F});
+    }
+    // Earned outline: a dotted ring around the player, in the style of the
+    // tier that unlocked it (gold = elite, ember = champion, violet =
+    // overlord). This is a reward the player keeps forever, so it is drawn
+    // under the poison/iframe tint but over the body, and pulses gently.
+    if (outlineColor_.a > 0.0F) {
+      const float pulse = 1.0F + 0.06F * std::sin(simTime_ * 3.5F);
+      const float rr = r.r * 1.22F * pulse;
+      constexpr int kRingDots = 20;
+      for (int k = 0; k < kRingDots; ++k) {
+        const float a = (static_cast<float>(k) / static_cast<float>(kRingDots)) * 2.0F * kPi +
+                        simTime_ * 0.6F;
+        b.circle(x + std::cos(a) * rr, y + std::sin(a) * rr, 0.075F, outlineColor_);
+      }
     }
   }
 

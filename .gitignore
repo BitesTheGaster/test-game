@@ -16,3 +16,8 @@ compile_commands.json
 # OS
 .DS_Store
 Thumbs.db
+
+# Player profile (skins + earned outline unlocks) — per-user runtime state.
+# It lives next to the content so a copied build carries its progress, which
+# means it must never be committed.
+player.profile

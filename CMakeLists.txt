@@ -39,6 +39,7 @@ target_link_libraries(game_core
 add_library(game_lib STATIC
   src/game/game.cpp
   src/game/content.cpp
+  src/game/profile.cpp
 )
 target_include_directories(game_lib PUBLIC src)
 target_compile_definitions(game_lib

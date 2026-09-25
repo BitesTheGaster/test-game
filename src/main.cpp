@@ -2,12 +2,14 @@
 #include "core/render/batcher.hpp"
 #include "game/game.hpp"
 #include "game/content.hpp"
+#include "game/profile.hpp"
 
 #include <SDL3/SDL.h>
 
 #include <exception>
 #include <filesystem>
 #include <iostream>
+#include <string>
 #include <vector>
 
 namespace {
@@ -76,6 +78,14 @@ game::FrameInput pollInput(bool& quit) {
         case SDLK_T: in.testModeToggle = true; break;
         case SDLK_H: in.heal = true; break;
         case SDLK_B: in.bestiary = true; break;
+        // Main menu navigation + confirm.
+        case SDLK_UP: in.menuUp = true; break;
+        case SDLK_DOWN: in.menuDown = true; break;
+        case SDLK_LEFT: in.menuLeft = true; break;
+        case SDLK_RIGHT: in.menuRight = true; break;
+        case SDLK_RETURN:
+        case SDLK_KP_ENTER:
+        case SDLK_SPACE: in.menuConfirm = true; break;
         default: break;
       }
     }
@@ -90,6 +100,11 @@ game::FrameInput pollInput(bool& quit) {
   if (keys[SDL_SCANCODE_S] || keys[SDL_SCANCODE_DOWN]) y -= 1.0F;
   in.moveX = x;
   in.moveY = y;
+  // W/A/S/D double as menu arrows so the game is fully mouse/keyboard-less.
+  if (y > 0.0F) in.menuUp = true;
+  if (y < 0.0F) in.menuDown = true;
+  if (x < 0.0F) in.menuLeft = true;
+  if (x > 0.0F) in.menuRight = true;
   return in;
 }
 
@@ -98,7 +113,7 @@ game::FrameInput pollInput(bool& quit) {
 int main() {
   try {
     core::platform::WindowDesc desc{};
-    desc.title = "test-game";
+    desc.title = game::kGameName;
     desc.width = 1280;
     desc.height = 720;
 
@@ -109,8 +124,18 @@ int main() {
       return 1;
     }
 
-    const game::Content content = game::loadContent(findDataDir());
+    const std::filesystem::path dataDir = findDataDir();
+    const game::Content content = game::loadContent(dataDir);
+
+    // Player profile (skins + earned outline unlocks) lives next to the data
+    // dir so a copied build keeps its progress with it. Missing file => first
+    // launch defaults.
+    const std::string profilePath = (dataDir / game::kProfileFileName).string();
+    game::Profile profile = game::loadProfile(profilePath);
+
     game::Game g{content};
+    g.setProfile(&profile);
+    g.openMenu(); // start on the main menu, not mid-run
 
     std::uint64_t previous = SDL_GetPerformanceCounter();
     bool quit = false;
@@ -124,6 +149,14 @@ int main() {
 
       const game::FrameInput input = pollInput(quit);
       g.advance(dt, input);
+      // Persist the profile whenever a kill unlocked an outline or the menu
+      // changed a selection. consumeProfileDirty() clears the flag.
+      if (g.consumeProfileDirty()) {
+        game::saveProfile(profilePath, profile);
+      }
+      if (g.consumeQuitRequest()) {
+        quit = true;
+      }
 
       int pw = 0;
       int ph = 0;
@@ -132,6 +165,9 @@ int main() {
       g.render(batcher, 1.0F);
       window.swap();
     }
+
+    // Final safety write so the last unlock is never lost on quit.
+    game::saveProfile(profilePath, profile);
 
     batcher.shutdown();
     return 0;

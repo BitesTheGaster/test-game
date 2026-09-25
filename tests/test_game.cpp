@@ -3,11 +3,16 @@
 
 #include "game/game.hpp"
 #include "game/content.hpp"
+#include "game/profile.hpp"
 #include "core/sim/spatial_hash.hpp"
 #include "core/sim/fixed_timestep.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <filesystem>
+#include <fstream>
+#include <string>
 #include <vector>
 
 // --- Content loading ---------------------------------------------------------
@@ -1917,4 +1922,339 @@ TEST_CASE("Orbit blades track projectile-count and damage upgrades") {
   game::FrameInput in{};
   g.advance(1.0F / 60.0F, in);
   REQUIRE(g.testFirstEnemyHp() == Catch::Approx(99970.0F)); // 100000 - 30
+}
+
+// --- Profile: skins, outline unlocks, persistence -----------------------------
+
+TEST_CASE("Attaching a saved profile repaints the player immediately") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  // A profile loaded from disk (skin 3, overlord outline earned + selected).
+  game::Profile saved;
+  saved.skin = 3;
+  REQUIRE(saved.unlockTier(3));
+  saved.outline = 3;
+
+  game::Game g{content, 30};
+  // Before a profile is attached the player is the default blue with no ring.
+  const auto defaultSkin = game::skinPalette()[0].color;
+  REQUIRE(g.testPlayerColor().r == defaultSkin.r);
+  REQUIRE(g.testPlayerColor().g == defaultSkin.g);
+  REQUIRE(g.testPlayerColor().b == defaultSkin.b);
+  REQUIRE(g.testOutlineColor().a == 0.0F);
+
+  // setProfile must apply it straight away — the constructor's reset() already
+  // ran with no profile, so without this the saved skin would be invisible
+  // until the player touched the menu.
+  g.setProfile(&saved);
+  const auto wantSkin = game::skinPalette()[3].color;
+  REQUIRE(g.testPlayerColor().r == wantSkin.r);
+  REQUIRE(g.testPlayerColor().g == wantSkin.g);
+  REQUIRE(g.testPlayerColor().b == wantSkin.b);
+  const auto wantOutline = game::outlinePalette()[3].color;
+  REQUIRE(g.testOutlineColor().r == wantOutline.r);
+  REQUIRE(g.testOutlineColor().g == wantOutline.g);
+  REQUIRE(g.testOutlineColor().b == wantOutline.b);
+  REQUIRE(g.testOutlineColor().a == wantOutline.a);
+}
+
+TEST_CASE("Profile outline unlocks are earned per tier and are idempotent") {
+  game::Profile p;
+  REQUIRE(p.skin == 0);
+  REQUIRE(p.outline == 0);
+  REQUIRE(p.unlocks == 0);
+
+  // Tier 0 (an ordinary enemy) earns nothing.
+  REQUIRE_FALSE(p.unlockTier(0));
+  REQUIRE(p.unlocks == 0);
+  // Out-of-range tiers are rejected rather than silently setting a stray bit.
+  REQUIRE_FALSE(p.unlockTier(4));
+  REQUIRE_FALSE(p.unlockTier(-1));
+  REQUIRE(p.unlocks == 0);
+
+  // "None" is always wearable; the reward styles are gated.
+  REQUIRE(p.canUseOutline(0));
+  REQUIRE_FALSE(p.canUseOutline(1));
+  REQUIRE_FALSE(p.canUseOutline(2));
+  REQUIRE_FALSE(p.canUseOutline(3));
+
+  // Each tier grants exactly its own style, once.
+  REQUIRE(p.unlockTier(1));
+  REQUIRE(p.canUseOutline(1));
+  REQUIRE_FALSE(p.canUseOutline(2));
+  // Re-granting reports "nothing new" so the caller does not rewrite the file.
+  REQUIRE_FALSE(p.unlockTier(1));
+  REQUIRE(p.unlocks == game::kUnlockElite);
+
+  REQUIRE(p.unlockTier(2));
+  REQUIRE(p.canUseOutline(2));
+  REQUIRE(p.unlocks == static_cast<game::UnlockMask>(game::kUnlockElite | game::kUnlockChampion));
+
+  REQUIRE(p.unlockTier(3)); // killing an overlord: the coolest one
+  REQUIRE(p.canUseOutline(3));
+  REQUIRE(p.unlocks == static_cast<game::UnlockMask>(
+      game::kUnlockElite | game::kUnlockChampion | game::kUnlockOverlord));
+}
+
+TEST_CASE("Profile sanitize repairs out-of-range and illegally-unlocked values") {
+  game::Profile p;
+  // A hand-edited / corrupted file: bad skin, bad outline, and an outline
+  // claimed without its unlock bit.
+  p.skin = 9999;
+  p.outline = 3;
+  p.unlocks = 0;
+  p.sanitize();
+  REQUIRE(p.skin == 0);
+  REQUIRE(p.outline == 0); // cannot keep a locked outline
+  REQUIRE(p.unlocks == 0);
+
+  p.skin = 2;
+  p.outline = -5;
+  p.unlocks = 0xFF; // bits beyond the palette are dropped
+  p.sanitize();
+  REQUIRE(p.skin == 2);
+  REQUIRE(p.outline == 0);
+  REQUIRE(p.unlocks == static_cast<game::UnlockMask>(
+      game::kUnlockElite | game::kUnlockChampion | game::kUnlockOverlord));
+}
+
+TEST_CASE("Profile survives a save/load round trip on disk") {
+  const auto path = std::filesystem::temp_directory_path() / "test-game-profile.tmp";
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
+
+  // A missing file yields defaults (first launch), not a throw.
+  {
+    const game::Profile fresh = game::loadProfile(path.string());
+    REQUIRE(fresh.skin == 0);
+    REQUIRE(fresh.outline == 0);
+    REQUIRE(fresh.unlocks == 0);
+  }
+
+  game::Profile p;
+  p.skin = 3;
+  p.unlockTier(1);
+  p.unlockTier(3);
+  p.outline = 3; // legal now that the overlord bit is set
+  game::saveProfile(path.string(), p);
+  REQUIRE(std::filesystem::exists(path));
+
+  const game::Profile loaded = game::loadProfile(path.string());
+  REQUIRE(loaded.skin == 3);
+  REQUIRE(loaded.outline == 3);
+  REQUIRE(loaded.unlocks == static_cast<game::UnlockMask>(game::kUnlockElite | game::kUnlockOverlord));
+  // The champion bit was never earned, so it must not come back from the file.
+  REQUIRE((loaded.unlocks & game::kUnlockChampion) == 0u);
+
+  std::filesystem::remove(path, ec);
+}
+
+// --- Main menu ----------------------------------------------------------------
+
+TEST_CASE("Main menu navigation wraps and START closes it") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 31};
+  g.openMenu();
+  REQUIRE(g.menuOpen());
+  REQUIRE(g.menuSelection() == 0);
+
+  game::FrameInput up{};
+  up.menuUp = true;
+  g.advance(1.0F / 60.0F, up);
+  // Up from the first row wraps around to the last (QUIT).
+  REQUIRE(g.menuSelection() == 3);
+
+  game::FrameInput down{};
+  down.menuDown = true;
+  g.advance(1.0F / 60.0F, down);
+  REQUIRE(g.menuSelection() == 0);
+
+  game::FrameInput confirm{};
+  confirm.menuConfirm = true;
+  g.advance(1.0F / 60.0F, confirm);
+  REQUIRE_FALSE(g.menuOpen());
+}
+
+TEST_CASE("Main menu is modal: the simulation does not advance behind it") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 32};
+  g.testAddWeapon(0); // so the run would otherwise be simulating
+  g.openMenu();
+
+  const float before = g.simTime();
+  for (int f = 0; f < 30; ++f) {
+    g.advance(1.0F / 60.0F, game::FrameInput{});
+  }
+  REQUIRE(g.simTime() == Catch::Approx(before));
+  // ...but once closed, the clock runs again.
+  g.closeMenu();
+  for (int f = 0; f < 30; ++f) {
+    g.advance(1.0F / 60.0F, game::FrameInput{});
+  }
+  REQUIRE(g.simTime() > before);
+}
+
+TEST_CASE("Main menu skin row cycles the whole palette and marks the profile dirty") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Profile profile;
+  game::Game g{content, 33};
+  g.setProfile(&profile);
+  g.openMenu();
+
+  // Move down to SKIN.
+  game::FrameInput down{};
+  down.menuDown = true;
+  g.advance(1.0F / 60.0F, down);
+  REQUIRE(g.menuSelection() == 1);
+
+  const int skinCount = static_cast<int>(game::skinPalette().size());
+  REQUIRE(skinCount >= 2);
+  game::FrameInput right{};
+  right.menuRight = true;
+  g.advance(1.0F / 60.0F, right);
+  REQUIRE(profile.skin == 1);
+  // The first change is what main() sees to decide to write the file.
+  REQUIRE(g.consumeProfileDirty());
+  REQUIRE_FALSE(g.consumeProfileDirty()); // ...and it clears after reporting.
+
+  // Finishing the lap wraps back to the start.
+  for (int i = 0; i < skinCount - 1; ++i) {
+    g.advance(1.0F / 60.0F, right);
+  }
+  REQUIRE(profile.skin == 0);
+  (void)g.consumeProfileDirty();
+
+  // Left from the start wraps to the last colour.
+  game::FrameInput left{};
+  left.menuLeft = true;
+  g.advance(1.0F / 60.0F, left);
+  REQUIRE(profile.skin == skinCount - 1);
+}
+
+TEST_CASE("Main menu outline row skips styles that are not unlocked yet") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Profile profile;
+  game::Game g{content, 34};
+  g.setProfile(&profile);
+  g.openMenu();
+
+  // Move down twice to OUTLINE (START -> SKIN -> OUTLINE).
+  game::FrameInput down{};
+  down.menuDown = true;
+  g.advance(1.0F / 60.0F, down);
+  g.advance(1.0F / 60.0F, down);
+  REQUIRE(g.menuSelection() == 2);
+
+  // With nothing unlocked, stepping right can only land on "None" — it must
+  // never park the selection on a style the player has not earned.
+  game::FrameInput right{};
+  right.menuRight = true;
+  for (int i = 0; i < 6; ++i) {
+    g.advance(1.0F / 60.0F, right);
+    REQUIRE(profile.canUseOutline(profile.outline));
+    REQUIRE(profile.outline == 0);
+  }
+
+  // Unlock the elite outline: now right steps onto it.
+  REQUIRE(profile.unlockTier(1));
+  g.advance(1.0F / 60.0F, right);
+  REQUIRE(profile.outline == 1);
+  // The next two styles (champion, overlord) are still locked, so stepping
+  // right wraps past them and lands back on "None" rather than parking the
+  // selection on something the player cannot wear.
+  g.advance(1.0F / 60.0F, right);
+  REQUIRE(profile.outline == 0);
+  REQUIRE(profile.canUseOutline(profile.outline));
+  g.advance(1.0F / 60.0F, right);
+  REQUIRE(profile.outline == 1);
+
+  // With everything earned, the cycle reaches all of them.
+  profile.unlockTier(2);
+  profile.unlockTier(3);
+  g.advance(1.0F / 60.0F, right);
+  REQUIRE(profile.outline == 2);
+  g.advance(1.0F / 60.0F, right);
+  REQUIRE(profile.outline == 3);
+  g.advance(1.0F / 60.0F, right);
+  REQUIRE(profile.outline == 0);
+}
+
+TEST_CASE("Main menu QUIT row raises a one-shot quit request") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Profile profile;
+  game::Game g{content, 35};
+  g.setProfile(&profile);
+  g.openMenu();
+
+  // Navigate to QUIT (index 3).
+  game::FrameInput down{};
+  down.menuDown = true;
+  for (int i = 0; i < 3; ++i) g.advance(1.0F / 60.0F, down);
+  REQUIRE(g.menuSelection() == 3);
+
+  game::FrameInput confirm{};
+  confirm.menuConfirm = true;
+  g.advance(1.0F / 60.0F, confirm);
+  REQUIRE(g.quitRequested());
+  REQUIRE(g.consumeQuitRequest());
+  // consumeQuitRequest clears it, so main() cannot quit twice for one press.
+  REQUIRE_FALSE(g.consumeQuitRequest());
+  REQUIRE_FALSE(g.quitRequested());
+  // Picking QUIT leaves the menu open (the process is about to end anyway).
+  REQUIRE(g.menuOpen());
+}
+
+// --- Profile unlocks driven by real kills -------------------------------------
+
+TEST_CASE("Killing a tiered enemy earns the matching outline in the profile") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Profile profile;
+  game::Game g{content, 36};
+  g.setProfile(&profile);
+  g.testDisableWaves();
+
+  // An ordinary kill earns no outline.
+  g.testSpawnTieredEnemyAt(1.0F, 0.0F, 0);
+  g.testKillFirstEnemy();
+  REQUIRE(profile.unlocks == 0);
+  REQUIRE_FALSE(g.consumeProfileDirty());
+
+  // An elite earns the gold outline, exactly once, and flags the save.
+  g.testSpawnTieredEnemyAt(2.0F, 0.0F, 1);
+  g.testKillFirstEnemy();
+  REQUIRE((profile.unlocks & game::kUnlockElite) != 0u);
+  REQUIRE(g.consumeProfileDirty());
+
+  // A second elite kill changes nothing, so nothing is written again.
+  g.testSpawnTieredEnemyAt(3.0F, 0.0F, 1);
+  g.testKillFirstEnemy();
+  REQUIRE_FALSE(g.consumeProfileDirty());
+
+  // Champion, then overlord (the "very cool" one).
+  g.testSpawnTieredEnemyAt(4.0F, 0.0F, 2);
+  g.testKillFirstEnemy();
+  REQUIRE((profile.unlocks & game::kUnlockChampion) != 0u);
+  g.testSpawnTieredEnemyAt(5.0F, 0.0F, 3);
+  g.testKillFirstEnemy();
+  REQUIRE((profile.unlocks & game::kUnlockOverlord) != 0u);
+  REQUIRE(profile.canUseOutline(3));
+}
+
+TEST_CASE("Outline unlocks persist across runs (they are not run-local)") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Profile profile; // survives the Game, as it does in main()
+  {
+    game::Game g{content, 37};
+    g.setProfile(&profile);
+    g.testDisableWaves();
+    g.testSpawnTieredEnemyAt(1.0F, 0.0F, 1);
+    g.testKillFirstEnemy();
+  }
+  REQUIRE((profile.unlocks & game::kUnlockElite) != 0u);
+
+  // A brand-new run must not wipe the earned unlock.
+  game::Game g2{content, 38};
+  g2.setProfile(&profile);
+  g2.testDisableWaves();
+  REQUIRE((profile.unlocks & game::kUnlockElite) != 0u);
+  REQUIRE(profile.canUseOutline(1));
 }
