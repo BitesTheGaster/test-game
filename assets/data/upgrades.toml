@@ -54,7 +54,7 @@ name = "Swift Boots"
 desc = "+12% move speed"
 effect = "speed_mul"
 value = 0.12
-max_stacks = 4
+max_stacks = 2
 
 [[upgrade]]
 id = "vigor"
@@ -62,7 +62,7 @@ name = "Vigor"
 desc = "+20 max HP and heal 20"
 effect = "max_hp_add"
 value = 20
-max_stacks = 6
+max_stacks = 4
 
 [[upgrade]]
 id = "magnet"
@@ -70,7 +70,7 @@ name = "Soul Magnet"
 desc = "+60% pickup range"
 effect = "pickup_mul"
 value = 0.60
-max_stacks = 4
+max_stacks = 2
 
 [[upgrade]]
 id = "scholar"
@@ -78,7 +78,7 @@ name = "Scholar"
 desc = "+12% experience gained"
 effect = "xp_mul"
 value = 0.12
-max_stacks = 5
+max_stacks = 3
 
 [[upgrade]]
 id = "lorekeeper"
@@ -86,7 +86,7 @@ name = "Lorekeeper"
 desc = "+30% experience gained"
 effect = "xp_mul"
 value = 0.30
-max_stacks = 3
+max_stacks = 2
 
 [[upgrade]]
 id = "pierce"
@@ -95,6 +95,30 @@ desc = "+1 pierce"
 effect = "pierce_add"
 value = 1
 max_stacks = 3
+
+[[upgrade]]
+id = "surge_chain"
+name = "Blood Surge"
+desc = "Kill chain: +1% damage per stack"
+effect = "momentum_damage"
+value = 1.0
+max_stacks = 2
+
+[[upgrade]]
+id = "rampage"
+name = "Rampage"
+desc = "Kill chain: +4% move speed per stack"
+effect = "momentum_speed"
+value = 4.0
+max_stacks = 1
+
+[[upgrade]]
+id = "deep_reserves"
+name = "Deep Reserves"
+desc = "Kill chain: 2 more seconds before it goes cold"
+effect = "momentum_window"
+value = 2.0
+max_stacks = 1
 
 [[upgrade]]
 id = "regen"
@@ -134,7 +158,7 @@ name = "Windrunner"
 desc = "+8% move speed"
 effect = "speed_mul"
 value = 0.08
-max_stacks = 6
+max_stacks = 3
 
 [[upgrade]]
 id = "constitution"
@@ -142,7 +166,7 @@ name = "Iron Constitution"
 desc = "+35 max HP and heal 35"
 effect = "max_hp_add"
 value = 35
-max_stacks = 4
+max_stacks = 3
 
 [[upgrade]]
 id = "bulwark"
@@ -166,7 +190,7 @@ name = "Treasure Sense"
 desc = "+100% pickup range"
 effect = "pickup_mul"
 value = 1.0
-max_stacks = 2
+max_stacks = 1
 
 [[upgrade]]
 id = "harvester"
@@ -174,7 +198,7 @@ name = "Harvester"
 desc = "+80% pickup range"
 effect = "pickup_mul"
 value = 0.80
-max_stacks = 2
+max_stacks = 1
 
 [[upgrade]]
 id = "garrote"
@@ -214,7 +238,7 @@ name = "Gale Steps"
 desc = "+15% move speed"
 effect = "speed_mul"
 value = 0.15
-max_stacks = 2
+max_stacks = 1
 
 [[upgrade]]
 id = "heartwood"
@@ -622,6 +646,15 @@ value = 3
 max_stacks = 1
 kind = "unique"
 weapon = "scythe"
+
+[[upgrade]]
+id = "uw_bloodthirst"
+name = "Bloodthirst"
+desc = "Kill chain: twice the stacks, twice the length, 3s longer before it goes cold"
+effect = "momentum_bloodthirst"
+value = 1.0
+max_stacks = 1
+kind = "unique"
 
 [[upgrade]]
 id = "uw_beam_prism"

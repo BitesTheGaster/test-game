@@ -120,6 +120,17 @@ struct PlayerStats {
   float knockbackRetaliate = 0.0F;
   // Impact cards: multiplies every knockback the player deals (default 1).
   float knockbackMul = 1.0F;
+  // --- Momentum ----------------------------------------------------------------
+  // The kill chain is the game's dynamic layer: it is NOT a flat stat you buy
+  // and forget, it is a meter that fills while you keep killing and collapses
+  // the moment you stop or get hit. The values below are what one card can add
+  // to it; see Game::updateMomentum for how the meter turns into multipliers.
+  float momentumDamage = 1.5F;  // % damage per stack (default 1.5 => +30% at cap)
+  float momentumRate = 0.5F;    // % fire rate per stack
+  float momentumSpeed = 0.0F;   // % move speed per stack (needs a card to matter)
+  int momentumMax = 20;         // chain length that counts
+  float momentumWindow = 3.0F;  // seconds of not killing before the chain drops
+  float momentumGain = 1.0F;    // stacks per kill
 };
 
 struct UpgradeEffectResult {
@@ -320,6 +331,17 @@ public:
   // EnemyTraits component it does not have by default). Lets a test compare how
   // hard a shove or a suction field moves a soft enemy versus a boss.
   void testSetFirstEnemyKnockbackRes(float res);
+  // --- Momentum introspection (HUD + tests) -----------------------------------
+  [[nodiscard]] int killStreak() const { return streak_; }
+  [[nodiscard]] float killStreakTimer() const { return streakTimer_; }
+  [[nodiscard]] float momentumDamageMul() const { return momentumDamageMul_; }
+  [[nodiscard]] float momentumFireRate() const { return momentumRate_; }
+  [[nodiscard]] float momentumSpeedMul() const { return momentumSpeedMul_; }
+  // Test hook: set the chain directly.
+  void testSetStreak(int streak) {
+    streak_ = std::max(0, streak);
+    streakTimer_ = 0.0F;
+  }
   // Test helper: route a raw damage packet through applyEnemyDamage() on the
   // first enemy (so defense mitigation and the lethal rule are exercised).
   void testDamageFirstEnemy(float dmg);
@@ -753,6 +775,8 @@ private:
   float savedTierGrace_[4] = {0.0F, 0.0F, 0.0F, 0.0F};
   std::string savedTierBanner_;
   float savedTierBannerT_ = 0.0F;
+  int savedStreak_ = 0;
+  float savedStreakTimer_ = 0.0F;
   std::vector<PendingSpawn> pending_;
   std::vector<PendingSpawn> savedPending_;
   // --- Rest of the run state that also mutates inside the sandbox ----------
@@ -839,12 +863,35 @@ private:
   float tierPressure_[4] = {0.0F, 0.0F, 0.0F, 0.0F};
   bool tierOpen_[4] = {false, true, false, false};
   float tierGrace_[4] = {0.0F, 0.0F, 0.0F, 0.0F};
-  // Transient HUD banner for "a new tribunal opened", with its own timer.
+  // Transient HUD banner ("CHAMPION TRIBUNAL OPEN", "HORDE INCOMING"). One
+  // channel is enough: the newest message replaces the old one.
   std::string tierBanner_;
   float tierBannerT_ = 0.0F;
+  void showBanner(std::string text, float seconds) {
+    tierBanner_ = std::move(text);
+    tierBannerT_ = seconds;
+  }
 
   // Per-tick update of the director (decay + open/close with hysteresis).
   void updateTierDirector();
+
+  // --- Momentum (the kill chain) ---------------------------------------------
+  // Every kill adds to the chain; the chain dies if you stop killing for
+  // `momentumWindow` seconds or if something hits you. While it is alive the
+  // player is measurably stronger, which is what turns "walk away and let the
+  // aura tick" into "stay in the middle of the horde".
+  int streak_ = 0;
+  float streakTimer_ = 0.0F;
+  // Multipliers derived from the chain once per step; applied to every damage,
+  // cooldown and movement calculation instead of being folded into PlayerStats
+  // so the character sheet keeps showing the flat build.
+  float momentumDamageMul_ = 1.0F;
+  float momentumRate_ = 0.0F;
+  float momentumSpeedMul_ = 1.0F;
+  void updateMomentum();
+  // Called when something actually lands a hit: the chain takes the hit with
+  // you. Halved, minus two, and floored at zero.
+  void breakMomentum();
 
   // --- Profile / main menu state ---------------------------------------------
   // Not owned: main() owns the Profile and keeps it alive. Null in tests that

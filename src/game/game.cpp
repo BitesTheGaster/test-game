@@ -215,6 +215,30 @@ UpgradeEffectResult applyUpgrade(PlayerStats& stats, std::string_view effect, fl
     stats.lastStand = 1;
     return {true, 0.0F, 0.0F};
   }
+  // --- Momentum cards --------------------------------------------------------
+  // They never touch damageMul/fireRateBonus directly: the chain is a runtime
+  // meter, so a card only changes how fast it fills and how much each stack is
+  // worth (see Game::updateMomentum).
+  if (effect == "momentum_damage") {
+    stats.momentumDamage += value;
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "momentum_speed") {
+    stats.momentumSpeed += value;
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "momentum_window") {
+    stats.momentumWindow += value;
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "momentum_bloodthirst") {
+    // Bloodthirst: twice the stacks per kill, twice the useful chain length
+    // and a chain that forgives twice as long without a kill.
+    stats.momentumGain += value;
+    stats.momentumMax += static_cast<int>(value * 20.0F);
+    stats.momentumWindow += value * 3.0F;
+    return {true, 0.0F, 0.0F};
+  }
   return {false, 0.0F, 0.0F};
 }
 
@@ -230,10 +254,14 @@ float mitigateDamage(float raw, float defense) {
 }
 
 float xpForLevel(int level) {
-  // Steeper than the original curve: the base is higher and the quadratic term
-  // grows faster, so each level takes noticeably more XP as the run goes on.
+  // The pacing lever of the whole game. Level-ups are picks, and picks are the
+  // only thing that makes a run interesting, so the curve is deliberately
+  // steep: with the old numbers a build was maxed out in ~4 minutes and the
+  // remaining 20 were an empty walk. At this rate the core damage/fire-rate
+  // cards are still worth taking at minute 10, and the big milestones (16, 32,
+  // 64) land at 3 / 8 / 20+ minutes instead of 1 / 2 / 4.
   const float l = static_cast<float>(level - 1);
-  return 7.0F + 5.0F * l + 0.85F * l * (l + 1.0F);
+  return 12.0F + 9.0F * l + 2.6F * l * (l + 1.0F);
 }
 
 float aoeFalloff(int enemiesHit, int pierce) {
@@ -332,6 +360,12 @@ void Game::reset() {
   }
   tierBanner_.clear();
   tierBannerT_ = 0.0F;
+  // The kill chain is per-run: every restart starts from zero.
+  streak_ = 0;
+  streakTimer_ = 0.0F;
+  momentumDamageMul_ = 1.0F;
+  momentumRate_ = 0.0F;
+  momentumSpeedMul_ = 1.0F;
   // Seed the "3 most recent" exemption set. As more types unlock this is
   // recomputed in refreshRecentTypes().
   recentTypes_.assign(content_.enemies.size(), 0);
@@ -607,6 +641,9 @@ void Game::fixedUpdate() {
 
 void Game::fixedStep() {
   simTime_ += 1.0F / 60.0F;
+  // Recompute the chain multipliers first: a kill from the previous step has to
+  // be able to make this step's shots stronger.
+  updateMomentum();
   if (iframes_ > 0.0F) {
     iframes_ -= 1.0F / 60.0F;
   }
@@ -686,7 +723,7 @@ void Game::movePlayer() {
     mx /= len;
     my /= len;
   }
-  float speed = stats_.speed * stats_.speedMul;
+  float speed = stats_.speed * stats_.speedMul * momentumSpeedMul_;
 
   // Adrenaline: low HP gives a burst of speed and a brief invulnerability.
   if (stats_.adrenaline != 0) {
@@ -953,7 +990,7 @@ void Game::fireWeapons() {
       auto& w = weapons_[i];
       w.timer -= dt;
       if (w.timer <= 0.0F) {
-        w.timer = attackCooldown(w.cooldown, stats_.fireRateBonus + w.cdBonus);
+        w.timer = attackCooldown(w.cooldown, stats_.fireRateBonus + w.cdBonus + momentumRate_);
       }
     }
     return;
@@ -968,8 +1005,8 @@ void Game::fireWeapons() {
     w.timer -= 1.0F / 60.0F;
     if (w.timer > 0.0F) continue;
 
-    const float cooldown = attackCooldown(w.cooldown, stats_.fireRateBonus + w.cdBonus);
-    const float damage = w.damage * stats_.damageMul;
+    const float cooldown = attackCooldown(w.cooldown, stats_.fireRateBonus + w.cdBonus + momentumRate_);
+    const float damage = w.damage * stats_.damageMul * momentumDamageMul_;
     const int count = std::max(1, w.projectiles + stats_.projAdd);
     const int pierce = w.pierce + stats_.pierceAdd;
 
@@ -1594,6 +1631,12 @@ void Game::killEnemy(entt::entity e) {
   registry_.emplace<Xp>(orb, xpValue);
   destroyQueue_.push_back(e);
   ++kills_;
+  // Momentum: every kill feeds the chain, so farming the same weak enemy still
+  // works but the chain pays out the same for it.
+  if (stats_.momentumGain > 0.0F) {
+    streak_ += static_cast<int>(stats_.momentumGain);
+  }
+  streakTimer_ = 0.0F;
 
   // Bestiary: remember the type and which tier variant was slain.
   int slainTier = 0;
@@ -1905,8 +1948,8 @@ void Game::updateOrbitBlades() {
     // Derive damage/pierce/speed/radius from the owning weapon slot each tick
     // so upgrades (incl. the "Blade Vortex" unique) apply to existing blades.
     const bool owned = ob.weaponIndex >= 0 && ob.weaponIndex < weaponCount_;
-    const float damage = owned ? weapons_[ob.weaponIndex].damage * stats_.damageMul
-                               : ob.damage * stats_.damageMul;
+    const float damage = owned ? weapons_[ob.weaponIndex].damage * stats_.damageMul * momentumDamageMul_
+                               : ob.damage * stats_.damageMul * momentumDamageMul_;
     const int pierce =
         owned ? weapons_[ob.weaponIndex].pierce + stats_.pierceAdd
               : ob.pierce + stats_.pierceAdd;
@@ -1918,7 +1961,7 @@ void Game::updateOrbitBlades() {
     t.py = t.y;
 
     // Dagger spin scales with attack speed: faster fire rate = faster spin.
-    ob.angle += (speed * std::max(0.5F, 1.0F + stats_.fireRateBonus)) / 60.0F;
+    ob.angle += (speed * std::max(0.5F, 1.0F + stats_.fireRateBonus + momentumRate_)) / 60.0F;
     t.x = pt.x + std::cos(ob.angle) * radius;
     t.y = pt.y + std::sin(ob.angle) * radius;
 
@@ -1953,8 +1996,8 @@ void Game::updateHaloBeams() {
     // Derive damage/pierce/spin/length from the owning weapon slot each tick so
     // upgrades (projectile count, damage, fire rate) apply to existing beams.
     const bool owned = hb.weaponIndex >= 0 && hb.weaponIndex < weaponCount_;
-    const float damage = owned ? weapons_[hb.weaponIndex].damage * stats_.damageMul
-                               : hb.damage * stats_.damageMul;
+    const float damage = owned ? weapons_[hb.weaponIndex].damage * stats_.damageMul * momentumDamageMul_
+                               : hb.damage * stats_.damageMul * momentumDamageMul_;
     const int pierce = owned ? weapons_[hb.weaponIndex].pierce + stats_.pierceAdd
                              : hb.pierce + stats_.pierceAdd;
     const float spin = owned ? weapons_[hb.weaponIndex].orbitSpeed : hb.spin;
@@ -1966,7 +2009,7 @@ void Game::updateHaloBeams() {
     t.px = t.x;
     t.py = t.y;
     // Attack speed also spins the halo faster, like the dagger ring.
-    hb.angle += spin * std::max(0.5F, 1.0F + stats_.fireRateBonus) * dt;
+    hb.angle += spin * std::max(0.5F, 1.0F + stats_.fireRateBonus + momentumRate_) * dt;
     t.x = pt.x;
     t.y = pt.y;
 
@@ -2030,14 +2073,14 @@ void Game::updateVortices() {
     // Live values come from the owning weapon so upgrades apply as they land.
     const bool owned = vx.weaponIndex >= 0 && vx.weaponIndex < weaponCount_;
     auto& w = weapons_[owned ? vx.weaponIndex : 0];
-    const float damage = (owned ? w.damage : vx.damage) * stats_.damageMul;
+    const float damage = (owned ? w.damage : vx.damage) * stats_.damageMul * momentumDamageMul_;
     const int pierce = (owned ? w.pierce : vx.pierce) + stats_.pierceAdd;
     const float pull = owned ? w.vortexPull : vx.pull;
 
     t.px = t.x;
     t.py = t.y;
     // Attack speed also whips the zones around faster, like the dagger ring.
-    vx.angle += vx.spin * std::max(0.5F, 1.0F + stats_.fireRateBonus) * dt;
+    vx.angle += vx.spin * std::max(0.5F, 1.0F + stats_.fireRateBonus + momentumRate_) * dt;
     t.x = pt.x + std::cos(vx.angle) * vx.orbitRadius;
     t.y = pt.y + std::sin(vx.angle) * vx.orbitRadius;
 
@@ -2530,7 +2573,7 @@ void Game::updateBeamEffects() {
       const entt::entity en = bline[bi];
       auto* eh = registry_.try_get<Health>(en);
       if (eh == nullptr) continue;
-      applyEnemyDamage(en, be.damage * stats_.damageMul / 60.0F * beamMul);
+      applyEnemyDamage(en, be.damage * stats_.damageMul * momentumDamageMul_ / 60.0F * beamMul);
       spawnParticles(bhx[bi], bhy[bi], {1.0F, 1.0F, 0.75F, 1.0F}, 2, 2.0F);
     }
   }
@@ -2588,7 +2631,7 @@ void Game::updateZoneEffects() {
         }
       }
       const float zoneMul = aoeFalloff(static_cast<int>(zhits.size()), ze.pierce);
-      const float dmg = ze.dps * ze.tickRate * stats_.damageMul;
+      const float dmg = ze.dps * ze.tickRate * stats_.damageMul * momentumDamageMul_;
       for (std::size_t zi = 0; zi < zhits.size(); ++zi) {
         auto* eh = registry_.try_get<Health>(zhits[zi]);
         if (eh == nullptr) continue;
@@ -2638,7 +2681,7 @@ void Game::updateChainLightning() {
     }
 
     // Damage the target
-    const float damage = cl.damage * stats_.damageMul * std::powf(cl.damageMul, static_cast<float>(cl.jumpsDone));
+    const float damage = cl.damage * stats_.damageMul * momentumDamageMul_ * std::powf(cl.damageMul, static_cast<float>(cl.jumpsDone));
     auto* eh = registry_.try_get<Health>(nextTarget);
     if (eh && eh->hp > 0.0F) {
       applyEnemyDamage(nextTarget, damage);
@@ -2707,7 +2750,7 @@ void Game::updateNovaRing() {
       for (std::size_t ni = 0; ni < nhits.size(); ++ni) {
         auto* eh = registry_.try_get<Health>(nhits[ni]);
         if (eh == nullptr) continue;
-        applyEnemyDamage(nhits[ni], nr.damagePerTick * stats_.damageMul * novaMul);
+        applyEnemyDamage(nhits[ni], nr.damagePerTick * stats_.damageMul * momentumDamageMul_ * novaMul);
         spawnParticles(nhx[ni], nhy[ni], {0.5F, 0.3F, 1.0F, 1.0F}, 4, 3.0F);
       }
     }
@@ -2915,6 +2958,12 @@ void Game::spawnWave() {
   // side — this is what makes it a horde game rather than a trickle shooter.
   if (player_ != entt::null && registry_.valid(player_)) {
     hordeTimer_ -= 1.0F / 60.0F;
+    // Announce the ring a beat before it lands. A horde that only shows up as
+    // 20 telegraphs is noise; one that is called out is a decision (hold the
+    // line, or disengage and rebuild the chain).
+    if (hordeTimer_ > 0.0F && hordeTimer_ <= 2.0F && tierBannerT_ < 1.5F) {
+      showBanner("HORDE INCOMING", 2.0F);
+    }
     if (hordeTimer_ <= 0.0F) {
       hordeTimer_ = 40.0F + unit(rng_) * 10.0F;
       const int hordeDef = pickDef();
@@ -2946,13 +2995,17 @@ void Game::spawnWave() {
   if (spawnTimer_ > 0.0F) return;
 
   // Difficulty ramp: comfortable start, then spawns accelerate hard so the
-  // screen fills with hordes (floor ~0.12s between spawns).
+  // screen fills with hordes. The floor is 0.20s between packs (was 0.12s):
+  // 8 packs a second is a treadmill the player cannot fight, while 5 packs a
+  // second of 5-6 enemies each is a screen they can actually push through, and
+  // it is the difference between a run that lasts 25 minutes and one that ends
+  // in a build-completion screen.
   if (simTime_ < 30.0F) {
     spawnTimer_ = 1.2F - simTime_ * 0.005F;
   } else if (simTime_ < 90.0F) {
-    spawnTimer_ = std::max(0.45F, 1.05F - (simTime_ - 30.0F) * 0.01F);
+    spawnTimer_ = std::max(0.50F, 1.05F - (simTime_ - 30.0F) * 0.0092F);
   } else {
-    spawnTimer_ = std::max(0.12F, 0.45F - (simTime_ - 90.0F) * 0.004F);
+    spawnTimer_ = std::max(0.20F, 0.50F - (simTime_ - 90.0F) * 0.003F);
   }
 
   const int defIndex = pickDef();
@@ -2964,7 +3017,7 @@ void Game::spawnWave() {
   // Pack spawning grows into hordes: every minute adds another chance to
   // include an extra member, so late runs face clusters instead of singles.
   int packSize = 1;
-  const int extraRolls = std::min(8, 1 + static_cast<int>(simTime_ / 60.0F));
+  const int extraRolls = std::min(7, 1 + static_cast<int>(simTime_ / 70.0F));
   for (int k = 0; k < extraRolls; ++k) {
     if (unit(rng_) < 0.65F) ++packSize;
   }
@@ -3147,6 +3200,34 @@ void Game::spawnEnemy(const PendingSpawn& p) {
     }
   }
   registry_.emplace<EnemyTraits>(e, tr);
+}
+
+// --- Momentum (the kill chain) -----------------------------------------------
+// Most of this game's power is flat: a card you take at level 12 is worth the
+// same at level 12 and at level 40, so a finished build has nothing left to do
+// except walk. Momentum is the one thing that cannot be hoarded — it is a meter
+// that only pays while you are actively killing, and it is what makes stepping
+// INTO the horde the correct move instead of the reckless one.
+void Game::updateMomentum() {
+  constexpr float dt = 1.0F / 60.0F;
+  if (streak_ > 0) {
+    streakTimer_ += dt;
+    if (streakTimer_ > std::max(0.5F, stats_.momentumWindow)) {
+      streak_ = 0; // the chain went cold
+    }
+  } else {
+    streakTimer_ = 0.0F;
+  }
+  const float n = static_cast<float>(std::clamp(streak_, 0, std::max(0, stats_.momentumMax)));
+  momentumDamageMul_ = 1.0F + n * stats_.momentumDamage * 0.01F;
+  momentumRate_ = n * stats_.momentumRate * 0.01F;
+  momentumSpeedMul_ = 1.0F + n * stats_.momentumSpeed * 0.01F;
+}
+
+void Game::breakMomentum() {
+  if (streak_ <= 0) return;
+  streak_ = std::max(0, streak_ / 2 - 2);
+  streakTimer_ = 0.0F;
 }
 
 void Game::enterLevelUp() {
@@ -3963,6 +4044,12 @@ void Game::hurtPlayer(float amount) {
 
   if (dmg > 0.0F) {
     php.hp -= dmg;
+    // The chain takes the hit with you. This is the whole tension of the
+    // system: standing in the horde is the only way to keep it fed, and it is
+    // also the only way to lose it. (Aura/DoT ticks go through
+    // damagePlayerDirect and deliberately do NOT break it — a damage-over-time
+    // aura would otherwise zero the meter every frame.)
+    breakMomentum();
     if (php.hp <= 0.0F) {
       php.hp = 0.0F;
       state_ = RunState::GameOver;
@@ -4192,6 +4279,8 @@ void Game::enterTestModeImpl() {
   }
   savedTierBanner_ = tierBanner_;
   savedTierBannerT_ = tierBannerT_;
+  savedStreak_ = streak_;
+  savedStreakTimer_ = streakTimer_;
   savedPending_ = pending_;
   savedSpawnTimer_ = spawnTimer_;
   savedHordeTimer_ = hordeTimer_;
@@ -4315,6 +4404,11 @@ void Game::exitTestModeImpl() {
   }
   tierBanner_ = savedTierBanner_;
   tierBannerT_ = savedTierBannerT_;
+  streak_ = savedStreak_;
+  streakTimer_ = savedStreakTimer_;
+  momentumDamageMul_ = 1.0F;
+  momentumRate_ = 0.0F;
+  momentumSpeedMul_ = 1.0F;
   lastStandCd_ = savedLastStandCd_;
   retiredTypes_ = savedRetiredTypes_;
   recentTypes_ = savedRecentTypes_;
@@ -4875,6 +4969,10 @@ void Game::renderPlayerStats(core::render::Batcher& b, float px, float py) {
                  std::to_string(static_cast<int>(stats_.defense)));
   rows.push_back("DAMAGE X" + fit1(stats_.damageMul) + "    FIRE RATE +" +
                  std::to_string(static_cast<int>(stats_.fireRateBonus * 100.0F)) + "%");
+  rows.push_back("CHAIN x" + std::to_string(streak_) + "/" +
+                 std::to_string(std::max(1, stats_.momentumMax)) + "  +" +
+                 std::to_string(static_cast<int>(stats_.momentumDamage)) + "% DMG/STACK  +" +
+                 std::to_string(static_cast<int>(stats_.momentumRate)) + "% RATE/STACK");
   std::string speedRow = "SPEED X" + fit1(stats_.speedMul) + "     PICKUP X" +
                          fit1(stats_.pickupMul);
   if (stats_.lifesteal > 0.0F) {
@@ -5868,6 +5966,24 @@ void Game::render(core::render::Batcher& b, float alpha) {
   {
     const std::string kills = "KILLS " + std::to_string(kills_);
     b.text(px - b.textWidth(2.0F, kills) - 14.0F, 16.0F, 2.0F, white, kills);
+  }
+
+  // Momentum chain, right under the kill counter. The bar is the time left
+  // before the chain goes cold, so the player can literally watch a pause cost
+  // them the bonus they were relying on.
+  if (streak_ > 0) {
+    const float cap = static_cast<float>(std::max(1, stats_.momentumMax));
+    const float frac = std::min(1.0F, static_cast<float>(streak_) / cap);
+    const std::string chain = "CHAIN x" + std::to_string(streak_) + "  +" +
+                              std::to_string(static_cast<int>((momentumDamageMul_ - 1.0F) * 100.0F)) +
+                              "% DMG";
+    // Warm at the start of the chain, hot at the cap.
+    const Color heat{0.6F + 0.4F * frac, 0.85F - 0.35F * frac, 0.35F - 0.25F * frac, 1.0F};
+    b.text(px - b.textWidth(1.8F, chain) - 14.0F, 36.0F, 1.8F, heat, chain);
+    const float barW = 120.0F;
+    const float left = std::clamp(streakTimer_ / std::max(0.5F, stats_.momentumWindow), 0.0F, 1.0F);
+    b.rectTopLeft(px - barW - 14.0F, 50.0F, barW, 4.0F, Color{0.35F, 0.30F, 0.35F, 0.8F});
+    b.rectTopLeft(px - barW * left - 14.0F, 50.0F, barW * left, 4.0F, heat);
   }
 
   // Tribunal banner: the adaptive director announces a newly opened tier under

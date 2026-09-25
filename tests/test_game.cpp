@@ -158,13 +158,20 @@ TEST_CASE("attackCooldown: delay = base / (1 + additive fire-rate bonus)") {
 }
 
 TEST_CASE("xpForLevel grows monotonically") {
-  REQUIRE(game::xpForLevel(1) == Catch::Approx(7.0F));
+  REQUIRE(game::xpForLevel(1) == Catch::Approx(12.0F));
   float prev = 0.0F;
   for (int lvl = 1; lvl <= 20; ++lvl) {
     const float need = game::xpForLevel(lvl);
     REQUIRE(need > prev);
     prev = need;
   }
+  // Pacing guard: the curve has to stay steep enough that level-ups (which are
+  // the only source of build decisions) keep arriving for a whole run. A flat
+  // curve is what turns the game into a walk with nothing to pick. Reaching
+  // level 32 costs ~33k XP and level 64 ~246k, so a build is still filling out
+  // long after the first minute.
+  REQUIRE(game::xpForLevel(32) > 2500.0F);
+  REQUIRE(game::xpForLevel(64) > 10000.0F);
 }
 
 TEST_CASE("aoeFalloff drops per-target damage as a blast catches a crowd") {
@@ -2953,4 +2960,128 @@ TEST_CASE("Champions wait for elites to be easy, overlords for champions") {
   for (int i = 0; i < 24 * 60; ++i) fading.advance(1.0F / 60.0F, in);
   REQUIRE_FALSE(fading.tierUnlocked(2));
   REQUIRE_FALSE(fading.tierUnlocked(3));
+}
+
+TEST_CASE("Kill chain feeds damage, breaks on a hit and dies when you stop") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 130};
+  g.testDisableWaves();
+  g.testClearWeapons();
+  g.testAddWeapon(0); // wand: a real damage number we can compare
+  game::FrameInput in{};
+  g.advance(1.0F / 60.0F, in);
+
+  // Cold: no multiplier at all.
+  REQUIRE(g.killStreak() == 0);
+  REQUIRE(g.momentumDamageMul() == Catch::Approx(1.0F));
+  REQUIRE(g.momentumFireRate() == Catch::Approx(0.0F));
+
+  // Kills build it, one stack each, and it pays out as damage.
+  g.testSetStreak(0);
+  for (int i = 0; i < 4; ++i) {
+    g.testSpawnEnemyAt(2.0F, 0.0F);
+    g.testKillFirstEnemy();
+  }
+  g.advance(1.0F / 60.0F, in);
+  REQUIRE(g.killStreak() == 4);
+  REQUIRE(g.momentumDamageMul() == Catch::Approx(1.0F + 4.0F * 1.5F / 100.0F));
+  REQUIRE(g.momentumFireRate() == Catch::Approx(4.0F * 0.5F / 100.0F));
+  REQUIRE(g.momentumDamageMul() > 1.0F);
+
+  // Getting hit costs more than a step: the chain is halved, minus two.
+  const int before = g.killStreak();
+  g.testHurtPlayer(20.0F);
+  g.advance(1.0F / 60.0F, in);
+  REQUIRE(g.killStreak() == std::max(0, before / 2 - 2));
+
+  // Stop killing and it goes cold on its own — the reward is for staying in
+  // the fight, not for banking it.
+  g.testSetStreak(10);
+  g.advance(1.0F / 60.0F, in);
+  REQUIRE(g.killStreak() == 10);
+  for (int i = 0; i < 4 * 60; ++i) g.advance(1.0F / 60.0F, in);
+  REQUIRE(g.killStreak() == 0);
+  REQUIRE(g.momentumDamageMul() == Catch::Approx(1.0F));
+  REQUIRE(g.momentumSpeedMul() == Catch::Approx(1.0F)); // no card, no speed
+}
+
+TEST_CASE("Momentum cards bend the chain and the chain is capped") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  auto card = [&content](const char* id) -> const game::UpgradeDef& {
+    for (const auto& u : content.upgrades) {
+      if (u.id == id) return u;
+    }
+    throw std::runtime_error(std::string("no such card: ") + id);
+  };
+  // Three normal cards, one unique, all wired into the runtime meter.
+  REQUIRE(card("surge_chain").effect == "momentum_damage");
+  REQUIRE(card("rampage").effect == "momentum_speed");
+  REQUIRE(card("deep_reserves").effect == "momentum_window");
+  REQUIRE(card("uw_bloodthirst").kind == "unique");
+  REQUIRE(card("uw_bloodthirst").effect == "momentum_bloodthirst");
+
+  game::PlayerStats fresh{};
+  REQUIRE(fresh.momentumDamage == Catch::Approx(1.5F));
+  REQUIRE(fresh.momentumRate == Catch::Approx(0.5F));
+  REQUIRE(fresh.momentumSpeed == Catch::Approx(0.0F));
+  REQUIRE(fresh.momentumMax == 20);
+  REQUIRE(game::applyUpgrade(fresh, "momentum_damage", 1.0F).valid);
+  REQUIRE(game::applyUpgrade(fresh, "momentum_speed", 4.0F).valid);
+  REQUIRE(game::applyUpgrade(fresh, "momentum_window", 2.0F).valid);
+  REQUIRE(fresh.momentumDamage == Catch::Approx(2.5F));
+  REQUIRE(fresh.momentumSpeed == Catch::Approx(4.0F));
+  REQUIRE(fresh.momentumWindow == Catch::Approx(5.0F));
+  // Bloodthirst: double the stacks per kill, double the chain, +3s of patience.
+  REQUIRE(game::applyUpgrade(fresh, "momentum_bloodthirst", 1.0F).valid);
+  REQUIRE(fresh.momentumGain == Catch::Approx(2.0F));
+  REQUIRE(fresh.momentumMax == 40);
+  REQUIRE(fresh.momentumWindow == Catch::Approx(8.0F));
+
+  // The cap is real: a runaway kill loop cannot stack past momentumMax.
+  game::Game g{content, 131};
+  g.testDisableWaves();
+  g.testClearWeapons();
+  game::FrameInput in{};
+  g.advance(1.0F / 60.0F, in);
+  g.testSetStreak(999);
+  g.advance(1.0F / 60.0F, in);
+  REQUIRE(g.momentumDamageMul() == Catch::Approx(1.0F + 20.0F * 1.5F / 100.0F));
+}
+
+TEST_CASE("The upgrade pool is not dominated by dead stat cards") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  // Pickup range and XP are the real dead picks: they never change how the
+  // game plays, they only make it faster to sweep up. Flat HP and move speed
+  // are legitimate but must stay a minority, and the offensive core plus the
+  // momentum axis have to keep real weight.
+  int normal = 0;
+  int pickupXp = 0;
+  int hp = 0;
+  int speed = 0;
+  int offense = 0;
+  int momentum = 0;
+  for (const auto& u : content.upgrades) {
+    if (u.kind != "normal") continue;
+    ++normal;
+    if (u.effect == "pickup_mul" || u.effect == "xp_mul") pickupXp += u.maxStacks;
+    if (u.effect == "max_hp_add") hp += u.maxStacks;
+    if (u.effect == "speed_mul") speed += u.maxStacks;
+    if (u.effect == "damage_mul" || u.effect == "fire_rate" || u.effect == "proj_add") {
+      offense += u.maxStacks;
+    }
+  }
+  for (const auto& u : content.upgrades) {
+    if (u.effect.rfind("momentum_", 0) == 0) momentum += u.maxStacks;
+  }
+  CAPTURE(normal);
+  CAPTURE(pickupXp);
+  REQUIRE(normal > 20);
+  // At most a fifth of the pool may be pure convenience.
+  REQUIRE(pickupXp * 5 <= normal);
+  // No defensive family may outnumber the whole offensive core.
+  REQUIRE(hp <= 12);
+  REQUIRE(speed <= 6);
+  REQUIRE(offense >= 25);
+  // Momentum is a real build axis, not one lonely card.
+  REQUIRE(momentum >= 4);
 }
