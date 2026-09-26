@@ -337,6 +337,13 @@ struct ZoneEffect {
   // ground at the Grave Bell, so "the oldest pool this weapon owns" has to be
   // answerable without also matching the pools every other weapon dropped.
   int weaponIndex = -1;
+  // True when the fire ARRIVED from above rather than burning where it was
+  // created. The two inferno weapons are the same pool entity and were drawn
+  // identically, which is most of why they read as one weapon: the Ember Sprayer's
+  // pools are left on the ground by a cone, while Ashfall's shells come down on
+  // the Grave Bell. So Ashfall's pool is drawn as a shaft with an impact ring at
+  // the top, and the ground pool keeps its low disc.
+  bool fromAbove = false;
   core::render::Color color{1.0F, 1.0F, 1.0F, 1.0F};
 };
 

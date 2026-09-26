@@ -169,6 +169,9 @@ struct WeaponDef {
   float zoneDuration = 4.0F;
   float zoneDps = 15.0F;
   int zoneMaxPools = 3;
+  // The pool is laid by something that fell on it (a shell) rather than by
+  // something that burned where it stood (a cone), and is drawn as a shaft.
+  bool zoneFromAbove = false;
 
   // Chain (evolution)
   float chainJumpRange = 2.5F;

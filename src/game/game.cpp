@@ -35,6 +35,15 @@ constexpr float kOrbitInnerMul = 0.35F;
 // "gap" would stop being a gap.
 constexpr float kOrbitWindowHalf = 0.42F;
 
+// How close a contracting nova will drag a victim to the player. The Void Nova's
+// whole fantasy is a knot of bodies pulled into a knot and then detonated, and
+// its pull used to obey no floor at all: it dragged everything right onto the
+// player's own position, so the fantasy was delivered and then the player died of
+// it before the burst ever landed. Enemies now line up just OUTSIDE the incoming
+// ring instead, which is the same picture -- a ring of bodies closing in -- with
+// the player standing in the middle of it alive.
+constexpr float kNovaPullFloor = 1.6F;
+
 // How far above the first target a chain bolt is drawn coming down from. A
 // lightning strike that starts at the victim's own centre is just a dot; the
 // vertical drop is what makes it read as a strike.
@@ -2201,6 +2210,7 @@ void Game::fireWeapons() {
         ze.tickRate = 0.1F;
         ze.timer = 0.0F;
         ze.tickTimer = 0.0F;
+        ze.fromAbove = w.zoneFromAbove;
         ze.color = {1.0F, 0.5F, 0.1F, 1.0F};
         registry_.emplace<ZoneEffect>(zone, ze);
         w.timer = cooldown;
@@ -4266,8 +4276,15 @@ void Game::updateNovaRing() {
         // outside it just shoves. Pulling the whole map inward would delete every
         // positioning problem the rest of the roster exists to pose.
         if (d > nr.radius + er.r || d < 1e-4F) continue;
+        // The floor is what stops a contracting ring from being a suicide button.
+        // It tracks the ring's own radius inward, so the victim is dragged to the
+        // edge of the shrinking circle and then held there while the ring closes
+        // on it -- a wall of bodies facing inward, with the burst going off in
+        // the gap. Once the ring itself is inside the floor the floor takes over
+        // and the pull simply stops, which is the moment the burst is due.
+        const float floorR = std::max(nr.radius, kNovaPullFloor);
         const float step = std::min(nr.pull * continuousPullScale(en) / 60.0F,
-                                    std::max(0.0F, d - er.r * 0.5F));
+                                    std::max(0.0F, d - floorR - er.r * 0.5F));
         et.x += (dx / d) * step;
         et.y += (dy / d) * step;
       }
@@ -4420,15 +4437,23 @@ void Game::currentScales(float& hp, float& speed, float& touch) const {
   // put ordinary bats at nearly ten times the HP of the first minute while the
   // player's damage was still mostly on the cards. The shape is intact -- it is
   // still a rising ramp that steepens -- it just stops outrunning the build.
-  if (simTime_ <= 420.0F) {
-    hp = 1.0F + simTime_ / 95.0F;
-    speed = 1.0F + simTime_ / 720.0F;
+  // The first leg is deliberately shallow. The complaint this answers is
+  // "after two or three minutes the screen is so dense I cannot kill what is on
+  // it", and at /95 a bat had 2.6x its opening HP by 2:30 while the player's
+  // damage was still arriving on level-up cards. The heavies are now spread
+  // across the run as well (see enemies.toml), so the early leg no longer has to
+  // carry the whole difficulty on its own: at 2:30 an ordinary enemy is barely
+  // doubled, and the threat comes from what has actually walked in.
+  constexpr float kHpKnee = 480.0F;
+  if (simTime_ <= kHpKnee) {
+    hp = 1.0F + simTime_ / 145.0F;
+    speed = 1.0F + simTime_ / 780.0F;
   } else {
-    hp = 1.0F + 420.0F / 95.0F + (simTime_ - 420.0F) / 60.0F;
-    speed = 1.0F + 420.0F / 720.0F + (simTime_ - 420.0F) / 360.0F;
+    hp = 1.0F + kHpKnee / 145.0F + (simTime_ - kHpKnee) / 62.0F;
+    speed = 1.0F + kHpKnee / 780.0F + (simTime_ - kHpKnee) / 380.0F;
   }
-  hp = std::min(hp, 22.0F);
-  speed = std::min(speed, 2.15F);
+  hp = std::min(hp, 20.0F);
+  speed = std::min(speed, 2.05F);
   // Contact damage also creeps up so late enemies hit harder.
   touch = 1.0F + simTime_ / 2000.0F;
 }
@@ -4775,12 +4800,17 @@ void Game::spawnWave() {
   // second of 5-6 enemies each is a screen they can actually push through, and
   // it is the difference between a run that lasts 25 minutes and one that ends
   // in a build-completion screen.
+  // The third leg used to start at 1:30 and bottom out at 0.20s, so the run went
+  // from one pack a second to five inside the two minutes where the heavy enemies
+  // were also arriving. The floor is 0.30s now and the leg starts at 2:30, which
+  // is the other half of the same fix: the screen fills later AND the things in
+  // it can be killed when it does.
   if (simTime_ < 30.0F) {
     spawnTimer_ = 1.2F - simTime_ * 0.005F;
-  } else if (simTime_ < 90.0F) {
-    spawnTimer_ = std::max(0.50F, 1.05F - (simTime_ - 30.0F) * 0.0092F);
+  } else if (simTime_ < 150.0F) {
+    spawnTimer_ = std::max(0.58F, 1.05F - (simTime_ - 30.0F) * 0.0039F);
   } else {
-    spawnTimer_ = std::max(0.20F, 0.50F - (simTime_ - 90.0F) * 0.003F);
+    spawnTimer_ = std::max(0.30F, 0.58F - (simTime_ - 150.0F) * 0.0021F);
   }
 
   const int defIndex = pickDef();
@@ -5575,6 +5605,7 @@ void Game::addWeapon(int defIndex) {
   w.zoneDuration = def.zoneDuration;
   w.zoneDps = def.zoneDps;
   w.zoneMaxPools = def.zoneMaxPools;
+  w.zoneFromAbove = def.zoneFromAbove;
 
   // Chain
   w.chainJumpRange = def.chainJumpRange;
@@ -8395,6 +8426,7 @@ bool Game::WeaponSnapshot::operator==(const WeaponSnapshot& other) const {
          sweepRadius == other.sweepRadius && sweepKnockback == other.sweepKnockback &&
          zoneRadius == other.zoneRadius && zoneDuration == other.zoneDuration &&
          zoneDps == other.zoneDps && zoneMaxPools == other.zoneMaxPools &&
+         zoneFromAbove == other.zoneFromAbove &&
          chainJumpRange == other.chainJumpRange && chainMaxJumps == other.chainMaxJumps &&
          chainDamageMul == other.chainDamageMul &&
          chainShatter == other.chainShatter && bounceSplits == other.bounceSplits &&
@@ -8486,6 +8518,7 @@ Game::WeaponSnapshot Game::testWeaponSnapshot(int slotIndex) const {
   s.zoneDuration = w.zoneDuration;
   s.zoneDps = w.zoneDps;
   s.zoneMaxPools = w.zoneMaxPools;
+  s.zoneFromAbove = w.zoneFromAbove;
   s.chainJumpRange = w.chainJumpRange;
   s.chainMaxJumps = w.chainMaxJumps;
   s.chainDamageMul = w.chainDamageMul;
@@ -9067,16 +9100,49 @@ void Game::render(core::render::Batcher& b, float alpha) {
         mote.a = 0.30F + 0.45F * (1.0F - f);
         b.circle(x + std::cos(a) * rr, y + std::sin(a) * rr, 0.07F, mote);
       }
-      // Bright centre.
-      Color eye = vx.color;
-      eye.a = 0.85F;
-      b.circle(x, y, 0.13F, eye);
       Color rim = vx.color;
       rim.a = 0.45F;
       constexpr int kRim = 18;
       for (int k = 0; k < kRim; ++k) {
         const float a = 2.0F * kPi * static_cast<float>(k) / static_cast<float>(kRim);
         b.circle(x + std::cos(a) * vx.radius, y + std::sin(a) * vx.radius, 0.06F, rim);
+      }
+      if (vx.collapseAt > 0.0F) {
+        // A well with an END looks completely different from one without, and the
+        // difference is the whole point of the weapon: the Void Gyre is a soft
+        // patient disc you can stand next to, and the Event Horizon is a hard
+        // bright ring that is visibly winding shut. The player can see the timer
+        // on the weapon instead of having to remember it.
+        const float chargeF =
+            vx.collapseAt > 0.0F ? std::clamp(vx.charge / vx.collapseAt, 0.0F, 1.0F) : 0.0F;
+        // The rim goes hard and bright and closes in on the centre as it charges.
+        const float cr = vx.radius * (1.0F - 0.80F * chargeF);
+        Color close = vx.color;
+        close.a = 0.35F + 0.55F * chargeF;
+        b.circle(x, y, std::max(0.05F, cr), close);
+        // Radial tics that crowd inward with the charge, so the closing is a
+        // direction of travel rather than just a shrinking outline.
+        constexpr int kTics = 12;
+        for (int k = 0; k < kTics; ++k) {
+          const float a = 2.0F * kPi * static_cast<float>(k) / static_cast<float>(kTics) +
+                          chargeF * 2.2F;
+          const float rr = vx.radius * (1.0F - 0.72F * chargeF);
+          Color tic = vx.color;
+          tic.a = 0.30F + 0.60F * chargeF;
+          b.circle(x + std::cos(a) * rr, y + std::sin(a) * rr,
+                   0.05F + 0.03F * chargeF, tic);
+        }
+        // The eye only opens once the charge is nearly done, which is the tell
+        // that the burst is a moment away.
+        Color eye = vx.color;
+        eye.a = 0.25F + 0.75F * chargeF * chargeF;
+        b.circle(x, y, 0.05F + 0.13F * chargeF * chargeF, eye);
+      } else {
+        // The Gyre: a soft bright centre it never loses, because this well never
+        // ends.
+        Color eye = vx.color;
+        eye.a = 0.85F;
+        b.circle(x, y, 0.13F, eye);
       }
     }
   }
@@ -9231,6 +9297,37 @@ void Game::render(core::render::Batcher& b, float alpha) {
         b.circle(t.x + std::cos(a) * ze.radius * pulse,
                  t.y + std::sin(a) * ze.radius * pulse, 0.07F, rim);
       }
+      // A pool whose fire ARRIVED is drawn as a shaft standing on it: the Ember
+      // Sprayer burns the ground where the cone went, while Ashfall's shells come
+      // down on the Grave Bell. Same entity, same numbers, and the two read as
+      // one weapon unless something says which way the fire arrived. The impact
+      // ring at the top is the tell -- it is the shell, still up there.
+      if (ze.fromAbove) {
+        const float shaftH = ze.radius * 2.4F;
+        constexpr int kShaft = 9;
+        for (int k = 0; k < kShaft; ++k) {
+          const float f = static_cast<float>(k) / static_cast<float>(kShaft - 1);
+          // Narrowing as it rises, so it reads as a column and not as a pillar.
+          const float rr = ze.radius * (1.0F - f * 0.62F) * pulse;
+          const float yy = t.y + f * shaftH;
+          Color col = ze.color;
+          // Densest at the base, where the fire actually is.
+          col.a = (0.20F - 0.10F * f) * fade;
+          b.circle(t.x, yy, rr, col);
+        }
+        // The impact: a bright ring up at the top of the shaft, contracting as
+        // the pool ages, which is the shell that is still falling.
+        const float fall = 1.0F - fade;
+        const float ir = ze.radius * (0.30F + 0.55F * fall) * pulse;
+        Color hot = ze.color;
+        hot.a = 0.70F * fade * (0.45F + 0.55F * fall);
+        b.circle(t.x, t.y + shaftH, ir * 0.42F, hot);
+        constexpr int kDrop = 14;
+        for (int k = 0; k < kDrop; ++k) {
+          const float a = 2.0F * kPi * static_cast<float>(k) / static_cast<float>(kDrop);
+          b.circle(t.x + std::cos(a) * ir, t.y + shaftH + std::sin(a) * ir, 0.07F, hot);
+        }
+      }
     }
   }
 
@@ -9299,37 +9396,46 @@ void Game::render(core::render::Batcher& b, float alpha) {
       const float x = t.px + (t.x - t.px) * lerp;
       const float y = t.py + (t.y - t.py) * lerp;
 
-      // --- Beat 1: the ring closes on the target. ----------------------------
+      // --- Beat 1: the charge gathers in the SKY above the target. -----------
+      //
+      // It used to converge on the target's own centre, as three shrinking rings
+      // and a crosshair pinned to the ground under them. That was the first thing
+      // the player ever saw of a chain weapon and it read as a floor decal stuck
+      // to the victim's feet -- the one thing a lightning strike must not look
+      // like, and far worse in a crowd, where a dozen bodies wore a dozen decals.
+      //
+      // So the convergence happens where the bolt is going to come FROM: up at the
+      // top of the drop. The charge is still unmistakably aimed -- it tightens, it
+      // brightens, its bead creeps down the drop as the moment arrives -- but it
+      // hangs in the air, and the enemy itself gets nothing until the bolt lands.
       if (cl.telegraph > 0.0F) {
         // 1 at the start of the window, 0 at the moment of the strike. Squared,
-        // so the ring spends most of its time close in and then closes the last
-        // stretch quickly -- a linear shrink reads as slow and even, which is
-        // the least alarming thing a telegraph can look like.
+        // so the charge spends most of its time loose and then tightens the last
+        // stretch quickly -- a linear shrink reads as slow and even, which is the
+        // least alarming thing a telegraph can look like.
         const float open = std::clamp(cl.telegraph / kChainTelegraph, 0.0F, 1.0F);
         const float f = 1.0F - open * open;
-        Color ring = cl.color;
-        ring.a = 0.10F + 0.35F * f;
+        const float chargeY = y + kChainSkyDrop;
         // Three rings closing at different rates reads as depth; one reads as a
-        // circle being scaled.
+        // circle being scaled. Drawn UP HERE around the charge, not on the floor
+        // around the victim.
         for (int k = 0; k < 3; ++k) {
           const float lag = 1.0F - static_cast<float>(k) * 0.16F;
           const float rf = std::max(0.0F, (f - static_cast<float>(k) * 0.12F) * lag);
-          Color c = ring;
-          c.a *= (1.0F - static_cast<float>(k) * 0.28F);
-          b.circle(x, y, 0.30F + 1.15F * (1.0F - rf), c);
+          Color c = cl.color;
+          c.a = (0.08F + 0.30F * f) * (1.0F - static_cast<float>(k) * 0.28F);
+          b.circle(x, chargeY, 0.22F + 0.95F * (1.0F - rf), c);
         }
-        // A crosshair so the eye has something to converge on, not just a
-        // shrinking outline.
-        Color tick = cl.color;
-        tick.a = 0.30F * f;
-        const float arm = 0.16F + 0.30F * (1.0F - f);
-        b.rectTopLeft(x - arm, y - 0.012F, arm * 2.0F, 0.024F, tick);
-        b.rectTopLeft(x - 0.012F, y - arm, 0.024F, arm * 2.0F, tick);
-        // The bolt itself is a bright pip at the centre so the ring reads as
-        // aiming AT something rather than as a free-floating circle.
-        Color pip = cl.color;
-        pip.a = 0.55F * f;
-        b.circle(x, y, 0.10F, pip);
+        // The gathering charge: a bright bead that creeps down the drop as the
+        // moment arrives, so the eye follows something that is ABOUT to fall on
+        // that specific body rather than something sitting on the floor.
+        const float beadY = chargeY - (chargeY - y) * 0.22F * f;
+        Color glow = cl.color;
+        glow.a = 0.30F * (0.35F + 0.65F * f);
+        Color core = cl.color;
+        core.a = 0.45F + 0.55F * f;
+        b.circle(x, beadY, 0.20F + 0.10F * f, glow);
+        b.circle(x, beadY, 0.09F + 0.05F * f, core);
         continue;
       }
 
@@ -9364,12 +9470,19 @@ void Game::render(core::render::Batcher& b, float alpha) {
           b.circle(bxx, byy, 0.17F, glow);
           b.circle(bxx, byy, 0.07F, core);
         }
-        // Ground flash where it lands, so the strike has a visible impact point.
-        // It only blooms once the drop has actually reached the ground.
+        // Impact: a short radial star at the point of contact, blooming only once
+        // the drop has actually reached it. It used to be two concentric rings
+        // centred on the enemy -- the same floor decal as the telegraph, and for
+        // the same reason it read as a marker rather than as a hit.
         Color flash = cl.color;
-        flash.a = 0.22F * alive * born;
-        for (int ringI = 1; ringI <= 2; ++ringI) {
-          b.circle(x, y, 0.18F * static_cast<float>(ringI) + 0.10F, flash);
+        flash.a = 0.30F * alive * born;
+        b.circle(x, y, 0.30F, flash);
+        for (int arm = 0; arm < 6; ++arm) {
+          const float a = static_cast<float>(arm) * (kPi / 3.0F);
+          const float r0 = 0.22F;
+          const float r1 = 0.22F + 0.40F * born;
+          b.circle(x + std::cos(a) * r0, y + std::sin(a) * r0, 0.05F, flash);
+          b.circle(x + std::cos(a) * r1, y + std::sin(a) * r1, 0.05F, flash);
         }
       } else {
         // Enemy-to-enemy arc. The bolt's previous tick position is where the
@@ -9437,27 +9550,56 @@ void Game::render(core::render::Batcher& b, float alpha) {
       // crescent and the hit box are the same object.
       const float depth = wv.width;
       const float spread = std::clamp(wv.spread, 0.15F, kPi);
-      constexpr int kSamples = 11;  // odd, so there is a sample exactly on the nose
-      for (int k = 0; k < kSamples; ++k) {
-        const float u = static_cast<float>(k) / static_cast<float>(kSamples - 1) * 2.0F - 1.0F;
+      // A crescent is a FILLED shape, not a stroke, so it is drawn as one: a
+      // body of overlapping circles running down the middle of the lune, plus a
+      // bright rim along its leading edge. The old version drew a single row of
+      // 11 circles along the outer arc, and at that spacing the inside of the
+      // curve came out scalloped and the horns came out as loose dots -- which is
+      // exactly the "strange circles" complaint. The sample count below is set by
+      // the worst case on the shape, which is the horns: the curve is moving
+      // fastest and the body is thinnest there, so that is where the spacing has
+      // to be tightest. kSamples is depth-independent for the same reason.
+      constexpr int kSamples = 41;  // odd, so there is a sample exactly on the nose
+      const auto bodyAt = [&](float u, float out, Color c, float scale) {
         // u = 0 is the nose; |u| = 1 are the horns. Parabolic in u, so the shape
-        // is symmetric about u = 0 by construction rather than by hand.
-        const float back = -depth * (1.0F - u * u);
+        // is symmetric about u = 0 by construction rather than by hand. The lune
+        // tapers toward both horns, which is what makes the tips read as points.
+        const float taper = 1.0F - u * u * 0.72F;
+        const float thickness = depth * 0.46F * taper;
+        const float dist = depth * (1.0F - u * u) - thickness * 0.5F;
         const float a = wv.angle + u * spread;
-        const float bx = x + std::cos(a) * back;
-        const float by = y + std::sin(a) * back;
-        // Brightest along the leading arc, fading toward the horns: the fade is a
-        // function of |u|, so it is symmetric too.
-        const float edge = std::abs(u);
-        Color c = wv.color;
-        c.a = (1.0F - edge * 0.75F) * 0.6F * fade;
-        b.circle(bx, by, depth * 0.30F * (1.0F - edge * 0.45F), c);
+        b.circle(x + std::cos(a) * dist, y + std::sin(a) * dist,
+                 thickness * 0.5F * out * scale, c);
+      };
+      // The body. Two passes so the middle of the lune is solid rather than
+      // translucent where the circles only just overlap.
+      Color body = wv.color;
+      body.a = 0.16F * fade;
+      for (int pass = 0; pass < 2; ++pass) {
+        for (int k = 0; k < kSamples; ++k) {
+          const float u =
+              static_cast<float>(k) / static_cast<float>(kSamples - 1) * 2.0F - 1.0F;
+          bodyAt(u, 1.0F, body, 1.0F);
+        }
+        body.a += 0.10F * fade;
       }
-      // A single hot point on the nose, so the direction of travel is readable
-      // at a glance even while the crescent is faint.
+      // The leading rim: the bright edge that shows which way the crescent is
+      // travelling, sampled on the outer parabola rather than the mid-line.
+      Color rim = wv.color;
+      rim.a = 0.55F * fade;
+      for (int k = 0; k < kSamples; ++k) {
+        const float u =
+            static_cast<float>(k) / static_cast<float>(kSamples - 1) * 2.0F - 1.0F;
+        const float dist = depth * (1.0F - u * u);
+        const float a = wv.angle + u * spread;
+        b.circle(x + std::cos(a) * dist, y + std::sin(a) * dist,
+                 depth * 0.055F * (1.0F - std::abs(u) * 0.45F), rim);
+      }
+      // A small hot point on the nose itself, so the direction of travel is
+      // readable at a glance even while the crescent is faint.
       Color tip = wv.color;
-      tip.a = 0.95F * fade;
-      b.circle(x, y, depth * 0.20F, tip);
+      tip.a = 0.85F * fade;
+      b.circle(x, y, depth * 0.13F, tip);
     }
   }
 

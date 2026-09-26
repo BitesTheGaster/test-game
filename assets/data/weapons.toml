@@ -483,7 +483,7 @@ beam_width = 1.3
 [[weapon]]
 id = "halo"
 name = "Radiant Halo"
-desc = "Dagger + Lance. Blades of light orbit you, reaping all they touch."
+desc = "Dagger + Lance. Blades of light walk a slow circle around you - with a ring of safe ground at your feet. They cut what they cross, not what hugs you."
 attack_type = "halo"
 damage = 40.0
 cooldown = 1.00
@@ -497,6 +497,13 @@ requires = ["dagger", "beam"]
 orbit_speed = 2.6
 beam_range = 6.0
 beam_width = 0.5
+halo_knockback = 2.4
+# These spokes do not start at you. There is a ring of safe ground inside them,
+# so a halo is a rotating wall you keep things OUT of rather than a guard that
+# keeps them off you -- and the hole is the price of the reach. It used to be the
+# Seraph Array's whole identity, on a weapon that was otherwise the Radiant Halo
+# with longer arms; the Seraph is gone and this is what it was actually for.
+halo_inner = 2.2
 
 [[weapon]]
 id = "blizzard"
@@ -546,7 +553,9 @@ zone_duration = 3.0
 # pairing: the Grave Bell hauls the horde into a knot and the barrage lands
 # inside that knot. With no bell standing it falls back to a plain reap.
 inferno_binds_to_lure = true
-
+# Its shells come DOWN on the Grave Bell, so its burning ground is a shaft with
+# the shell still up above it, not a flat disc. See ZoneEffect::fromAbove.
+zone_from_above = true
 [[weapon]]
 id = "chaos"
 name = "Chaos Sphere"
@@ -641,7 +650,7 @@ sweep_lead = 2.2
 [[weapon]]
 id = "vortex"
 name = "Void Gyre"
-desc = "Dagger + Scythe + Void Orb. Suction zones circle you and drag prey into their cores. More projectiles = more AND bigger zones (up to a cap)."
+desc = "Dagger + Scythe + Void Orb. Suction zones circle you and drag prey into their cores. More projectiles means more wells, and bigger ones."
 attack_type = "vortex"
 damage = 40.0
 cooldown = 1.00
@@ -683,31 +692,6 @@ prism_max_targets = 5
 # reflections, so a pierce card visibly turns one beam into a zig-zag.
 prism_ricochet = 4.5
 beam_duration = 0.18
-
-[[weapon]]
-id = "seraph"
-name = "Seraph Array"
-desc = "Drill + Crossbow + Barbed Whip. Heavy wings of light walk a slow circle around you - with a hole at your feet. They cut what they cross, not what hugs you."
-attack_type = "halo"
-damage = 60.0
-cooldown = 0.90
-projectiles = 3
-proj_speed = 0.0
-proj_life = 0.0
-pierce = 6
-spread = 0.0
-proj_color = [1.0, 0.96, 0.62, 1.0]
-requires = ["drill", "crossbow", "whip"]
-orbit_speed = 3.1
-beam_range = 8.0
-beam_width = 0.62
-halo_knockback = 2.4
-# The whole difference from the Radiant Halo, which is otherwise the same weapon
-# with longer arms: these spokes do not start at you. There is a ring of safe
-# ground inside them, so this is a rotating wall you keep things OUT of rather
-# than a guard that keeps them off you. The hole is the price of the reach, and
-# it is why the Seraph is not simply a better halo.
-halo_inner = 2.2
 
 [[weapon]]
 id = "eventhorizon"

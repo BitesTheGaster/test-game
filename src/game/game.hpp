@@ -217,9 +217,9 @@ struct PlayerStats {
   float aimJitter = 0.0F;
   int extraChoice = 0;    // +N level-up cards
   int rerollCharges = 0;  // +N extra rerolls (the base budget is already 1)
-  // Extra weapon slots. The arsenal starts at kBaseWeapons (4); the "Arsenal
-  // Core" card adds one slot per stack (3 stacks) and the "Hollow Chamber"
-  // unique adds the last one, so a fully stacked build holds kMaxWeapons (8).
+  // Extra weapon slots. The arsenal starts at kBaseWeapons (4) and the single
+  // "Arsenal Core" card adds one per stack (3 stacks), so a fully stacked build
+  // holds exactly kMaxWeapons (7).
   int weaponSlots = 0;
   float thornsDmg = 0.0F; // AoE burst around player on hit
   int adrenaline = 0;     // speed burst when HP is low
@@ -503,14 +503,15 @@ public:
   [[nodiscard]] int weaponCap() const {
     return std::min(kMaxWeapons, kBaseWeapons + std::max(0, stats_.weaponSlots));
   }
-  // The arsenal starts at 4 weapons. Slot cards add more: "Arsenal Core" gives
-  // +1 per stack (3 stacks) and "Hollow Chamber" is the one-shot +1 that takes
-  // the build to the full eight. Public so a test can assert the shipped cap
-  // against the storage array rather than hard-coding a number.
+  // The arsenal starts at 4 weapons and the ONE slot card ("Arsenal Core", 3
+  // stacks) takes a full build to 7. It used to be two cards -- a 3-stack and a
+  // one-shot -- for a cap of 8, which meant two level-up screens describing the
+  // same decision and one of them miscounting the total. Public so a test can
+  // assert the shipped cap against the storage array rather than hard-coding it.
   static constexpr int kBaseWeapons = 4;
-  static constexpr int kMaxWeapons = 8;
-  // Hard cap on "+1 weapon slot" stacks, whatever the content says. Content can
-  // ship fewer (today: 3 + 1); it can never ship more than this.
+  static constexpr int kMaxWeapons = 7;
+  // Hard cap on "+1 weapon slot" stacks, whatever the content says. Content ships
+  // exactly this many today; it can never ship more.
   static constexpr int kMaxSlotCards = kMaxWeapons - kBaseWeapons;
 
   // --- Fast-enemy pacing ----------------------------------------------------
@@ -648,6 +649,7 @@ public:
     float zoneDuration = 0;
     float zoneDps = 0;
     int zoneMaxPools = 0;
+    bool zoneFromAbove = false;
     float chainJumpRange = 0;
     int chainMaxJumps = 0;
     float chainDamageMul = 0;
@@ -1151,6 +1153,9 @@ private:
     float zoneDuration = 4.0F;
     float zoneDps = 15.0F;
     int zoneMaxPools = 3;
+    /// The pool is laid by a shell that fell on it, so it is drawn as a shaft
+  /// rather than as a low disc. See ZoneEffect::fromAbove.
+  bool zoneFromAbove = false;
 
     // Chain (evolution)
     float chainJumpRange = 2.5F;

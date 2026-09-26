@@ -247,6 +247,7 @@ Content loadContent(const std::filesystem::path& dir) {
       def.zoneRadius = (*t)["zone_radius"].value_or(1.2F);
       def.zoneDuration = (*t)["zone_duration"].value_or(4.0F);
       def.zoneDps = (*t)["zone_dps"].value_or(15.0F);
+      def.zoneFromAbove = (*t)["zone_from_above"].value_or(false);
       def.zoneMaxPools = static_cast<int>((*t)["zone_max_pools"].value_or(3));
 
       // Chain

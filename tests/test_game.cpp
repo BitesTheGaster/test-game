@@ -1619,8 +1619,9 @@ TEST_CASE("Halo evolves dagger + beam into beams orbiting the player") {
   g.testAddWeaponUpgrade(0, "w_proj_add", 1.0F);
   REQUIRE(g.debugCounts().halos == 3);
 
-  // An enemy in the ring is carved by the sweeping spokes over time.
-  g.testSpawnEnemyAt(2.0F, 0.0F);
+  // An enemy out in the ring is carved by the sweeping spokes over time. It has
+  // to be past the halo's dead centre, or it is standing in the safe hole.
+  g.testSpawnEnemyAt(4.0F, 0.0F);
   for (int i = 0; i < 180; ++i) g.advance(1.0F / 60.0F, in);
   REQUIRE(g.testFirstEnemyHp() < 100000.0F);
 }
@@ -1935,9 +1936,11 @@ TEST_CASE("Damage multiplier scales exactly once per attack type") {
       // deterministic landing spot (t = 2*vy/g, x = speed*t).
       const float gAcc = 30.0F;
       const float vy = std::sqrt(2.0F * gAcc * def.bombArcHeight);
+      // A halo's spokes do not start at the player, so the probe has to go past
+      // whatever dead zone that weapon declares or it is standing in the hole.
       const float sx = (def.attackType == game::AttackType::Bomb)
                            ? def.projSpeed * (2.0F * vy / gAcc)
-                           : 1.5F;
+                           : def.haloInner + 1.5F;
       g.testSpawnEnemyAt(sx, 0.0F);
       g.testAddWeapon(wi);
       game::FrameInput in{};
@@ -3221,8 +3224,11 @@ TEST_CASE("The roster is 33 weapons: 18 base, 11 evolutions, 4 supers") {
   CAPTURE(super);
   REQUIRE(base == 18);
   REQUIRE(evo == 11);
-  REQUIRE(super == 4);
-  REQUIRE(content.weapons.size() == 33);
+  // Three supers, not four: the Seraph Array was a Radiant Halo with longer arms,
+  // and its one real idea (a ring of safe ground at your feet) now belongs to the
+  // Halo. Trading a reskin for the rule it was hiding was the better deal.
+  REQUIRE(super == 3);
+  REQUIRE(content.weapons.size() == 32);
 
   // Every evolution's prerequisites actually exist, and a super really is
   // reachable (three base weapons, not two evolutions of each other).
@@ -4188,16 +4194,19 @@ TEST_CASE("The arsenal cap is four plus real slot cards, and the array is big en
       ++slotStacks;
     }
   }
-  // At least two different slot cards: the stacking one and the one-shot that
-  // completes the roster, so the last weapon slot is not behind a 3x grind.
-  REQUIRE(slotCards >= 2);
+  // Exactly one slot card, and it stacks. There used to be a second one -- a
+  // unique that also said "+1 weapon slot" and also claimed the total was eight
+  // when it is seven -- so a level-up screen could be spent on a choice between
+  // two descriptions of the same decision. One card, three stacks, and the
+  // arsenal is a fixed shape the whole way up.
+  REQUIRE(slotCards == 1);
   REQUIRE(slotStacks == game::Game::kMaxSlotCards);
   REQUIRE(g.weaponCap() == game::Game::kBaseWeapons + slotStacks);
-  REQUIRE(game::Game::kMaxWeapons == 8);
+  REQUIRE(game::Game::kMaxWeapons == 7);
   REQUIRE(g.weaponCap() <= game::Game::kMaxWeapons);
 
   // The array really is big enough for the full cap: fill it and confirm the
-  // eighth slot accepts a weapon (a short weapons_[] would write out of bounds
+  // last slot accepts a weapon (a short weapons_[] would write out of bounds
   // here rather than failing a REQUIRE).
   std::size_t armed = g.armedWeaponIds().size();
   for (std::size_t i = 0; i < content.weapons.size() && armed < static_cast<std::size_t>(
@@ -4482,9 +4491,21 @@ TEST_CASE("Fast enemies are held back to 4-5 minutes, then ramp back up to speed
     // Locked at t=0 no matter what its own unlock_at says.
     REQUIRE_FALSE(g.testTypeCanSpawn(static_cast<int>(i)));
     REQUIRE(g.typeLockedUntil(static_cast<int>(i)) >= game::Game::kFastEnemyMinTime);
-    // And unlocked by the top of the requested window, so the floor is a floor
-    // and not a new hard gate that strands a type forever.
-    REQUIRE(g.typeLockedUntil(static_cast<int>(i)) <= 300.0F);
+    // The `fast` floor is a FLOOR: it holds a quick type back until
+    // kFastEnemyMinTime, but it must never push one out past the time its own
+    // unlock_at already asked for. A type scheduled for 8:00 is gated by its own
+    // schedule, not by the fast rule, and asserting an absolute ceiling here used
+    // to be a way of saying "no quick type may ever unlock after 5:00" -- which is
+    // a statement about the roster, not about the floor, and broke the moment the
+    // heavies were spread out across the run.
+    const float own = content.enemies[i].unlockAt;
+    const float want = std::max(own, game::Game::kFastEnemyMinTime);
+    REQUIRE(g.typeLockedUntil(static_cast<int>(i)) == Catch::Approx(want));
+    // And it really is a floor for the ones that ask for less than it.
+    if (own < game::Game::kFastEnemyMinTime) {
+      REQUIRE(g.typeLockedUntil(static_cast<int>(i)) ==
+              Catch::Approx(game::Game::kFastEnemyMinTime));
+    }
   }
 
   // The ramp: at t=0 the authored (slowed) speed, at kSpeedRampFullTime the
@@ -5649,44 +5670,43 @@ TEST_CASE("The Void Nova is cast wide and rushes IN; the Shock Core only ever gr
   REQUIRE(expand.back() > 1.0F);
 }
 
-TEST_CASE("The Seraph Array's wings leave a ring of safe ground at your feet") {
-  // "A better Halo" was the complaint, and reach alone is a better Halo. The
-  // rule is `halo_inner`: the spokes do not start at the player, so there is a
-  // hole at the centre. Reach is paid for with safety, which is a choice the
-  // plain Halo never asks you to make.
+TEST_CASE("The Radiant Halo's spokes leave a ring of safe ground at your feet") {
+  // "A better Halo" was the complaint about the Seraph Array, and reach alone is a
+  // better Halo -- so the Seraph is gone and its one real idea was handed to the
+  // Halo it was copying. The rule is `halo_inner`: the spokes do not start at the
+  // player, so there is a hole at the centre. Reach is paid for with safety, which
+  // is a choice the Halo now always asks you to make.
   const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
-  REQUIRE(content.weapon("seraph")->haloInner > 0.0F);
-  REQUIRE(content.weapon("halo")->haloInner == 0.0F);
+  REQUIRE(content.weapon("halo")->haloInner > 0.0F);
+  // And there is no longer a second halo to confuse it with.
+  REQUIRE(content.weapon("seraph") == nullptr);
+  std::size_t halos = 0;
+  for (const auto& w : content.weapons) {
+    if (w.attackType == game::AttackType::Halo) ++halos;
+  }
+  REQUIRE(halos == 1);
 
   // One body practically under the player's feet. Nothing else is on screen, so
   // auto-target aims at it and the spoke sweeps straight over where it stands.
-  SoloWeapon seraph("seraph");
-  REQUIRE(seraph.slot >= 0);
-  seraph.arm();
-  seraph.g.testSpawnEnemyAt(0.5F, 0.0F);
-  seraph.g.testAdvance(1.5F);
-  const float hugging = seraph.g.testEnemyHpNear(0.5F, 0.0F);
-  CAPTURE(hugging);
-  // The wings have swept over it many times and never once reached it.
-  REQUIRE(hugging == Catch::Approx(100000.0F));
-  // The hole is real and measurable, not just "smaller numbers".
-  const auto inners = seraph.g.testHaloBeamInners();
-  REQUIRE(!inners.empty());
-  for (const float in : inners) REQUIRE(in > 0.0F);
-
-  // The plain Halo, same body: its spokes start at the player, so it is a guard
-  // and it does hit.
   SoloWeapon halo("halo");
   REQUIRE(halo.slot >= 0);
   halo.arm();
   halo.g.testSpawnEnemyAt(0.5F, 0.0F);
   halo.g.testAdvance(1.5F);
-  const float guarded = halo.g.testEnemyHpNear(0.5F, 0.0F);
-  CAPTURE(guarded);
-  REQUIRE(guarded < 100000.0F);
-  const auto plainInners = halo.g.testHaloBeamInners();
-  REQUIRE(!plainInners.empty());
-  for (const float in : plainInners) REQUIRE(in == Catch::Approx(0.0F));
+  const float hugging = halo.g.testEnemyHpNear(0.5F, 0.0F);
+  CAPTURE(hugging);
+  // The spokes have swept over it many times and never once reached it.
+  REQUIRE(hugging == Catch::Approx(100000.0F));
+  // The hole is real and measurable, not just "smaller numbers".
+  const auto inners = halo.g.testHaloBeamInners();
+  REQUIRE(!inners.empty());
+  for (const float in : inners) REQUIRE(in > 0.0F);
+
+  // The same weapon DOES reach a body out at the rim, so the dead zone is a hole
+  // and not the whole ring.
+  halo.g.testSpawnEnemyAt(4.0F, 0.0F);
+  halo.g.testAdvance(1.5F);
+  REQUIRE(halo.g.testEnemyHpNear(4.0F, 0.0F) < 100000.0F);
 }
 
 TEST_CASE("The Event Horizon's wells hoard and implode; the Void Gyre's never end") {
@@ -6167,12 +6187,19 @@ TEST_CASE("The difficulty pass: level-ups arrive sooner and elites arrive later"
   REQUIRE(atTwenty > atTen);
   // The cap holds: the old one was 30x, which at twenty minutes was most of
   // what a build could be worth.
-  REQUIRE(atHour <= 22.0F);
+  REQUIRE(atHour <= 20.0F);
   // And the ramp is real but shallower than it was. At ten minutes the old curve
   // was 11.5x; a build that is still finishing its core damage and fire-rate
-  // cards at that point cannot answer 11.5x, so 8.4x is the difference between
+  // cards at that point cannot answer 11.5x, so 7.5x is the difference between
   // a fight and a wall.
-  REQUIRE(atTen < 9.0F);
+  REQUIRE(atTen < 8.0F);
+  // The complaint this pass answers is specifically about two and three minutes,
+  // so that window is asserted on its own rather than left to the shape of the
+  // curve. At 2:30 an ordinary enemy used to be at 2.6x its opening HP; the
+  // heavies have been moved out of this window instead (see the unlock test), and
+  // what is left here has to be killable.
+  REQUIRE(scaledHpAt(150.0F) < 2.15F);
+  REQUIRE(scaledHpAt(180.0F) < 2.35F);
   // Not flat either. A ramp that stopped growing would be a different game.
   REQUIRE(atTwenty > 2.0F * atStart);
 }
@@ -6331,4 +6358,89 @@ TEST_CASE("A hooking wave hands its catch across the fan, a plain one shoves it"
   // and below it the herd is not happening.
   REQUIRE(lashAcross > 0.0F);
   REQUIRE(lashAcross > 0.35F * lashAlong);
+}
+
+TEST_CASE("The Void Nova drags victims to the edge of its ring, not onto the player") {
+  // "It pulls the enemies to me and I die" was the complaint, and it was right:
+  // the pull had no floor, so a contracting ring walked the whole crowd onto the
+  // player's own position and detonated there. The fantasy is a knot, not a
+  // suicide button, so the floor now tracks the ring inward -- bodies line up
+  // just outside the shrinking circle and are held there while it closes.
+  //
+  // The number that matters is the closest anything ever gets, so this measures
+  // that rather than whether anything moved at all.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  REQUIRE(content.weapon("nova")->novaContract);
+  REQUIRE(content.weapon("nova")->novaPull > 0.0F);
+
+  SoloWeapon s{"nova", 23};
+  s.arm();
+  // A ring of bodies INSIDE the nova's cast radius -- it is cast at full width and
+  // contracts, so a body outside that is never touched at all -- but well outside
+  // the pull floor, so the pull has real work to do.
+  const float cast = content.weapon("nova")->novaMaxRadius;
+  REQUIRE(cast > 4.0F);
+  for (int k = 0; k < 8; ++k) {
+    const float a = 2.0F * 3.14159265F * static_cast<float>(k) / 8.0F;
+    s.g.testSpawnEnemyAt(std::cos(a) * cast * 0.95F, std::sin(a) * cast * 0.95F);
+  }
+  s.g.testSetFirstEnemyKnockbackRes(0.0F);
+  s.g.testAdvance(2.5F);
+
+  float closest = 1e9F;
+  const auto pos = s.g.testEnemyPositions();
+  REQUIRE(pos.size() >= 16);
+  for (std::size_t i = 0; i + 1 < pos.size(); i += 2) {
+    closest = std::min(closest, std::sqrt(pos[i] * pos[i] + pos[i + 1] * pos[i + 1]));
+  }
+  CAPTURE(closest);
+  // Test bodies are radius 0.3 and the player is 0.35, so contact is 0.65. The
+  // floor is well outside that, with room for a body to be dragged to the ring
+  // and stop there.
+  REQUIRE(closest > 1.2F);
+  // And they really were pulled: without the floor this ran to ~0.3.
+  REQUIRE(closest < 6.5F);
+}
+
+TEST_CASE("No minute of the run opens more than two enemy types") {
+  // This is the "after two or three minutes the screen is full of things I cannot
+  // kill" wall, measured. `unlock_at` used to be sorted by creature size, which
+  // put the brute, the abomination, the golem and the juggernaut -- 140, 200, 320
+  // and 420 HP -- into the single minute from 2:00 to 2:55, and that is also where
+  // the spawn interval was accelerating hardest. Four heavy bodies at once, at
+  // 2-3x HP scale, is a wall and not a curve.
+  //
+  // Two per minute is a rule the content has to obey rather than a number the
+  // engine happens to produce, so a future roster edit that piles the heavies up
+  // again fails here instead of in someone's run.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+
+  // The opening minute is exempt: the first three types have to be there for the
+  // first minute to be playable at all, and they are all under 35 HP.
+  int inMinute = 0;
+  float minuteOf = 0.0F;
+  float worst = 0.0F;
+  for (const auto& e : content.enemies) {
+    if (e.unlockAt < 60.0F) {
+      REQUIRE(e.hp < 40.0F);
+      continue;
+    }
+    const float m = std::floor(e.unlockAt / 60.0F);
+    if (m != minuteOf) {
+      minuteOf = m;
+      inMinute = 0;
+    }
+    ++inMinute;
+    worst = std::max(worst, static_cast<float>(inMinute));
+    CAPTURE(e.id);
+    CAPTURE(e.unlockAt);
+    CAPTURE(inMinute);
+    REQUIRE(inMinute <= 2);
+  }
+  CAPTURE(worst);
+  // And the run has to actually use the whole roster -- a schedule that satisfies
+  // the rule by holding everything back to minute ten is not a fix.
+  float last = 0.0F;
+  for (const auto& e : content.enemies) last = std::max(last, e.unlockAt);
+  REQUIRE(last >= 540.0F);
 }

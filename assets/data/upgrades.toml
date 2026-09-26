@@ -761,24 +761,6 @@ max_stacks = 2
 weapon = "tidewhip"
 
 [[upgrade]]
-id = "w_seraph_power"
-name = "Wing Polish"
-desc = "Seraph Array: +25 damage"
-effect = "w_damage_add"
-value = 25
-max_stacks = 2
-weapon = "seraph"
-
-[[upgrade]]
-id = "w_seraph_wings"
-name = "Winged Host"
-desc = "Seraph Array: +1 wing"
-effect = "w_proj_add"
-value = 1
-max_stacks = 2
-weapon = "seraph"
-
-[[upgrade]]
 id = "w_horizon_power"
 name = "Singularity Tuning"
 desc = "Event Horizon: +20 damage"
@@ -828,22 +810,23 @@ kind = "unique"
 [[upgrade]]
 id = "u_reroll"
 name = "Second Chance"
-desc = "+1 free reroll per level-up (total two)"
+desc = "+1 free reroll at every level-up"
 effect = "reroll_add"
 value = 1
 max_stacks = 1
 kind = "unique"
 
-# The arsenal is 4 weapons wide to begin with. This is the only way past that:
-# one extra slot per stack, three stacks at most (so 7 weapons in a full build).
+# The arsenal is 4 weapons wide to begin with, and this is the only way past that.
+# It used to exist twice -- a common 3-stack card and a unique 1-stack one that
+# promised "your arsenal holds eight". That is two level-up screens spent on the
+# same decision, and the second one was wrong about the number too: 4 + 3 is 7.
 [[upgrade]]
 id = "u_arsenal_core"
 name = "Arsenal Core"
-desc = "+1 weapon slot (3 stacks max)"
+desc = "+1 weapon slot"
 effect = "weapon_slot_add"
 value = 1
 max_stacks = 3
-
 [[upgrade]]
 id = "u_adrenaline"
 name = "Adrenaline"
@@ -892,7 +875,7 @@ kind = "unique"
 [[upgrade]]
 id = "u_last_stand"
 name = "Last Stand"
-desc = "Taking a hit below 20% HP grants 1s of invulnerability (20s cooldown)"
+desc = "Dropping below 20% HP grants a second of invulnerability"
 effect = "last_stand"
 value = 1
 max_stacks = 1
@@ -1143,6 +1126,16 @@ weapon = "tidewhip"
 # parameter that weapon's identity is actually made of, not a flat damage bump.
 
 [[upgrade]]
+id = "uw_halo_wingbeat"
+name = "Wingbeat"
+desc = "Radiant Halo: the spokes spin 60% faster, shove harder, and the safe ring at your feet closes in"
+effect = "w_unique_wingbeat"
+value = 1
+max_stacks = 1
+kind = "unique"
+weapon = "halo"
+
+[[upgrade]]
 id = "uw_halo_corona"
 name = "Corona Mantle"
 desc = "Radiant Halo: beams shove for 6, 40% wider, 15% longer, +20% damage"
@@ -1236,16 +1229,6 @@ value = 1
 max_stacks = 1
 kind = "unique"
 weapon = "whip"
-
-[[upgrade]]
-id = "uw_seraph_wingbeat"
-name = "Wingbeat"
-desc = "Seraph Array: the wings spin 60% faster, shove for 5 and burn 30% wider"
-effect = "w_unique_wingbeat"
-value = 1
-max_stacks = 1
-kind = "unique"
-weapon = "seraph"
 
 [[upgrade]]
 id = "uw_horizon_singularity"
@@ -1415,14 +1398,6 @@ value = 1
 max_stacks = 3
 weapon = "vortex"
 
-[[upgrade]]
-id = "hollow_chamber"
-name = "Hollow Chamber"
-desc = "ONE more weapon slot. Your arsenal holds eight"
-effect = "weapon_slot_add"
-value = 1
-max_stacks = 1
-kind = "unique"
 
 # --- Abilities (J / K / L) ----------------------------------------------------
 # The three abilities are live from the first second of a run, so these cards
