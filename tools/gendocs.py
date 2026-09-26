@@ -89,21 +89,54 @@ def tier_ladder_md() -> str:
     elite_min, elite_max, champ_min, champ_max, lord_min, lord_max = need(
         k, "kEliteHpMin", "kEliteHpMax", "kChampionHpMin", "kChampionHpMax",
         "kOverlordHpMin", "kOverlordHpMax")
-    champ_slope, champ_cap = need(k, "kChampionChanceSlope", "kChampionChanceCap")
-    lord_slope, lord_cap = need(k, "kOverlordChanceSlope", "kOverlordChanceCap")
-    champ_gate, lord_gate = need(g, "kChampionPressure", "kOverlordPressure")
+    # What opens a tribunal is a KILL MILESTONE, not a rate. It used to be read as
+    # kChampionPressure/kOverlordPressure, which was a decaying score the whole
+    # game could no longer supply once tiers moved onto a clock -- so the two tiers
+    # above the elite became unreachable and the docs were cheerfully describing a
+    # difficulty curve that was not running.
+    champ_kills, lord_kills = need(g, "kChampionKills", "kOverlordKills")
     elite_time, champ_time, lord_time = need(
         g, "kEliteMinTime", "kChampionMinTime", "kOverlordMinTime")
-    # The elite cap is a bare literal in tierSpawnCap's switch, because it is the
-    # end of a curve rather than a knob of its own. Read it the same way, and fail
-    # the same way, rather than typing the number here and forgetting it.
-    elite_cap = re.search(r"case\s+1\s*:\s*return\s+([0-9.]+)F\s*;", cpp)
-    if elite_cap is None:
+    # The cadence is the whole frequency story now, so it is read rather than
+    # typed. The per-spawn chances it replaced are gone; if this regex stops
+    # matching, the docs must be rewritten rather than quietly printing 0.
+    cadence_table = {name: float(v) for name, v in re.findall(
+        r"constexpr float (\w+Cadence(?:Min|Max)) = ([0-9.]+)F;", cpp)}
+    cadence_vals = {}
+    for tier, lo_name, hi_name in re.findall(
+            r"case\s+([123])\s*:\s*return\s*\{(k\w+CadenceMin),\s*(k\w+CadenceMax)\};",
+            cpp):
+        if lo_name not in cadence_table or hi_name not in cadence_table:
+            raise SystemExit(
+                f"tools/gendocs.py: tier {tier} names cadence constants "
+                f"{lo_name}/{hi_name} that game.cpp does not define. "
+                "Update tier_ladder_md."
+            )
+        cadence_vals[int(tier)] = (cadence_table[lo_name], cadence_table[hi_name])
+    if set(cadence_vals) != {1, 2, 3}:
         raise SystemExit(
-            "tools/gendocs.py: could not read the elite spawn cap out of "
-            "tierSpawnCap in game.cpp. Update tier_ladder_md."
+            "tools/gendocs.py: could not read the three tier cadences out of "
+            f"tierCadence in game.cpp (got {sorted(cadence_vals)}). "
+            "Update tier_ladder_md."
         )
-    live_cap, grace = need(g, "kLiveTierCap", "kTierGrace")
+    comfort_mul = float(re.search(
+        r"kTierComfortMul = ([0-9.]+)F", cpp).group(1))
+    # The per-tier live caps are one array literal, read positionally so a
+    # balance pass that moves a number cannot leave the docs describing the old
+    # one. Missing = the docs are wrong, so this fails rather than defaulting.
+    cap_row = re.search(
+        r"kTierLiveCap = \{0,\s*(\d+),\s*(\d+),\s*(\d+)\}", hpp)
+    if cap_row is None:
+        raise SystemExit(
+            "tools/gendocs.py: could not read kTierLiveCap out of game.hpp. "
+            "Update tier_ladder_md."
+        )
+    live_caps = {1: int(cap_row.group(1)), 2: int(cap_row.group(2)),
+                 3: int(cap_row.group(3))}
+    trait_counts = dict(
+        (int(t), int(c)) for t, c in re.findall(
+            r"case (\d): return (\d+);", re.search(
+                r"int traitsForTier\(int tier\) \{(.*?)\n\}", cpp, re.S).group(1)))
 
     # Touch / speed / XP come from the tierBuffs switch, one row per tier.
     rows = re.findall(
@@ -134,46 +167,60 @@ def tier_ladder_md() -> str:
         "a multiplier on whatever trash archetype it rolled, so a champion is always",
         "the same fight wearing a different body. HP is a range, rolled per spawn.",
         "",
-        "| Tier | HP x trash | Touch | Speed | XP | Opens at | Gate | Rare at best |",
-        "|------|-----------|-------|-------|----|----------|------|--------------|",
+        "**Each tier is x5 the one below it.** 6.5x, 32.5x, 162.5x on the midpoints,",
+        "which is a number you can hold in your head: each rung is a different fight,",
+        "not a bigger version of the last one.",
+        "",
+        "| Tier | HP x trash | Touch | Speed | XP | Traits | Opens at | Gate | Arrives |",
+        "|------|-----------|-------|-------|----|--------|----------|------|---------|",
     ]
     for tier in (1, 2, 3):
         lo, hi = hp[tier]
         touch, spd, xp = buffs[tier]
+        clo, chi = cadence_vals[tier]
         if tier == 1:
             opens = mm(elite_time)
-            gate = "the elite rate rises with the clock"
-            rare = f"{g(float(elite_cap.group(1)) * 100)}% of spawns"
+            gate = "the clock alone"
         elif tier == 2:
             opens = mm(champ_time)
-            gate = f"tier-1 pressure {g(champ_gate)}"
-            rare = f"{g(champ_cap * 100)}% of spawns"
+            gate = f"after {int(champ_kills)} elites"
         else:
             opens = mm(lord_time)
-            gate = f"tier-2 pressure {g(lord_gate)}"
-            rare = f"{g(lord_cap * 100)}% of spawns"
+            gate = f"after {int(lord_kills)} champions"
         out.append(
             f"| {names[tier]} | {g(lo)}-{g(hi)} | x{g(touch)} | x{g(spd)} | x{g(xp)} "
-            f"| {opens} | {gate} | {rare} |"
+            f"| {trait_counts[tier]} | {opens} | {gate} "
+            f"| every {g(clo)}-{g(chi)}s |"
         )
     out += [
         "",
-        f"At most **{int(live_cap)}** of a tier are alive at once, and a promotion",
-        f"is followed by {g(grace)}s of grace, so a fresh {names[2].lower()} never lands",
-        "on top of the one that just died.",
+        "**The frequency is the balance here, not the HP.** A tier used to be a share",
+        "of every spawn, which made it a tax on the trash rather than an event: an",
+        "elite was one body in ten, forever, so a busy screen produced a champion",
+        "every seven seconds -- and since every tiered body drops a box, a ten-minute",
+        "run handed over 42 chests and the player had the whole arsenal by minute",
+        "three. A tier is on a clock now, and the box is the only thing in the game",
+        "that decides how often you are handed new cards.",
         "",
-        "**The frequency is the balance here, not the HP.** A champion is meant to",
-        "be an event. Its chance of any given spawn is",
-        f"`min({g(champ_cap * 100)}%, (pressure - {g(champ_gate)}) * {g(champ_slope)})`,",
-        "so a player who has only just earned one gets a trickle, and a build far",
-        "past the gate still tops out at one in forty. An overlord is the run's boss:",
-        f"`min({g(lord_cap * 100)}%, (pressure - {g(lord_gate)}) * {g(lord_slope)})`,",
-        "a couple in a ten-minute run, each one a fight the player had to make room",
-        "for.",
+        "An arrival is **one or two bodies**, or **three or four** once you are far",
+        "enough past that tier to be handling it rather than meeting it. A player who",
+        "has outgrown a tier gets more of the same fight rather than a new label,",
+        "which is the only answer that keeps the tier's identity readable. Per tier, at",
+        f"most {live_caps[1]}, {live_caps[2]} and {live_caps[3]} alive at once: an overlord",
+        "is the run's boss and there is only ever one.",
         "",
-        "A floor matters as much as a ceiling: capping a boss at",
-        f"{g(champ_cap * 100)}% only means something if the garbage below it is more",
-        "common than that, which is what the elite rate is for.",
+        "A tribunal is a **milestone you have reached**, not a mood you are in. Kill",
+        f"{int(champ_kills)} elites and champions are yours for the rest of the run; kill",
+        f"{int(lord_kills)} champions and overlords are. It does not close again. A",
+        "struggling build simply never gets there, which is the punishment, and it is a",
+        "thing the player can see and count towards in the bestiary.",
+        "",
+        "The gate used to be a decaying score instead, calibrated against a supply of",
+        "elite kills that a clock-driven elite no longer produces -- so the two tiers",
+        "above the elite were unreachable, and an unreachable gate is worse than a wrong",
+        "one, because the curve that was supposed to be adapting was simply absent.",
+        "Each tier's clock starts when its tribunal opens, so a champion earned at",
+        "minute nine does not land on the same frame.",
         "",
         "The XP multiplier is deliberately NOT scaled down with the HP. An elite is a",
         "reward before it is a threat, and if killing one is worse value than killing",

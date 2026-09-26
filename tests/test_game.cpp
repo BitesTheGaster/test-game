@@ -10,6 +10,7 @@
 #include "core/sim/fixed_timestep.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <array>
 #include <cmath>
 #include <cstdio>
@@ -272,17 +273,26 @@ TEST_CASE("enemy resistances scale with time, tier and the resistant trait") {
           game::enemyLifestealResistance(900.0F, 0, false));
 }
 
-TEST_CASE("traitsForTier gives elites exactly one bonus and stronger tiers more") {
-  REQUIRE(game::traitsForTier(0, 0.0F) == 0);
-  REQUIRE(game::traitsForTier(1, 0.0F) == 1);
-  REQUIRE(game::traitsForTier(1, 9999.0F) == 1); // elite always exactly one
-  REQUIRE(game::traitsForTier(2, 0.0F) >= 2);
-  REQUIRE(game::traitsForTier(2, 300.0F) > game::traitsForTier(2, 0.0F));
-  REQUIRE(game::traitsForTier(3, 0.0F) >= 4);
-  REQUIRE(game::traitsForTier(3, 600.0F) > game::traitsForTier(3, 0.0F));
-  // Overlords always roll more than champions, who roll more than elites.
-  REQUIRE(game::traitsForTier(3, 0.0F) > game::traitsForTier(2, 0.0F));
-  REQUIRE(game::traitsForTier(2, 0.0F) > game::traitsForTier(1, 0.0F));
+TEST_CASE("traitsForTier is 1 / 3 / 7 and does not move with the clock") {
+  // Flat, and on purpose. The old rule was "2, plus one after five minutes" for a
+  // champion and "4, plus one after ten" for an overlord, which is a rule nobody
+  // learns: the player cannot predict what is walking in, and a champion at
+  // 6:00 is a different fight from the same label at 4:00.
+  REQUIRE(game::traitsForTier(0) == 0);
+  REQUIRE(game::traitsForTier(1) == 1);
+  REQUIRE(game::traitsForTier(2) == 3);
+  REQUIRE(game::traitsForTier(3) == 7);
+
+  // The ladder is strictly increasing, so a stronger tier is always a strictly
+  // bigger problem. The old ">= 2" and ">= 4" let this drift downward silently:
+  // dropping a champion to 1 trait would have kept the test green.
+  REQUIRE(game::traitsForTier(3) > game::traitsForTier(2));
+  REQUIRE(game::traitsForTier(2) > game::traitsForTier(1));
+
+  // Seven out of a pool of eleven, so the top two tiers are genuinely dense. An
+  // overlord at 4 could be told apart from a champion at 3 by the banner alone.
+  REQUIRE(game::traitsForTier(3) >= 6);
+  REQUIRE(game::traitsForTier(2) <= 4);
 }
 
 TEST_CASE("elite+ enemies always get boosted stats and grow with tier") {
@@ -2826,7 +2836,7 @@ TEST_CASE("Menu key repeat fires once per press, then paces itself") {
   // Holding does nothing for the initial delay: this is the "arrows skip three
   // rows the instant you touch them" fix.
   float held = 0.0F;
-  while (held < core::input::KeyRepeat::kInitialDelay - 0.01F) {
+  while (held < core::input::KeyRepeat::kInitialDelay - 0.05F) {
     REQUIRE_FALSE(up.update(true, false, 0.02F));
     held += 0.02F;
   }
@@ -3061,7 +3071,7 @@ TEST_CASE("Test sandbox rolls back the state it used to leak") {
   REQUIRE(g.playerHp() < entryHp);
 }
 
-TEST_CASE("Champions wait for elites to be easy, overlords for champions") {
+TEST_CASE("Champions wait for four elites, overlords for two champions") {
   const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
   game::Game g{content, 120};
   g.testDisableWaves();
@@ -3075,58 +3085,83 @@ TEST_CASE("Champions wait for elites to be easy, overlords for champions") {
   g.advance(1.0F / 60.0F, in);
   REQUIRE(g.tierUnlocked(1));
   REQUIRE_FALSE(g.tierUnlocked(2));
-  REQUIRE(g.tierSpawnChance(2) == 0.0F);
   REQUIRE_FALSE(g.tierUnlocked(3));
-  REQUIRE(g.tierSpawnChance(3) == 0.0F);
 
-  // Clearing an elite is what actually counts.
+  // Clearing an elite is what actually counts, and it is counted.
   g.testSpawnTieredEnemyAt(4.0F, 0.0F, 1);
   g.testKillFirstEnemy();
   g.advance(1.0F / 60.0F, in);
   REQUIRE(g.tierPressure(1) > 0.0F);
+  REQUIRE(g.tierKills(1) == 1);
   REQUIRE_FALSE(g.tierUnlocked(2));
 
-  // Handle enough of them and the champion tribunal opens by itself. The amount
-  // is the gate plus one frame of decay, asked of the game rather than written
-  // out: a literal here is a second copy of kChampionPressure, and the last time
-  // the two disagreed this test failed for a reason that had nothing to do with
-  // what it was checking.
-  g.testAddTierPressure(1, game::Game::tierGate(2) + 0.05F);
+  // Handle enough of them and the champion tribunal opens by itself. The count is
+  // asked of the game rather than written out: a literal here is a second copy of
+  // kChampionKills, and the last time the two disagreed this test failed for a
+  // reason that had nothing to do with what it was checking.
+  //
+  // A COUNT, not a decaying rate, and that is the fix rather than a detail. The
+  // gate used to be 14 points on a score that drains over thirty seconds. Tiers
+  // are on a clock now, so a run supplies about five elite kills in ten minutes --
+  // the old gate asked for more than the whole game provides, and champions and
+  // overlords never appeared at all. Measured: zero of each in a ten-minute run.
+  // One real kill is already banked above, so the milestone is crossed by
+  // topping the ledger up to it and not one past -- the last step has to be a
+  // single kill, or the gate is never tested AT the gate.
+  const int need = game::Game::tierKillGate(2);
+  REQUIRE(need > 0);
+  REQUIRE(g.tierKills(1) == 1);
+  g.testAddTierKills(1, need - 1 - g.tierKills(1));
+  g.advance(1.0F / 60.0F, in);
+  REQUIRE(g.tierKills(1) == need - 1);
+  REQUIRE_FALSE(g.tierUnlocked(2));
+  g.testAddTierKills(1, 1);
   g.advance(1.0F / 60.0F, in);
   REQUIRE(g.tierUnlocked(2));
-  REQUIRE(g.tierSpawnChance(2) > 0.0F);
-  // The better the player does, the more champions show up.
-  const float champChance = g.tierSpawnChance(2);
-  g.testAddTierPressure(1, 20.0F);
-  g.advance(1.0F / 60.0F, in);
-  REQUIRE(g.tierSpawnChance(2) > champChance);
+  REQUIRE(g.tierGateProgress(2) == need);
 
-  // Overlords are gated on CHAMPIONS, not on the clock.
+  // A better player does not get champions SOONER -- the cadence is a clock, and
+  // making it adaptive is what produced one champion every seven seconds. What a
+  // better player gets is a BIGGER one: past the comfort line a tier walks in as
+  // three or four instead of one or two, so "you have outgrown this" is answered
+  // with more of the same fight rather than with a new label.
+  REQUIRE(g.tierComfort(1) == 0);
+  g.testAddTierPressure(1, game::Game::tierComfortLine(1) * 2.0F);
+  g.advance(1.0F / 60.0F, in);
+  REQUIRE(g.tierComfort(1) == 1);
+
+  // Overlords are gated on CHAMPIONS, not on the clock. And on the floor as well
+  // as the milestone, which two of the three tiers used to declare and never
+  // read -- so the source said "no overlord before seven minutes" and the game
+  // said nothing of the kind.
   g.testSetSimTime(300.0F);
   g.advance(1.0F / 60.0F, in);
-  REQUIRE_FALSE(g.tierUnlocked(3));
-  g.testAddTierPressure(2, game::Game::tierGate(3) + 0.05F);
+  REQUIRE(g.tierGateProgress(3) == 0);
+  g.testAddTierKills(2, game::Game::tierKillGate(3));
+  g.advance(1.0F / 60.0F, in);
+  REQUIRE_FALSE(g.tierUnlocked(3)); // earned, but too early
+  g.testSetSimTime(game::tierMinTime(3) + 1.0F);
   g.advance(1.0F / 60.0F, in);
   REQUIRE(g.tierUnlocked(3));
-  REQUIRE(g.tierSpawnChance(3) > 0.0F);
+  REQUIRE(g.tierComfort(2) == 0);
 
-  // And it is reversible: the form evaporates, the score falls back under the
-  // line and the gate shuts again once the grace window runs out.
-  game::Game fading{content, 121};
-  fading.testDisableWaves();
-  fading.testClearWeapons();
-  fading.advance(1.0F / 60.0F, in);
-  fading.testSetSimTime(200.0F);
-  const float gate = game::Game::tierGate(2);
-  fading.testAddTierPressure(1, gate + 0.5F);
-  fading.advance(1.0F / 60.0F, in);
-  REQUIRE(fading.tierUnlocked(2));
-  fading.testAddTierPressure(1, -(gate + 1.0F)); // form is gone
-  REQUIRE(fading.tierPressure(1) < gate);
-  REQUIRE(fading.tierUnlocked(2));               // still inside the grace window
-  for (int i = 0; i < 24 * 60; ++i) fading.advance(1.0F / 60.0F, in);
-  REQUIRE_FALSE(fading.tierUnlocked(2));
-  REQUIRE_FALSE(fading.tierUnlocked(3));
+  // And a promotion is EARNED, so it is not taken back. It used to be reversible:
+  // the score fell back under the line and the gate shut again after a grace
+  // window, which meant a tribunal could flicker on and off between two kills and
+  // the player could never learn whether they had it. A count does not decay, and
+  // the thing that punishes a struggling build is that they never reach it.
+  const int marks = game::Game::tierKillGate(2);
+  for (int i = 0; i < 120 * 60; ++i) g.advance(1.0F / 60.0F, in);
+  REQUIRE(g.tierUnlocked(2));
+  REQUIRE(g.tierKills(1) >= marks);
+  // Two minutes of doing nothing at all: the tribunal is still yours, and the
+  // handling score is not. That split is the whole redesign -- the milestone is
+  // permanent, the rate is not -- and the rate is what makes the arrival size fall
+  // back to a pair when the player stops keeping up.
+  const float tired = g.tierPressure(1);
+  CAPTURE(tired);
+  REQUIRE(tired < g.tierComfortLine(1));
+  REQUIRE(g.tierComfort(1) == 0);
 }
 
 TEST_CASE("Kill chain feeds damage, breaks on a hit and dies when you stop") {
@@ -6212,25 +6247,29 @@ TEST_CASE("The difficulty pass: level-ups arrive sooner and elites arrive later"
   g.testSetSimTime(90.0F);
   REQUIRE(g.tierUnlocked(1));
 
-  // And rarer. At the old 15% ceiling one spawn in seven was an elite, which is
-  // a tax on the trash rather than an event.
-  REQUIRE(g.tierSpawnChance(1) < 0.06F);
-  g.testSetSimTime(2000.0F);
-  REQUIRE(g.tierSpawnChance(1) <= 0.10F);
-  // Still a ramp, not a constant: late in a run elites are commoner than early.
-  g.testSetSimTime(90.0F);
-  const float early = g.tierSpawnChance(1);
-  g.testSetSimTime(400.0F);
-  REQUIRE(g.tierSpawnChance(1) > early);
+  // And on a CLOCK rather than as a share of spawns. This is the number that
+  // answered "why are there so many chests": at a per-member roll, an elite was
+  // one body in ten, forever, so a ten-minute run handed over 42 boxes and the
+  // player had the whole arsenal by minute three. A tier is an event, so it is
+  // scheduled: once every couple of minutes, and the tier's own box is the only
+  // thing in the game that decides how often new cards arrive.
+  const auto [eliteLo, eliteHi] = game::tierCadence(1);
+  REQUIRE(eliteLo >= 100.0F);
+  REQUIRE(eliteHi > eliteLo);
+  // Champions and overlords wait longer still, and the ladder of waits is
+  // increasing: a boss that showed up as often as an elite would be a boss in
+  // name only.
+  const auto [champLo, champHi] = game::tierCadence(2);
+  const auto [lordLo, lordHi] = game::tierCadence(3);
+  REQUIRE(champLo > eliteHi);
+  REQUIRE(lordLo > champHi);
+  REQUIRE(champHi > champLo);
+  REQUIRE(lordHi > lordLo);
 
-  // --- The extra traits wait too ---------------------------------------------
-  // A champion with three traits at the four-minute mark is not a champion, it
-  // is a boss wearing a champion's label, and nothing the player picked yet was
-  // an answer to it.
-  REQUIRE(game::traitsForTier(2, 299.0F) == 2);
-  REQUIRE(game::traitsForTier(2, 300.0F) == 3);
-  REQUIRE(game::traitsForTier(3, 599.0F) == 4);
-  REQUIRE(game::traitsForTier(3, 600.0F) == 5);
+  // --- The traits do not wait at all ------------------------------------------
+  // The old rule added a trait at five and ten minutes. A flat 1/3/7 is a number
+  // the player can hold in their head, which is the point: see the test on
+  // traitsForTier itself.
 
   // --- The enemy HP ramp is gentler, and capped lower ------------------------
   // The HP ramp is the one piece of difficulty the player has no answer to: a
@@ -6891,7 +6930,7 @@ TEST_CASE("Emberbrand keeps a body alight only while it is still being hit") {
 
 // --- Round 16: elite chests, and a quieter screen ---------------------------
 
-TEST_CASE("An elite leaves a chest, a champion three, an overlord five") {
+TEST_CASE("An elite leaves a chest, a champion three, an overlord seven") {
   // The ask: elites should not be slowed down, they should be rarer, and they
   // should be worth meeting. The box is the "worth meeting" half, and the size
   // of the box is the visible difference between a tier and the one below it.
@@ -6911,7 +6950,13 @@ TEST_CASE("An elite leaves a chest, a champion three, an overlord five") {
   g.testKillLastSpawned();
   REQUIRE(g.testChestCount() == 0);
 
-  for (const auto& w : std::vector<Want>{{1, 1}, {2, 3}, {3, 5}}) {
+  // Seven for the overlord, not five. It is the rarest thing in the game by a
+  // wide margin now, and it is the fight the player has spent the whole run
+  // building for, so its box has to be worth the run rather than worth the fight.
+  // Five cards across five weapons was one card each; seven is the difference
+  // between improving everything you own and improving the two or three things
+  // that matter.
+  for (const auto& w : std::vector<Want>{{1, 1}, {2, 3}, {3, 7}}) {
     CAPTURE(w.tier);
     // A fresh run per tier. A box can never invent cards, so reusing one
     // exhausted arsenal would measure the wand's card count instead of the
@@ -7011,26 +7056,61 @@ TEST_CASE("Deep Cache makes every chest one weapon bigger") {
   REQUIRE(g.testSpawnChest(1.0F, 0.0F, 1, -1) == 2);
 }
 
-TEST_CASE("The screen never holds more than two elites at a time") {
+TEST_CASE("The screen never holds more than a tier's share of heavy bodies") {
   // "Do not make elites weaker, make them rarer, so there are one or two on
   // screen." A per-spawn percentage cannot promise that -- packs and waves roll
-  // members independently -- so the cap is a live count, and this pins it.
+  // members independently -- so the promise is a live count, per tier, and this
+  // pins it.
+  //
+  // Four and not two, because the size of an arrival is now drawn from how well
+  // the player is handling that tier (tierEventSize): a comfortable player meets
+  // three or four at once, and a cap of two would silently throw two of them away
+  // and hand back the flat one-at-a-time feeling the ladder is being fixed for.
+  // The ladder tightens as it climbs, because it has to: an overlord is the run's
+  // boss and there is only ever one.
   const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
   game::Game g{content, 6};
   g.testDisableWaves();
   g.testClearWeapons();
   g.testAddWeapon(0);
-  // A handful of elites already on the floor, so the budget is spent.
-  g.testSpawnEliteAt(3.0F, 0.0F, 1);
-  g.testSpawnEliteAt(3.0F, 1.0F, 1);
-  REQUIRE(g.testLiveTierCount() == 2);
-  // Waves are disabled, so the only way the number could grow is the spawner
+  // The elite budget, spent, so the director has nothing to hand out.
+  for (int i = 0; i < game::tierEventCap(1); ++i) {
+    g.testSpawnEliteAt(3.0F, static_cast<float>(i), 1);
+  }
+  REQUIRE(g.testLiveTierCount(1) == game::tierEventCap(1));
+  // Waves are disabled, so the only way the number could grow is the director
   // ignoring the cap, and the only way to test that is to let it run.
   g.testEnableWaves();
+  g.testSetSimTime(game::tierMinTime(1) + 1.0F);
   g.testAdvance(6.0F);
-  // Generous ceiling: the cap is two ELITE-AND-ABOVE slots, and the cap may be
-  // under-spent on a quiet roll, but it may never be over-spent.
-  REQUIRE(g.testLiveTierCount() <= 2);
+  // The cap may be under-spent on a quiet roll, but it may never be over-spent.
+  // Which is the whole claim: the size of an arrival is ROLLED, and it used to be
+  // rolled after the "is there room" check rather than clamped to it, so one
+  // surviving elite plus a comfortable roll of four put five on the floor against
+  // a ceiling of four.
+  // One elite already up, the player comfortably past the line so the size roll
+  // is three or four, and the clock due. Asserted on the event's OWN body count
+  // rather than on the live count, because an arrival lands as a ring of
+  // telegraphs first: a live count taken a frame later is still zero of it.
+  g.testDespawnEnemies();
+  g.testAddTierPressure(1, game::Game::tierComfortLine(1) * 4.0F);
+  g.testSpawnEliteAt(3.0F, 0.0F, 1);
+  const int before = g.tierEventBodies(1);
+  g.testAdvance(1.0F / 60.0F);
+  const int added = g.tierEventBodies(1) - before;
+  CAPTURE(added);
+  REQUIRE(added > 0);
+  const int room = game::tierEventCap(1) - g.testLiveTierCount(1);
+  CAPTURE(room);
+  REQUIRE(added <= room);
+  // And the comfortable roll really was the bigger one, so this is not passing
+  // because the size rule quietly collapsed to one body.
+  REQUIRE(added >= 3);
+  // And the tiers above it are tighter, monotonically, or an overlord would stop
+  // being the run's boss and become the third member of a pack.
+  REQUIRE(game::tierEventCap(1) > game::tierEventCap(2));
+  REQUIRE(game::tierEventCap(2) > game::tierEventCap(3));
+  REQUIRE(game::tierEventCap(3) == 1);
 }
 
 TEST_CASE("Improving your weapons is an item, and it stacks") {
@@ -7313,7 +7393,7 @@ TEST_CASE("A chest names every card it handed over, not just the last one") {
   REQUIRE(g.testWeaponCount() > 1);
 
   const int size = g.testSpawnChest(0.0F, 0.0F, 3, -1); // an overlord's box
-  REQUIRE(size == 5);
+  REQUIRE(size == 7);
   g.testOpenFirstChest();
   const int given = g.testLastChestGrants();
   CAPTURE(given);
@@ -7465,6 +7545,20 @@ TEST_CASE("Each tier is one clear step above the one below it, and none is a wal
   const auto [champLo, champHi] = game::tierHpBand(2);
   const auto [lordLo, lordHi] = game::tierHpBand(3);
 
+  // Every rung is x5 the one below it. Not "meaningfully above": five, exactly, so
+  // the midpoints are 6.5, 32.5 and 162.5 and the player can hold the ladder in
+  // their head. The old one was 6.5 / 37 / 125, which made a champion 5.7x an
+  // elite and an overlord only 3.4x a champion -- the top two rungs were nearly
+  // the same fight, which is how an overlord could turn up at minute four in a
+  // build that had only just met an elite.
+  // Computed outside the REQUIRE: Catch2 turns the expression into a template
+  // argument, so a lambda call in there does not compile.
+  const float midElite = (eliteLo + eliteHi) * 0.5F;
+  const float midChamp = (champLo + champHi) * 0.5F;
+  const float midLord = (lordLo + lordHi) * 0.5F;
+  REQUIRE(midChamp > midElite * 4.0F);
+  REQUIRE(midLord > midChamp * 4.0F);
+
   // Every rung is a real step up from the one below. The floor of each band --
   // not its ceiling -- is the number that has to clear, because a champion that
   // rolled low used to be a pushover and a champion that rolled high a wall, out
@@ -7475,9 +7569,11 @@ TEST_CASE("Each tier is one clear step above the one below it, and none is a wal
   // And no rung is a health check. The old overlord ceiling of 450x a
   // contemporaneous mob was a wall: at minute twelve it was a
   // nine-hundred-thousand-HP thing a small crowd could not chew through, which
-  // is not a reward for out-playing the game.
-  REQUIRE(lordHi <= 160.0F);
-  REQUIRE(champHi <= 60.0F);
+  // is not a reward for out-playing the game. The global time ramp is capped at
+  // 20x on top of this, so 200x is 4000x a minute-zero mob at worst and 5x the
+  // champion is what makes that number worth the fight.
+  REQUIRE(lordHi <= 220.0F);
+  REQUIRE(champHi <= 45.0F);
 
   // The within-tier spread is narrow. A 3.7x spread inside one label meant the
   // player could not tell which kind of champion they were about to meet, and
@@ -7487,29 +7583,47 @@ TEST_CASE("Each tier is one clear step above the one below it, and none is a wal
   REQUIRE(eliteHi / eliteLo <= 2.0F);
 }
 
-TEST_CASE("A heavy tier is an event, not a stream") {
-  // The rest of the answer to "why is the champion so easy". A tier that arrives
-  // every few seconds is not a trial, whatever its health bar says, and its
-  // three-card chest stops being a reward. These are shares of ALL spawns, so a
-  // champion at 5% is a champion roughly every seven seconds on a busy screen.
-  const float champCap = game::tierSpawnCap(2);
-  const float lordCap = game::tierSpawnCap(3);
-  const float eliteCap = game::tierSpawnCap(1);
+TEST_CASE("A heavy tier arrives on a clock, and the clock lengthens up the ladder") {
+  // The whole of the answer to "why is the champion so easy", and to "why are
+  // there so many chests".
+  //
+  // A tier used to be a share of every spawn: an elite one body in ten, forever.
+  // That made a tier's arrival depend on how much garbage happened to be on
+  // screen, so a busy screen produced a champion every seven seconds, and -- since
+  // every tiered body drops a box -- a ten-minute run handed the player 42 chests
+  // and the whole arsenal by minute three.
+  //
+  // A tier is an EVENT now: a clock, a size, and a box. These are the clocks.
+  const auto [eliteLo, eliteHi] = game::tierCadence(1);
+  const auto [champLo, champHi] = game::tierCadence(2);
+  const auto [lordLo, lordHi] = game::tierCadence(3);
 
-  CAPTURE(champCap);
-  CAPTURE(lordCap);
-  CAPTURE(eliteCap);
+  CAPTURE(eliteLo);
+  CAPTURE(eliteHi);
+  CAPTURE(champLo);
+  CAPTURE(champHi);
+  CAPTURE(lordLo);
+  CAPTURE(lordHi);
 
-  // A floor matters as much as a ceiling: the elite is the currency that opens
-  // the champion tribunal, so the garbage below the boss has to be more common
-  // than the boss or the ladder inverts.
-  REQUIRE(eliteCap > champCap);
-  REQUIRE(champCap > lordCap);
+  // "Once every couple of minutes" is the ask, and it is a floor: an elite more
+  // often than this is a tax on the trash again, which is what the old 10% roll
+  // was. Two minutes is also the shortest gap that lets the player finish
+  // clearing one, collect its box, and get back to the horde before the next.
+  REQUIRE(eliteLo >= 100.0F);
+  REQUIRE(eliteHi > eliteLo);
 
-  // The boss tiers stay events. A champion no more than one spawn in forty, an
-  // overlord no more than one in eighty.
-  REQUIRE(champCap <= 0.025F);
-  REQUIRE(lordCap <= 0.012F);
+  // The ladder of waits is strictly increasing. An elite is a thing you meet; a
+  // champion is a fight you plan for; an overlord is the run's boss. If the gaps
+  // were equal the three would be the same encounter with three HP bars.
+  REQUIRE(champLo > eliteHi);
+  REQUIRE(lordLo > champHi);
+  REQUIRE(champHi > champLo);
+  REQUIRE(lordHi > lordLo);
+
+  // An overlord roughly twice an hour-and-a-half apart is "a couple in a ten
+  // minute run". More than three in ten minutes and the run has a boss rotation
+  // instead of a boss.
+  REQUIRE(lordLo >= 400.0F);
 }
 
 static std::string uppered(std::string_view in) {
@@ -7688,7 +7802,7 @@ TEST_CASE("The manual documents the mechanics a card cannot explain by itself") 
   std::vector<std::string> rows;
   for (const auto& raw : chests->lines) rows.push_back(uppered(raw));
   const std::string page = manualSays(rows);
-  for (const char* bit : {"ELITE      1 CARD", "CHAMPION   3 CARDS", "OVERLORD   5 CARDS",
+  for (const char* bit : {"ELITE      1 CARD", "CHAMPION   3 CARDS", "OVERLORD   7 CARDS",
                           "DEEP CACHE", "PANEL"}) {
     CAPTURE(bit);
     REQUIRE(page.find(bit) != std::string::npos);
@@ -7857,20 +7971,36 @@ TEST_CASE("The generated content doc is not behind the tier ladder it documents"
     REQUIRE_FALSE(cells.empty());
     const auto band = game::tierHpBand(tier);
     const std::string counts = docNum(band.first) + "-" + docNum(band.second);
-    const std::string share = docNum(game::tierSpawnCap(tier) * 100.0F) +
-                              "% of spawns";
+    // The frequency is a clock now, so the docs say so in the only unit a player
+    // can use: one arrival every so many seconds.
+    const auto cad = game::tierCadence(tier);
+    const std::string every = "every " + docNum(cad.first) + "-" + docNum(cad.second) + "s";
     INFO("row: | " << names[tier - 1] << " |" << [&cells] {
       std::string all;
       for (const auto& c : cells) all += " " + c + " |";
       return all;
     }());
     REQUIRE(hasCell(cells, counts));
-    REQUIRE(hasCell(cells, share));
+    REQUIRE(hasCell(cells, every));
     // The gate is what stops the next tier from being an accident, and it is
     // the number a pass reaches for first.
     if (tier > 1) {
-      REQUIRE(hasCell(cells, "tier-" + std::to_string(tier - 1) + " pressure " +
-                                docNum(game::Game::tierGate(tier))));
+      // What opens a tribunal is a kill milestone now, and the bestiary says so in
+      // kills. A gate the docs describe in a unit the panel does not use is a gate
+      // the player cannot check themselves against the thing on screen -- so the
+      // cell is the whole phrase, compared case-insensitively, because the docs
+      // sentence-case it and the panel shouts it and neither is wrong.
+      const std::string gate =
+          std::string("after ") + docNum(game::Game::tierKillGate(tier)) + " " +
+          (tier == 2 ? "elites" : "champions");
+      bool found = false;
+      for (const auto& c : cells) {
+        std::string low = c;
+        std::transform(low.begin(), low.end(), low.begin(),
+                       [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+        if (low == gate) found = true;
+      }
+      REQUIRE(found);
     }
   }
 }
@@ -7888,9 +8018,9 @@ TEST_CASE("A chest draws one sphere per card it will hand over") {
   REQUIRE(game::Game::chestSatellites(0) == 1); // never a bare ball: uncountable
   REQUIRE(game::Game::chestSatellites(1) == 1); // an elite's box
   REQUIRE(game::Game::chestSatellites(3) == 3); // a champion's
-  REQUIRE(game::Game::chestSatellites(5) == 5); // an overlord's
-  REQUIRE(game::Game::chestSatellites(6) == 6); // an overlord's + one Deep Cache
-  REQUIRE(game::Game::chestSatellites(8) == 8); // + three: the real maximum
+  REQUIRE(game::Game::chestSatellites(7) == 7); // an overlord's
+  REQUIRE(game::Game::chestSatellites(8) == 8); // + one Deep Cache
+  REQUIRE(game::Game::chestSatellites(10) == 10); // + three: the real maximum
 
   // And the count on screen is the count in the box. An overlord's box with three
   // Deep Cache stacks really does open eight times -- the clamp at five was the
@@ -7902,19 +8032,21 @@ TEST_CASE("A chest draws one sphere per card it will hand over") {
   for (const char* id : {"wand", "dagger", "crossbow"}) {
     g.testAddWeapon(g.testWeaponContentIndex(id));
   }
-  REQUIRE(g.testSpawnChest(0.0F, 0.0F, 3, -1) == 5);
+  REQUIRE(g.testSpawnChest(0.0F, 0.0F, 3, -1) == 7);
   const int idx = g.testUpgradeContentIndex("u_deep_cache");
   REQUIRE(idx >= 0);
   REQUIRE(g.testGrantUpgrade(idx));
-  REQUIRE(g.testSpawnChest(4.0F, 0.0F, 3, -1) == 6);
+  REQUIRE(g.testSpawnChest(4.0F, 0.0F, 3, -1) == 8);
   REQUIRE(g.testGrantUpgrade(idx));
   REQUIRE(g.testGrantUpgrade(idx));
   REQUIRE(g.stats().chestBonus == 3);
-  // Eight is the real maximum: an overlord's five plus three Deep Cache stacks.
+  // Ten is the real maximum: an overlord's seven plus three Deep Cache stacks.
   // The old ring clamped at five, so the eighth card was invisible on the ground
-  // and then appeared on the receipt.
-  REQUIRE(g.testSpawnChest(8.0F, 0.0F, 3, -1) == 8);
-  REQUIRE(game::Game::chestSatellites(8) == 8);
+  // and then appeared on the receipt. A cap that is too small does not show fewer
+  // cards, it hides the ones at the bottom of a list the player is about to be
+  // told is complete.
+  REQUIRE(g.testSpawnChest(8.0F, 0.0F, 3, -1) == 10);
+  REQUIRE(game::Game::chestSatellites(10) == 10);
 }
 
 TEST_CASE("A chain bolt rides the enemy it is on") {
@@ -8020,7 +8152,7 @@ TEST_CASE("Opening a chest stops the run until the player says so") {
     if (idx >= 0) g.testAddWeapon(idx);
   }
   g.testSpawnEnemyAt(3.0F, 0.0F);
-  REQUIRE(g.testSpawnChest(0.0F, 0.0F, 3, -1) == 5);
+  REQUIRE(g.testSpawnChest(0.0F, 0.0F, 3, -1) == 7);
   g.testOpenFirstChest();
 
   // Held.
@@ -8100,6 +8232,13 @@ TEST_CASE("The chest receipt fits on screen and nothing runs off the right edge"
       if (py >= 720.0F) REQUIRE(lay.panelY + lay.panelH <= py);
       REQUIRE(lay.cardY.size() == 5);
       REQUIRE(lay.descLines.size() == 5);
+      // The panel is sized for the largest box the game can produce, which is now
+      // an overlord's SEVEN cards. Sizing it for five was the same mistake as
+      // clamping the ring: the cards the box actually gave would not fit the
+      // receipt that named them.
+      const auto big = game::Game::chestRevealLayout(px, py, worstName, worstDesc);
+      REQUIRE(big.panelH >= lay.panelH);
+      if (py >= 1080.0F) REQUIRE(big.panelY + big.panelH <= py);
 
       // Every line the renderer will DRAW fits the column it will be drawn in, and
       // the column is inside the panel. chestRevealDescLines is the renderer's own
@@ -8214,7 +8353,7 @@ TEST_CASE("A chest opened on the step the player dies does not resurrect the run
     const int idx = g.testWeaponContentIndex(id);
     if (idx >= 0) g.testAddWeapon(idx);
   }
-  REQUIRE(g.testSpawnChest(0.0F, 0.0F, 3, -1) == 5);
+  REQUIRE(g.testSpawnChest(0.0F, 0.0F, 3, -1) == 7);
   // A body standing on the box, so the box is spent in the same breath as the
   // kill. testKillPlayer is the honest way to get there: it goes through the
   // death path, not around it.
@@ -8230,4 +8369,230 @@ TEST_CASE("A chest opened on the step the player dies does not resurrect the run
   go.menuConfirm = true;
   for (int i = 0; i < 30; ++i) g.advance(1.0F / 60.0F, go);
   REQUIRE(g.state() == game::RunState::GameOver);
+}
+
+// ---------------------------------------------------------------------------
+// The tribunal director, end to end. A tier used to be a share of every spawn;
+// these are the promises that replaced it, each one the thing the player actually
+// sees: a clock, a size, a cap, a warning, and a box.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("An elite walks in at 1:30 and then on its own clock") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 31};
+  g.testDisableWaves();
+  g.testClearWeapons();
+  g.enterTestMode();
+
+  // The first elite is held by the FLOOR, not by a countdown that has already
+  // run. Both were guarding the same arrival for a while, which meant the floor
+  // was paid twice and the first elite landed at three minutes while the manual
+  // said one and a half. So the clock starts due and the floor is the only thing
+  // in front of it -- and it has to stay that way, which is what this pins.
+  REQUIRE(g.tierCooldown(1) == 0.0F);
+
+  // Nothing before the floor. A run that met one at 0:45 meant the first real
+  // decision of the session was "do I play around the thing about to end me".
+  const float floor = game::tierMinTime(1);
+  CAPTURE(floor);
+  g.testAdvance(floor - 1.0F);
+  REQUIRE(g.tierEventsFired(1) == 0);
+  REQUIRE(g.tierUnlocked(1) == false);
+
+  // And it lands on the frame the floor opens. Advanced in whole frames by
+  // testAdvance, so this is the arrival, not a window it fell into.
+  g.testAdvance(1.5F);
+  CAPTURE(g.tierEventsFired(1));
+  REQUIRE(g.tierUnlocked(1));
+  REQUIRE(g.tierEventsFired(1) == 1);
+  REQUIRE(g.tierEventBodies(1) >= 1);
+
+  // Then it re-arms from the moment it FIRED, into the tier's own band, which is
+  // how "once every one to two minutes" stays true without the two numbers
+  // drifting apart.
+  const auto [lo, hi] = game::tierCadence(1);
+  const float next = g.tierCooldown(1);
+  CAPTURE(next);
+  CAPTURE(lo);
+  CAPTURE(hi);
+  REQUIRE(next >= lo - 0.05F);
+  REQUIRE(next <= hi + 0.05F);
+  // Which means the second one is a whole interval away and not two frames: the
+  // old shared-per-spawn roll produced a tier every seven seconds, and the only
+  // way to keep that from creeping back is to say what the gap actually is.
+  REQUIRE(next > 60.0F);
+}
+
+TEST_CASE("An arrival is a pair, or a group once you are handling them") {
+  // "One or two, maybe three or four if they are already easy." Both halves have
+  // to contain an odd AND an even count, and the reason is the reason this is a
+  // test rather than a comment: an average size of 1.5 that rounds either way
+  // means a comfortable player still meets single bodies most of the time, which
+  // is the flat one-at-a-time feeling the ladder is being fixed for. If either
+  // set ever came back as {1,2} alone, or {3,4} alone, the screen would stop
+  // visibly filling for exactly the player it is supposed to reward.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 35};
+  g.enterTestMode();
+  std::array<int, 5> ordinary{};
+  std::array<int, 5> comfortable{};
+  for (int i = 0; i < 400; ++i) {
+    // It rolls the game's own RNG, so it is asked of a real game rather than of a
+    // copy of the rule: a test that reimplemented the two lines would pass even
+    // after the implementation was changed underneath it.
+    const int a = g.tierEventSizeFor(false);
+    const int b = g.tierEventSizeFor(true);
+    REQUIRE((a == 1 || a == 2));
+    REQUIRE((b == 3 || b == 4));
+    ++ordinary[static_cast<std::size_t>(a)];
+    ++comfortable[static_cast<std::size_t>(b)];
+  }
+  CAPTURE(ordinary[1]);
+  CAPTURE(ordinary[2]);
+  CAPTURE(comfortable[3]);
+  CAPTURE(comfortable[4]);
+  REQUIRE(ordinary[1] > 0);
+  REQUIRE(ordinary[2] > 0);
+  REQUIRE(comfortable[3] > 0);
+  REQUIRE(comfortable[4] > 0);
+  // And the two halves never overlap, or the same roll would be answering two
+  // different questions.
+  REQUIRE(ordinary[0] + ordinary[3] == 0);
+  REQUIRE(comfortable[0] + comfortable[1] == 0);
+}
+
+TEST_CASE("A tier held back by a busy screen re-arms from when it fired") {
+  // The old rule re-armed from the moment it was DUE, so a tier that had been
+  // waiting for room arrived the instant the screen cleared -- two of them inside
+  // two seconds, which is the chest flood again by another name. Held back means
+  // still due, and the next one is scheduled from the arrival that did happen.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 32};
+  g.testDisableWaves();
+  g.testClearWeapons();
+  g.enterTestMode();
+
+  // Fill the elite budget, so the event is due and cannot land.
+  for (int i = 0; i < game::tierEventCap(1); ++i) {
+    g.testSpawnEliteAt(3.0F, static_cast<float>(i), 1);
+  }
+  g.testAdvance(game::tierMinTime(1) + 1.0F);
+  REQUIRE(g.tierCooldown(1) == 0.0F);
+  const int firedWhileBusy = g.tierEventsFired(1);
+  REQUIRE(firedWhileBusy == 0);
+
+  // Still due, and still not landed, ten seconds later: a full, honest wait rather
+  // than a queue of arrivals waiting for room.
+  g.testAdvance(10.0F);
+  REQUIRE(g.tierEventsFired(1) == firedWhileBusy);
+
+  // Clear the floor. The next frame it lands -- and lands once, not once per
+  // frame it was waiting.
+  g.testDespawnEnemies();
+  g.testAdvance(1.0F / 60.0F);
+  REQUIRE(g.tierEventsFired(1) == firedWhileBusy + 1);
+  const auto [lo, hi] = game::tierCadence(1);
+  const float next = g.tierCooldown(1);
+  CAPTURE(next);
+  CAPTURE(lo);
+  CAPTURE(hi);
+  REQUIRE(next >= lo - 0.05F);
+  REQUIRE(next <= hi + 0.05F);
+}
+
+TEST_CASE("A heavy tier is called out before it lands, not after") {
+  // A thing that only shows up as a ring of telegraphs is noise; a thing that is
+  // announced two seconds early is a decision. This also pins the latch: a tier
+  // held back by a busy screen must not re-announce itself every frame while it
+  // waits, and must announce itself again the NEXT time round rather than
+  // arriving silently because the latch never cleared.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 33};
+  g.testDisableWaves();
+  g.testClearWeapons();
+  g.enterTestMode();
+  g.testSetSimTime(game::tierMinTime(1) + 1.0F);
+
+  g.testAdvance(game::tierMinTime(1) + 1.0F);
+  REQUIRE(g.tierEventsFired(1) == 1);
+
+  // Wait until the clock is inside the callout window rather than guessing a
+  // length for "a whole interval": the cadence is a random 100-130 seconds, and a
+  // test that hard-codes 91 would drift out of the window the first time someone
+  // widened the band.
+  for (int i = 0; i < 200 && g.tierCooldown(1) > 1.5F; ++i) {
+    g.testAdvance(0.1F);
+  }
+  CAPTURE(g.tierCooldown(1));
+  CAPTURE(g.testTierBanner());
+  REQUIRE(g.tierCooldown(1) <= 1.5F);
+  REQUIRE_FALSE(g.testTierBanner().empty());
+  // And it says what is coming, in the tier's own word, so the player learns the
+  // ladder's vocabulary from the game rather than from the manual.
+  REQUIRE(g.testTierBanner().find("ELITE") != std::string_view::npos);
+  // The arrival has NOT happened yet. A warning raised after the thing it warns
+  // about is not a warning.
+  REQUIRE(g.tierEventsFired(1) == 1);
+
+  // And it is gone again once the tier has landed -- a warning that outlasts the
+  // thing it warned about is just a second banner.
+  g.testAdvance(4.0F);
+  REQUIRE(g.tierEventsFired(1) == 2);
+  g.testAdvance(3.0F);
+  REQUIRE(g.testTierBanner().empty());
+}
+
+TEST_CASE("The ladder is a ladder: heavier tiers arrive later, hold fewer, hit harder") {
+  // One test for the three promises that make the tiers read as steps rather than
+  // as one encounter with three HP bars. The HP bands are the ask -- 5x, 25x,
+  // 125x -- and the midpoints are the honest way to state them, because a band is
+  // a range and "25x" is only true of its middle.
+  const auto e = game::tierHpBand(1);
+  const auto c = game::tierHpBand(2);
+  const auto o = game::tierHpBand(3);
+  const double em = (e.first + e.second) / 2.0;
+  const double cm = (c.first + c.second) / 2.0;
+  const double om = (o.first + o.second) / 2.0;
+  CAPTURE(em);
+  CAPTURE(cm);
+  CAPTURE(om);
+  REQUIRE(cm / em > 4.0);
+  REQUIRE(cm / em < 6.0);
+  REQUIRE(om / cm > 4.0);
+  REQUIRE(om / cm < 6.0);
+
+  // Later, and fewer at a time. Strictly, or the three are the same fight.
+  const auto [eLo, eHi] = game::tierCadence(1);
+  const auto [cLo, cHi] = game::tierCadence(2);
+  const auto [oLo, oHi] = game::tierCadence(3);
+  REQUIRE(cLo > eHi);
+  REQUIRE(oLo > cHi);
+  REQUIRE(game::tierEventCap(1) > game::tierEventCap(2));
+  REQUIRE(game::tierEventCap(2) > game::tierEventCap(3));
+
+  // A tier's own clock does not tick until its tribunal is earned, so a run that
+  // never gets there is not quietly running a countdown it cannot use -- and a
+  // tribunal earned at minute five is not instantly due, which is what stops a
+  // champion from landing on the corpse of the elite that opened it.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 34};
+  g.testDisableWaves();
+  g.testClearWeapons();
+  g.enterTestMode();
+  const float parked = g.tierCooldown(2);
+  CAPTURE(parked);
+  g.testAdvance(120.0F);
+  REQUIRE_FALSE(g.tierUnlocked(2));
+  CAPTURE(g.tierCooldown(2));
+  REQUIRE(g.tierCooldown(2) == parked);
+  // Cross the milestone, not the clock: four elite kills, and the clock starts
+  // moving from the whole first interval rather than from zero.
+  g.testAddTierKills(1, game::Game::tierKillGate(2));
+  g.testAdvance(1.0F / 60.0F);
+  REQUIRE(g.tierUnlocked(2));
+  const float running = g.tierCooldown(2);
+  CAPTURE(running);
+  const auto [cLo2, cHi2] = game::tierCadence(2);
+  REQUIRE(running >= cLo2 - 0.05F);
+  REQUIRE(running <= cHi2 + 0.05F);
 }

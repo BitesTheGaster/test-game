@@ -100,36 +100,58 @@ constexpr float kEnemyDeathEpsilon = 1.0e-3F;
 //    interrupted anything. And because elite kills are the currency that opens
 //    the champion tribunal, a trivial elite also meant the next tier arrived
 //    early -- the two problems fed each other.
+// The band is 1.6x wide and the LADDER is x5, so the midpoints are 6.5, 32.5 and
+// 162.5 -- each rung exactly five times the one below. That is the whole
+// rebalance. The old ladder was 6.5 / 37 / 125, so a champion was 5.7x an elite
+// and an overlord was 3.4x a champion: the top two rungs were nearly the same
+// fight, which is why an overlord could arrive at minute four in a build that had
+// only just met an elite. x5 per rung is the ratio the player can hold in their
+// head, and it makes each tier something you have to clear space for.
 constexpr float kEliteHpMin = 5.0F;
 constexpr float kEliteHpMax = 8.0F;
-constexpr float kChampionHpMin = 28.0F;
-constexpr float kChampionHpMax = 46.0F;
-constexpr float kOverlordHpMin = 100.0F;
-constexpr float kOverlordHpMax = 150.0F;
+constexpr float kChampionHpMin = 25.0F;
+constexpr float kChampionHpMax = 40.0F;
+constexpr float kOverlordHpMin = 125.0F;
+constexpr float kOverlordHpMax = 200.0F;
 
-// How OFTEN each heavy tier arrives, as a share of all spawns.
+// How OFTEN each heavy tier arrives, in SECONDS, as a range so two runs of the
+// same length are not the same run.
 //
-// This is the number that answered "why is the champion so easy", and it was not
-// the health bar. At a 0.006 slope and a 5% ceiling, a build comfortably past
-// the gate met a champion roughly every seven seconds: a soft mob wearing a
-// boss's name, worth a three-card chest, gone in the time it took to line your
-// weapons up. Nothing you meet every seven seconds is a trial, however much HP
-// it has, and the banner announcing the tribunal had stopped meaning anything a
-// minute after it appeared.
+// This used to be a share of all spawns, and that was the single worst number in
+// the game. Measured over a ten-minute headless run with five weapons and no
+// upgrades at all, it produced 42 chests in the first five and a half minutes and
+// 550 kills per thirty seconds from minute six on. The player had the whole
+// arsenal before the four minute mark and was spending the rest of the run
+// watching corpses appear and vanish at the edge of the screen.
 //
-// So a champion is an event. The slope is under a third of the old one, so a
-// player only just past the gate gets a trickle rather than a flood, and even a
-// dominant build tops out at one spawn in forty. An overlord is the run's boss:
-// a couple in a ten-minute run, each one a fight the player had to make room
-// for.
-//
-// A floor matters as much as a ceiling. The elite rate is a curve on the clock
-// (see tierSpawnChance), and capping a boss at 2.5% only means something if the
-// garbage below it is more common than that.
-constexpr float kChampionChanceSlope = 0.0022F;
-constexpr float kChampionChanceCap = 0.025F;
-constexpr float kOverlordChanceSlope = 0.0012F;
-constexpr float kOverlordChanceCap = 0.012F;
+// A tier is not a tax on the trash. It is a thing that happens to you, on a
+// clock, that you can see coming and can plan around. So it is scheduled now:
+// once every couple of minutes an elite walks in, once every five a champion
+// walks in if you have earned it, once every nine or ten an overlord does. Each
+// tier drops a box, so this is also the only thing in the game that decides how
+// often the player is handed new cards.
+constexpr float kEliteCadenceMin = 100.0F;
+constexpr float kEliteCadenceMax = 130.0F;
+constexpr float kChampionCadenceMin = 250.0F;
+constexpr float kChampionCadenceMax = 320.0F;
+constexpr float kOverlordCadenceMin = 470.0F;
+constexpr float kOverlordCadenceMax = 590.0F;
+
+// How far above its own line the player has to be for a tier to arrive as a group
+// of three or four instead of one or two. A multiple, because "routine" has to
+// mean the same thing for a tier worth 1.0 per kill and one worth 1.25.
+constexpr float kTierComfortMul = 1.5F;
+
+// The elite has no kill milestone -- it is on the clock -- so its comfort line
+// needs a reference of its own. Pressure accrues 1.0 per elite kill and drains
+// over kPressureWindow, so 1.5 is one elite cleared every twenty seconds: the
+// player is not so much clearing them as noticing they were there.
+constexpr float kEliteComfortPressure = 1.5F;
+
+// A tier is called out this long before it lands. The same courtesy the horde ring
+// gets: a thing that only shows up as six telegraphs is noise, and a thing that is
+// announced is a decision.
+constexpr float kTierCallout = 2.0F;
 
 // Trait pool. Elites roll exactly one; champions and overlords roll several
 // (see traitsForTier).
@@ -201,16 +223,59 @@ std::pair<float, float> tierHpBand(int tier) {
   return {b.hpMin, b.hpMax};
 }
 
-// The largest share of spawns a tier can take. Only reached by a build far past
-// the gate, which is exactly when it matters: this is the frequency that decides
-// whether a boss is an event or a mob.
-float tierSpawnCap(int tier) {
+// How long between one tier's arrival and the next, in seconds. Exposed so a test
+// and the docs generator can ask the cadence what shape it is instead of trusting
+// that the last person to edit it meant to.
+std::pair<float, float> tierCadence(int tier) {
   switch (tier) {
-    case 1: return 0.10F; // the curve tops out here; see tierSpawnChance
-    case 2: return kChampionChanceCap;
-    case 3: return kOverlordChanceCap;
+    case 1: return {kEliteCadenceMin, kEliteCadenceMax};
+    case 2: return {kChampionCadenceMin, kChampionCadenceMax};
+    case 3: return {kOverlordCadenceMin, kOverlordCadenceMax};
+    default: return {0.0F, 0.0F};
+  }
+}
+
+float tierMinTime(int tier) {
+  switch (tier) {
+    case 1: return Game::kEliteMinTime;
+    case 2: return Game::kChampionMinTime;
+    case 3: return Game::kOverlordMinTime;
     default: return 0.0F;
   }
+}
+
+int tierEventCap(int tier) {
+  return (tier >= 1 && tier < 4) ? Game::kTierLiveCap[static_cast<std::size_t>(tier)] : 0;
+}
+
+// The rate at which a tier is being handled right now, above which the next
+// arrival comes as a group rather than a pair.
+//
+// Scaled to the new supply of kills. Pressure accrues 1.0 per elite kill and
+// drains over kPressureWindow, so a score of 1.5 is one elite cleared every
+// twenty seconds -- a formality rather than a fight. The old line was a multiple
+// of the old gate, which asked for 22, and the game now supplies about 5 elite
+// kills in ten minutes: a line nothing could ever reach is the same as no line
+// at all, and "3 or 4 when they are already easy" would have been dead code.
+float Game::tierComfortLine(int tier) {
+  if (tier == 1) return kEliteComfortPressure;
+  // A champion or overlord is worth 1.25, and arrives far less often, so its line
+  // is the same shape: a couple of clears inside one window.
+  return kTierComfortMul * (tier == 2 ? 1.0F : 1.25F);
+}
+
+// One or two ordinarily, three or four once the player is comfortably past it.
+//
+// Odd and even are both in both halves on purpose: an "average" size that is
+// really 1.5 would mean a tier the player is handling comfortably still sends
+// single bodies, which is the same flat one-at-a-time feeling the ladder is being
+// fixed for. A comfortable player meets three or four, always, so the screen
+// visibly fills.
+int Game::tierEventSizeFor(bool comfortable) const {
+  std::uniform_real_distribution<float> unit(0.0F, 1.0F);
+  const bool odd = unit(rng_) < 0.5F;
+  if (!comfortable) return odd ? 1 : 2;
+  return odd ? 3 : 4;
 }
 
 ChainDropSpan chainDropSpan(float targetY, float born) {
@@ -621,14 +686,23 @@ float enemyKnockbackResistance(float simTime, int tier, bool resistant) {
   return std::min(1.0F, res);
 }
 
-int traitsForTier(int tier, float simTime) {
-  if (tier <= 1) return tier == 1 ? 1 : 0; // elite: exactly one bonus
-  // Champions: 2 base, +1 after 5 minutes. Overlords: 4 base, +1 after 10.
-  // Both extra traits moved later. A champion with three traits at the four
-  // minute mark is not a champion, it is a boss with a champion's label, and the
-  // player has no way to have built for it yet.
-  if (tier == 2) return 2 + (simTime >= 300.0F ? 1 : 0);
-  return 4 + (simTime >= 600.0F ? 1 : 0);
+// How many bonus traits a tier rolls. Flat, and deliberately not a function of the
+// clock: the player has to be able to predict what is coming, and "a champion has
+// two traits for the first five minutes and three after" is a rule nobody learns.
+//
+// One and three and seven, out of a pool of eleven. The gap between three and
+// seven is the whole point of the top two rungs -- a champion is a shape you can
+// still read from across the screen, an overlord is a wall of overlapping rules
+// you have to solve with the tools you brought, not the ones it rolled. Seven of
+// eleven means an overlord is usually armoured as well as fast as well as
+// shooting, which is what makes it worth the seven cards its box hands out.
+int traitsForTier(int tier) {
+  switch (tier) {
+    case 1: return 1;
+    case 2: return 3;
+    case 3: return 7;
+    default: return 0;
+  }
 }
 
 Game::Game(const Content& content, std::uint32_t seed)
@@ -697,12 +771,31 @@ void Game::reset() {
   strongestKilledTier_ = 0;
   strongestKilledDef_ = -1;
   tierKillMask_ = 0;
-  // The adaptive tribunal director is per-run too: a fresh run starts with no
-  // handling score, so the heavy tiers are shut again.
+  // The tribunal director is per-run too: a fresh run starts with no kill
+  // milestone and no handling score, so the heavy tiers are shut again.
   for (int t = 0; t < 4; ++t) {
     tierPressure_[t] = 0.0F;
-    tierGrace_[t] = 0.0F;
+    tierKills_[t] = 0;
     tierOpen_[t] = t == 1;
+    // The elite starts DUE, and its own floor is what holds the first one back.
+    // Arming its clock at kEliteMinTime as well meant the floor was paid twice --
+    // the clock could not start ticking until the gate opened, and the gate
+    // opened at 90 -- so the first elite walked in at three minutes and the
+    // manual said one and a half. Two numbers guarding one arrival is one too
+    // many; the floor is the one the player is told about.
+    //
+    // The two heavy tiers start ARMED at their whole first interval instead,
+    // because their floor is a kill milestone and the milestone landing is the
+    // moment to be standing in the corpse of the elite that earned it. So a
+    // tribunal earned at minute five is a fight met at minute nine, called out
+    // two seconds beforehand. And since a clock only ticks while its tier is
+    // unlocked, a champion you never earn costs you nothing.
+    tierCooldown_[t] = t == 1 ? 0.0F
+                               : (t == 2 ? kChampionCadenceMin
+                                         : kOverlordCadenceMin);
+    tierWarned_[t] = 0;
+    tierEventsFired_[t] = 0;
+    tierEventBodies_[t] = 0;
   }
   tierBanner_.clear();
   tierBannerT_ = 0.0F;
@@ -2750,6 +2843,11 @@ void Game::killEnemy(entt::entity e) {
     // A champion or overlord is worth more than a plain elite: clearing one
     // says more about the build than mowing down three fodder-tier elites.
     tierPressure_[slainTier] += slainTier == 1 ? 1.0F : 1.25F;
+    // The permanent half of the same ledger. The decaying score above is
+    // "are you handling these right now", and the count is "have you ever
+    // handled these" -- a promotion is a thing you earn, so it does not get
+    // taken back the moment you have a bad ten seconds.
+    ++tierKills_[slainTier];
   }
   if (slainTier > strongestKilledTier_) {
     strongestKilledTier_ = slainTier;
@@ -4788,12 +4886,19 @@ int Game::openChest(int grants) {
 }
 
 entt::entity Game::spawnChest(float x, float y, int tier) {
-  // How many weapons this tier's box improves. The numbers are the reward: an
-  // elite is one card, a champion is a whole hand, an overlord is most of the
-  // arsenal in one pickup.
+  // How many weapons this tier's box improves. The numbers are the reward, and
+  // they track the tier ladder: an elite is one card, a champion is a whole hand,
+  // an overlord is most of the arsenal in one pickup.
+  //
+  // Seven for the overlord, not five. It is the rarest thing in the game by a
+  // wide margin now -- one every eight to ten minutes, behind two champion kills --
+  // and it is the fight the player has spent the whole run building for, so its
+  // box has to be worth the run rather than worth the fight. Five cards across
+  // five weapons was one card each; seven is the difference between improving
+  // everything you own and improving the two or three things that matter.
   int base = 1;
   if (tier == 2) base = 3;
-  if (tier >= 3) base = 5;
+  if (tier >= 3) base = 7;
   // NOT clamped to the arsenal size. A box is N CARDS, and openChest spends them
   // across the weapons the player holds, spreading before repeating. Clamping
   // here instead would quietly downgrade a champion's gift to an elite's for
@@ -5078,6 +5183,94 @@ bool Game::typeCanSpawn(int def) const {
   return testTypeIsRecent(def);
 }
 
+// Weighted pick among unlocked, non-retired enemy types. -1 only if the content
+// has no enemies at all: retirement can never empty the pool, because the second
+// pass drops it.
+//
+// This is a member rather than a lambda in spawnWave because fireTierEvent picks
+// its own archetype, and a second copy of a weighted picker is a second place for
+// the two to disagree about which types are legal.
+int Game::pickDef() {
+  if (content_.enemies.empty()) return -1;
+  std::uniform_real_distribution<float> unit(0.0F, 1.0F);
+  float totalWeight = 0.0F;
+  for (std::size_t i = 0; i < content_.enemies.size(); ++i) {
+    if (typeCanSpawn(static_cast<int>(i))) totalWeight += content_.enemies[i].weight;
+  }
+  if (totalWeight <= 0.0F) {
+    // Retirement emptied the pool, so fall back to every time-unlocked type
+    // regardless of retirement. This has to use the SAME gate as the first pass:
+    // weighting a type here that the selection loop below then skips would leave
+    // `roll` never reaching zero and silently stop ALL spawns.
+    for (std::size_t i = 0; i < content_.enemies.size(); ++i) {
+      if (simTime_ >= typeLockedUntil(static_cast<int>(i))) {
+        totalWeight += content_.enemies[i].weight;
+      }
+    }
+    if (totalWeight <= 0.0F) return -1;
+  }
+  float roll = unit(rng_) * totalWeight;
+  for (std::size_t i = 0; i < content_.enemies.size(); ++i) {
+    if (!typeCanSpawn(static_cast<int>(i))) continue;
+    roll -= content_.enemies[i].weight;
+    if (roll <= 0.0F) return static_cast<int>(i);
+  }
+  return -1;
+}
+
+// A tiered spawn's stats, in one place. The trash packs and the scheduled tier
+// events both need this, and the traits are the part that must not drift: a
+// champion that rolled its bonuses from a different table than the one the
+// bestiary describes is a champion the player cannot predict.
+void Game::fillTierSpawn(PendingSpawn& p, int tier, float hpScale, float speedScale,
+                         float touchScale) {
+  std::uniform_real_distribution<float> unit(0.0F, 1.0F);
+  const TierBuffs buffs = tierBuffs(tier);
+  float hpMul = hpScale;
+  float touchMul = touchScale;
+  float speedMul = speedScale;
+  p.xpMul = buffs.xp;
+  std::uint32_t traits = TraitNone;
+  const int traitCount = traitsForTier(tier);
+  std::array<bool, PickCount> used{};
+  for (int k = 0; k < traitCount; ++k) {
+    int pick = static_cast<int>(unit(rng_) * static_cast<float>(PickCount));
+    int guard = static_cast<int>(PickCount);
+    while (guard-- > 0 && used[static_cast<std::size_t>(pick)]) {
+      pick = (pick + 1) % static_cast<int>(PickCount);
+    }
+    used[static_cast<std::size_t>(pick)] = true;
+    switch (pick) {
+      // The Fast trait is a RAMP, not a flat 1.7x. A flat bonus applied the
+      // moment a horde spawns makes a 4-minute ring of elites undodgeable, and it
+      // makes the trait worthless to read: there is no difference between a
+      // 2-minute and a 9-minute Fast elite. Growing to the full bonus by
+      // kFastTraitFullTime means a Fast elite is a genuine threat only once the
+      // run is built to handle one.
+      case PickFast:
+        speedMul *= fastTraitSpeedMul();
+        traits |= TraitFast;
+        break;
+      case PickArmored: hpMul *= 2.5F; touchMul *= 1.3F; break;
+      case PickRegenerating: traits |= TraitRegenerating; break;
+      case PickExplosive: traits |= TraitExplosive; break;
+      case PickVenomous: traits |= TraitVenomous; break;
+      case PickVampiric: traits |= TraitVampiric; break;
+      case PickShielded: traits |= TraitShielded; break;
+      case PickHeavy: touchMul *= 2.0F; break;
+      case PickArcher: traits |= TraitArcher; break;
+      case PickAura: traits |= TraitAura; break;
+      case PickResistant: traits |= TraitResistant; break;
+      default: break;
+    }
+  }
+  p.hpMul = std::max(1.0F, hpMul * rollTierHpMul(buffs, rng_));
+  p.touchMul = touchMul * buffs.touch;
+  p.speedMul = speedMul * buffs.speed;
+  p.traits = traits;
+  p.tier = static_cast<std::uint8_t>(tier);
+}
+
 // Spawns one chain bolt. The arc itself is the Tesla Coil's whole identity, and
 // the one thing that distinguishes another chain weapon is what the bolt DOES at
 // each hop rather than how many hops it has: the Blizzard Rail shatters into a
@@ -5268,38 +5461,6 @@ void Game::spawnWave() {
   // distance by 10:00; after that the distance no longer changes.
   const float spawnDist = kSpawnDist * std::min(2.0F, 1.0F + simTime_ / 600.0F);
 
-  // Weighted pick among unlocked, non-retired enemy types (regular spawn +
-  // horde bursts). If retirement ever emptied the pool, fall back so the
-  // game can never stop spawning.
-  auto pickDef = [&]() -> int {
-    float totalWeight = 0.0F;
-    for (const auto& def : content_.enemies) {
-      if (typeCanSpawn(static_cast<int>(&def - content_.enemies.data()))) {
-        totalWeight += def.weight;
-      }
-    }
-    if (totalWeight <= 0.0F) {
-      // Retirement emptied the pool, so fall back to every time-unlocked type
-      // regardless of retirement. This has to use the SAME gate as the first
-      // pass: weighting a type here that the selection loop below then skips
-      // would leave `roll` never reaching zero and silently stop ALL spawns.
-      for (const auto& def : content_.enemies) {
-        if (simTime_ >= typeLockedUntil(static_cast<int>(&def - content_.enemies.data()))) {
-          totalWeight += def.weight;
-        }
-      }
-      if (totalWeight <= 0.0F) return -1;
-    }
-    float roll = unit(rng_) * totalWeight;
-    for (std::size_t i = 0; i < content_.enemies.size(); ++i) {
-      const auto& candidate = content_.enemies[i];
-      if (!typeCanSpawn(static_cast<int>(i))) continue;
-      roll -= candidate.weight;
-      if (roll <= 0.0F) return static_cast<int>(i);
-    }
-    return -1;
-  };
-
   // Periodic horde bursts tick every frame (not per normal spawn) so their
   // cadence stays a flat ~40-50s. A full ring of enemies closes in from every
   // side — this is what makes it a horde game rather than a trickle shooter.
@@ -5383,124 +5544,38 @@ void Game::spawnWave() {
     const float angle = centerAngle
         + (packSize > 1 ? (static_cast<float>(member) - static_cast<float>(packSize - 1) * 0.5F) * 0.35F : 0.0F)
         + (member > 0 ? (unit(rng_) - 0.5F) * 0.5F : 0.0F);
-    const float x = pt.x + std::cos(angle) * spawnDist;
-    const float y = pt.y + std::sin(angle) * spawnDist;
-
-    // Per-member elite/champion/overlord rolls (each enemy rolls
-    // independently). Elites open at 45s and creep up with time. Champions and
-    // overlords are NOT on a clock: the adaptive tribunal director opens them
-    // once the previous tier is being handled easily, and the chance scales with
-    // how far above that line the player is.
-    //
-    // Their POWER is deliberately unchanged — an overlord is meant to be the
-    // difficulty spike, not a soft one. Only the timing follows the player.
-    // The screen's elite budget for this spawn. Counted ONCE per pack rather
-    // than per member, so a pack of three cannot spend three slots, and the
-    // budget is handed out in tier order: an overlord is worth more than a
-    // champion, which is worth more than an elite, so when there is only room
-    // for one the roll keeps the expensive one.
-    int tierBudget = kLiveTierCap - liveTierCount();
-    if (tierBudget < 0) tierBudget = 0;
-    const float eliteChance = tierSpawnChance(1);
-    const float champChance = tierSpawnChance(2);
-    const float overlordChance = tierSpawnChance(3);
-    const bool memberOverlord = tierBudget > 0 && unit(rng_) < overlordChance;
-    if (memberOverlord) --tierBudget;
-    const bool memberChampion =
-        tierBudget > 0 && !memberOverlord && unit(rng_) < champChance;
-    if (memberChampion) --tierBudget;
-    // An elite is the common tier, so it is the one that fills any leftover room
-    // -- including all of it, when a pack is big. That is the point: the trash
-    // becomes elite instead of the elites becoming trash.
-    bool memberElite = false;
-    if (!memberOverlord && !memberChampion && tierBudget > 0) {
-      const int room = std::min(tierBudget, 3);
-      // A pack may take more than one slot when the screen is empty, which is
-      // the only way an early pack of three can be the "one or two on screen"
-      // moment rather than three separate minutes of one elite.
-      memberElite = room > 0 && unit(rng_) < std::max(eliteChance, 0.34F);
-      if (memberElite) --tierBudget;
-    }
-    if (memberChampion || memberOverlord) memberElite = true;
-
-    float mHpMul = hpScale;
-    float mTouchMul = touchScale;
-    float mSpeedMul = speedScale * rampFor(defIndex);
-    float mXpMul = 1.0F;
-    std::uint32_t mTraits = TraitNone;
-    std::uint8_t mTier = 0;
-    if (memberElite) {
-      mTier = memberOverlord ? 3 : (memberChampion ? 2 : 1);
-      // Every elite-and-above gets ALL of its stats boosted so it cannot be
-      // deleted instantly; stronger tiers are boosted more.
-      const TierBuffs buffs = tierBuffs(mTier);
-      mHpMul *= rollTierHpMul(buffs, rng_);
-      mTouchMul *= buffs.touch;
-      mSpeedMul *= buffs.speed;
-      mXpMul = buffs.xp;
-      const int traitCount = traitsForTier(mTier, simTime_);
-      std::array<bool, PickCount> used{};
-      for (int k = 0; k < traitCount; ++k) {
-        int pick = static_cast<int>(unit(rng_) * static_cast<float>(PickCount));
-        int guard = static_cast<int>(PickCount);
-        while (guard-- > 0 && used[static_cast<std::size_t>(pick)]) {
-          pick = (pick + 1) % static_cast<int>(PickCount);
-        }
-        used[static_cast<std::size_t>(pick)] = true;
-        switch (pick) {
-          // The Fast trait is a RAMP, not a flat 1.7x. A flat bonus applied the
-          // moment a horde spawns makes a 4-minute ring of elites undodgeable,
-          // and it makes the trait worthless to read: there is no difference
-          // between a 2-minute and a 9-minute Fast elite. Growing to the full
-          // bonus by kFastTraitFullTime means a Fast elite is a genuine threat
-          // only once the run is built to handle one.
-          case PickFast:
-            mSpeedMul *= fastTraitSpeedMul();
-            mTraits |= TraitFast;
-            break;
-          case PickArmored: mHpMul *= 2.5F; mTouchMul *= 1.3F; break;
-          case PickRegenerating: mTraits |= TraitRegenerating; break;
-          case PickExplosive: mTraits |= TraitExplosive; break;
-          case PickVenomous: mTraits |= TraitVenomous; break;
-          case PickVampiric: mTraits |= TraitVampiric; break;
-          case PickShielded: mTraits |= TraitShielded; break;
-          case PickHeavy: mTouchMul *= 2.0F; break;
-          case PickArcher: mTraits |= TraitArcher; break;
-          case PickAura: mTraits |= TraitAura; break;
-          case PickResistant: mTraits |= TraitResistant; break;
-          default: break;
-        }
-      }
-    } else {
-      // Over time, more and more of the ordinary (tier 0) enemies learn to
-      // shoot. The chance ramps from 0 at ~60s to a 25% cap by ~7 minutes, so
-      // the early game stays melee-only and a late horde genuinely mixes
-      // ranged threats into the swarm. This is separate from the elite trait
-      // roll above, which is how "elite archers" have always worked.
-      const float rangedChance =
-          simTime_ >= 60.0F ? std::min(0.25F, (simTime_ - 60.0F) / 1320.0F) : 0.0F;
-      if (rangedChance > 0.0F && unit(rng_) < rangedChance) {
-        mTraits |= TraitArcher;
-      }
-    }
 
     PendingSpawn pending{};
-    pending.x = x;
-    pending.y = y;
+    pending.x = pt.x + std::cos(angle) * spawnDist;
+    pending.y = pt.y + std::sin(angle) * spawnDist;
     pending.t = kSpawnTelegraph;
     pending.def = defIndex;
-    // An overlord retires its own type: it will not spawn again this run, so
-    // the same boss cannot repeat forever. The 3 newest types stay eligible.
-    if (memberOverlord) {
-      retireEnemyType(defIndex);
-      refreshRecentTypes();
+    pending.hpMul = std::max(1.0F, hpScale);
+    pending.touchMul = touchScale;
+    pending.speedMul = speedScale * rampFor(defIndex);
+    pending.xpMul = 1.0F;
+    pending.traits = TraitNone;
+    pending.tier = 0;
+
+    // A pack is TRASH. There is deliberately no tier roll in it any more.
+    //
+    // Every pack used to roll each member for elite, champion and overlord, so a
+    // tier's arrival depended on how much garbage happened to be on screen: an
+    // elite per ten bodies, forever. That is where 42 chests in five and a half
+    // minutes came from, and it is why a champion could show up in the same
+    // second as three elites and mean nothing. Tiers are scheduled now
+    // (fireTierEvent), so the trash rate and the difficulty curve are two
+    // separate knobs and moving one cannot quietly wreck the other.
+    //
+    // Over time, more and more of the ordinary (tier 0) enemies learn to shoot.
+    // The chance ramps from 0 at ~60s to a 25% cap by ~7 minutes, so the early
+    // game stays melee-only and a late horde genuinely mixes ranged threats into
+    // the swarm.
+    const float rangedChance =
+        simTime_ >= 60.0F ? std::min(0.25F, (simTime_ - 60.0F) / 1320.0F) : 0.0F;
+    if (rangedChance > 0.0F && unit(rng_) < rangedChance) {
+      pending.traits |= TraitArcher;
     }
-    pending.hpMul = std::max(1.0F, mHpMul);
-    pending.touchMul = mTouchMul;
-    pending.speedMul = mSpeedMul;
-    pending.xpMul = mXpMul;
-    pending.traits = mTraits;
-    pending.tier = mTier;
     pending_.push_back(pending);
   }
 }
@@ -5616,12 +5691,21 @@ void Game::enterLevelUp() {
   buildChoices();
 }
 
-// --- Adaptive tribunal director ----------------------------------------------
-// The heavy tiers answer to the player, not to the clock. Champions wait until
-// elites are routine, overlords wait until champions are, and both shut again
-// if the run stops keeping up. Killing the tier is what feeds the score, so a
-// high-damage build unlocks the next tribunal early and a struggling one never
-// sees it — the difficulty curve follows the build instead of the clock.
+// --- Tribunal director --------------------------------------------------------
+// Two questions, answered separately (see the header for why conflating them is
+// what broke this twice):
+//
+//   MAY it show up?  A kill milestone, plus a floor on how early. Champions wait
+//                    until you have killed four elites, overlords until two
+//                    champions. Neither closes again.
+//   HOW MANY?        A clock, and a size drawn from how well you are handling
+//                    them right now (tierEventSize).
+//
+// So the difficulty curve follows the build, but by EARNING a rung rather than by
+// having a mood. The old version opened and closed the heavy tiers on a decaying
+// rate, which meant they flickered, could not be learned, and — once tiers moved
+// onto a clock — could not be reached at all, because the score needed more
+// sustained kills than a clock-driven elite supplies.
 
 bool Game::tierUnlocked(int tier) const {
   switch (tier) {
@@ -5629,9 +5713,15 @@ bool Game::tierUnlocked(int tier) const {
     // 1:30 instead of 0:45. The first elite used to arrive before the player
     // had a third pick, which meant the run's first real decision was "do I
     // play around the thing that is about to end me".
+    //
+    // The floors apply to the heavy tiers too, and they used to be decorative:
+    // kChampionMinTime and kOverlordMinTime were declared and never read, so a
+    // champion earned thirty seconds into a run landed the instant the fourth
+    // elite died. A floor nobody enforces is a lie in the source, and the second
+    // half of the fix is deleting constants that do not do anything.
     case 1: return tierOpen_[1] && simTime_ >= kEliteMinTime;
-    case 2: return tierOpen_[2];
-    case 3: return tierOpen_[3];
+    case 2: return tierOpen_[2] && simTime_ >= kChampionMinTime;
+    case 3: return tierOpen_[3] && simTime_ >= kOverlordMinTime;
     default: return false;
   }
 }
@@ -5645,26 +5735,86 @@ int Game::liveTierCount() const {
   return n;
 }
 
-int Game::testLiveTierCount() const { return liveTierCount(); }
+int Game::liveTierCount(int tier) const {
+  if (tier <= 0) return liveTierCount();
+  int n = 0;
+  auto view = registry_.view<Enemy, EnemyTraits>();
+  for (const auto e : view) {
+    if (view.get<EnemyTraits>(e).tier == tier) ++n;
+  }
+  return n;
+}
 
-float Game::tierSpawnChance(int tier) const {
-  if (!tierUnlocked(tier)) return 0.0F;
-  if (tier == 1) {
-    // Starts rarer AND tops out lower. At the old 15% one in seven spawns was an
-    // elite, which stops being an event and becomes a tax on the trash.
-    return std::min(0.10F, 0.025F + simTime_ * 0.0003F);
+int Game::testLiveTierCount() const { return liveTierCount(); }
+int Game::testLiveTierCount(int tier) const { return liveTierCount(tier); }
+
+// How many of a tier walk in together. One or two is the ordinary arrival: a thing
+// you deal with. Three or four means the player is so far past the tier that a
+// pair would be an interruption rather than a fight, and the honest answer to that
+// is to send more of the same thing rather than to invent a harder one -- the tier
+// keeps its identity, the screen just gets fuller.
+int Game::tierEventSize(int tier) {
+  return tierEventSizeFor(tierPressure_[tier] >= tierComfortLine(tier));
+}
+
+// One tier's scheduled arrival, if it is due and there is room for it. Returns
+// whether it fired, because a held-back event has to stay due.
+bool Game::fireTierEvent(int tier) {
+  if (tier < 1 || tier > 3) return false;
+  if (!tierUnlocked(tier)) return false;
+  // Still up from the last one. A tier that arrives while its own predecessor is
+  // alive is not a harder fight, it is a bigger number on the same screen.
+  const int room = tierEventCap(tier) - liveTierCount(tier);
+  if (room <= 0) return false;
+  if (player_ == entt::null || !registry_.valid(player_)) return false;
+  std::uniform_real_distribution<float> unit(0.0F, 1.0F);
+
+  const int def = pickDef();
+  if (def < 0) return false;
+  // Clamped to the ROOM, not just gated on there being some. The check above used
+  // to be "is the screen empty of this tier", and the size was rolled after it --
+  // so one surviving elite plus a comfortable roll of four put five on the floor
+  // against a ceiling of four, and the ceiling was a promise the code did not
+  // keep. kTierLiveCap is the only hard number in the ladder; the size is a
+  // suggestion it gets to overrule.
+  const int count = std::min(tierEventSize(tier), room);
+  // A pack, not a ring: the members of one event come from one direction and close
+  // together, so the player is choosing how to meet a group rather than being
+  // handed five separate problems at five angles.
+  const auto& pt = registry_.get<Transform>(player_);
+  const float baseAngle = unit(rng_) * 2.0F * kPi;
+  const float spawnDist = kSpawnDist * std::min(2.0F, 1.0F + simTime_ / 600.0F);
+  float hpScale = 1.0F;
+  float speedScale = 1.0F;
+  float touchScale = 1.0F;
+  currentScales(hpScale, speedScale, touchScale);
+
+  for (int k = 0; k < count; ++k) {
+    const float angle = baseAngle +
+        (count > 1 ? (static_cast<float>(k) - static_cast<float>(count - 1) * 0.5F) *
+                         0.42F
+                   : 0.0F);
+    PendingSpawn p{};
+    p.x = pt.x + std::cos(angle) * spawnDist;
+    p.y = pt.y + std::sin(angle) * spawnDist;
+    p.t = kSpawnTelegraph;
+    p.def = def;
+    fillTierSpawn(p, tier, hpScale, speedScale * typeSpeedRamp(def), touchScale);
+    pending_.push_back(p);
   }
-  if (tier == 2) {
-    // The further above the "elites are routine" line the player is, the more
-    // champions show up. See kChampionChanceSlope for why this is small.
-    const float over = tierPressure_[1] - kChampionPressure;
-    return std::clamp(over * kChampionChanceSlope, 0.0F, kChampionChanceCap);
-  }
+  ++tierEventsFired_[tier];
+  tierEventBodies_[tier] += count;
+  // An overlord retires its own type: the same boss must not repeat all run.
   if (tier == 3) {
-    const float over = tierPressure_[2] - kOverlordPressure;
-    return std::clamp(over * kOverlordChanceSlope, 0.0F, kOverlordChanceCap);
+    retireEnemyType(def);
+    refreshRecentTypes();
   }
-  return 0.0F;
+  // Re-armed from when it FIRED, not from when it was due. A tier held back by a
+  // busy screen therefore pushes the next one out with it, instead of arriving
+  // twice in quick succession the moment the screen clears.
+  const auto [lo, hi] = tierCadence(tier);
+  tierCooldown_[tier] = lo + unit(rng_) * (hi - lo);
+  return true;
 }
 
 void Game::updateTierDirector() {
@@ -5674,31 +5824,71 @@ void Game::updateTierDirector() {
     if (tierBannerT_ <= 0.0F) tierBanner_.clear();
   }
   for (int t = 1; t < 4; ++t) {
-    // The handling score bleeds away, so only *recent* form counts: a build
-    // that was strong ten minutes ago does not keep the overlords coming.
+    // The handling score bleeds away, so only *recent* form counts. It no longer
+    // decides whether a tier is available -- see below -- only how large the next
+    // arrival is, so it is allowed to be a rate again.
     tierPressure_[t] = std::max(0.0F, tierPressure_[t] - dt / kPressureWindow);
-    if (tierGrace_[t] > 0.0F) tierGrace_[t] = std::max(0.0F, tierGrace_[t] - dt);
   }
-  const bool champWant =
-      simTime_ >= kChampionMinTime && tierPressure_[1] >= kChampionPressure;
-  const bool lordWant = tierOpen_[2] && simTime_ >= kOverlordMinTime &&
-                        tierPressure_[2] >= kOverlordPressure;
-  const auto apply = [this](int tier, bool want, const char* label) {
-    if (want) {
-      // Announce it once, on the edge of the switch: this is the game's way of
-      // saying "you outgrew the last tier".
-      if (!tierOpen_[tier]) {
-        tierBanner_ = std::string(label) + " TRIBUNAL OPEN";
-        tierBannerT_ = kTierBannerLife;
-      }
-      tierOpen_[tier] = true;
-      tierGrace_[tier] = kTierGrace;
-    } else if (tierGrace_[tier] <= 0.0F) {
-      tierOpen_[tier] = false;
-    }
+
+  // Whether a tribunal is open is now a MILESTONE: a number of that tier killed
+  // this run, which is a thing the player can see in the bestiary and count
+  // towards.
+  //
+  // It used to be a decaying rate, and that was only ever going to work while
+  // tiers were a share of every spawn. With elites on a clock there are five
+  // elites in a ten-minute run, and the score drains over 30 seconds, so the old
+  // gate of 14 needed more sustained elite kills than the entire game supplies:
+  // champions and overlords became unreachable, and a silent unreachable gate is
+  // the worst kind, because the difficulty curve that was supposed to be adaptive
+  // is just absent. A count cannot run out of supply.
+  //
+  // And it does not close again. A promotion is earned; taking it back the moment
+  // the player has a bad ten seconds was a rule nobody could learn and a source of
+  // flicker, and the thing that was supposed to punish a struggling build -- them
+  // never reaching the count -- already does that.
+  const auto apply = [this](int tier, int need, const char* label) {
+    if (tierOpen_[tier] || tierKills_[tier - 1] < need) return;
+    // Announce it once, on the edge of the switch: this is the game's way of
+    // saying "you outgrew the last tier".
+    tierBanner_ = std::string(label) + " TRIBUNAL OPEN";
+    tierBannerT_ = kTierBannerLife;
+    tierOpen_[tier] = true;
   };
-  apply(2, champWant, "CHAMPION");
-  apply(3, lordWant, "OVERLORD");
+  apply(2, kChampionKills, "CHAMPION");
+  apply(3, kOverlordKills, "OVERLORD");
+
+  // The cadence clocks. An event is due when its clock runs out AND its tier is
+  // unlocked AND the last one of that tier is off the screen (fireTierEvent).
+  //
+  // The clock only ticks for an unlocked tier, which is what stops a champion
+  // that opens its tribunal at minute nine from arriving on the same frame: a
+  // tribunal that has just opened has a clock of zero, and the first thing the
+  // director does about it is hand out the full first interval.
+  for (int t = 1; t < 4; ++t) {
+    if (!tierUnlocked(t)) continue;
+    if (tierCooldown_[t] > 0.0F) {
+      tierCooldown_[t] = std::max(0.0F, tierCooldown_[t] - dt);
+      // Called out a beat before it lands, the same courtesy the horde ring gets.
+      // Gated on the clock reaching the callout and on nothing having landed yet,
+      // so a tier held back by a busy screen does not announce itself over and
+      // over while it waits for room.
+      if (tierCooldown_[t] > 0.0F && tierCooldown_[t] <= kTierCallout &&
+          tierWarned_[t] == 0 && tierBannerT_ < 1.0F) {
+        tierWarned_[t] = 1;
+        showBanner(kTierCalloutLabel[t], 1.4F);
+      }
+    } else if (tierWarned_[t] != 0) {
+      // Due and could not land, so the callout is stale. Clear it, or the tier
+      // walks in without ever announcing itself the second time round.
+      tierWarned_[t] = 0;
+    }
+  }
+  // Highest tier first, so a run that has earned an overlord spends the frame on
+  // that rather than on the elite that is also due. The elite is not skipped: if
+  // the overlord cannot land, the elite still tries.
+  for (int t = 3; t >= 1; --t) {
+    if (tierCooldown_[t] <= 0.0F) fireTierEvent(t);
+  }
 }
 
 // --- Active abilities (J / K / L) ---------------------------------------------
@@ -7418,8 +7608,10 @@ void Game::enterTestModeImpl() {
   savedTierKillMask_ = tierKillMask_;
   for (int t = 0; t < 4; ++t) {
     savedTierPressure_[t] = tierPressure_[t];
+    savedTierKills_[t] = tierKills_[t];
     savedTierOpen_[t] = tierOpen_[t];
-    savedTierGrace_[t] = tierGrace_[t];
+    savedTierCooldown_[t] = tierCooldown_[t];
+    savedTierWarned_[t] = tierWarned_[t];
   }
   savedTierBanner_ = tierBanner_;
   savedTierBannerT_ = tierBannerT_;
@@ -7547,8 +7739,17 @@ void Game::exitTestModeImpl() {
   tierKillMask_ = savedTierKillMask_;
   for (int t = 0; t < 4; ++t) {
     tierPressure_[t] = savedTierPressure_[t];
+    // The kill milestone too, and this is the one that would have been a real
+    // bug: a sandbox excursion that killed a few tiered dummies and then restored
+    // would have handed the run a champion tribunal it had not earned.
+    tierKills_[t] = savedTierKills_[t];
     tierOpen_[t] = savedTierOpen_[t];
-    tierGrace_[t] = savedTierGrace_[t];
+    // The cadence clocks are run state like any other. Left running, a sandbox
+    // excursion would come back to a run whose next elite is already overdue --
+    // or, worse, one that has just had its cooldown re-armed by a body the player
+    // spawned in the sandbox and then restored away.
+    tierCooldown_[t] = savedTierCooldown_[t];
+    tierWarned_[t] = savedTierWarned_[t];
   }
   tierBanner_ = savedTierBanner_;
   tierBannerT_ = savedTierBannerT_;
@@ -9064,24 +9265,51 @@ void Game::renderBestiary(core::render::Batcher& b, float px, float py) {
     int tier;
     const char* name;
     const char* roman;
-    const char* gate; // how this tier is unlocked
+    std::string gate; // how this tier arrives and what opens it
     Color color;
   };
+  // The gate text is BUILT from the game's own numbers, not typed. A hand-written
+  // "every 2 minutes" here is a second copy of the cadence, and the two disagree
+  // the first time a balance pass moves a number -- which is exactly how the panel
+  // came to say "FROM 45s" for a tier that had not unlocked at 45 seconds for
+  // several rounds.
+  const auto clockText = [](int tier) {
+    const auto [lo, hi] = tierCadence(tier);
+    char text[64];
+    std::snprintf(text, sizeof(text), "EVERY %d:%02d-%d:%02d",
+                  static_cast<int>(lo) / 60, static_cast<int>(lo) % 60,
+                  static_cast<int>(hi) / 60, static_cast<int>(hi) % 60);
+    return std::string(text);
+  };
+  const auto killsText = [](int tier) {
+    const int need = Game::tierKillGate(tier);
+    const int of = tier == 2 ? 1 : 2;
+    char text[48];
+    std::snprintf(text, sizeof(text), "AFTER %d %s%s", need,
+                  of == 1 ? "ELITE" : "CHAMPION", need == 1 ? "" : "S");
+    return std::string(text);
+  };
   const Tribunal tribunals[] = {
-      {1, "ELITE",    "I",   "FROM 45s",            eliteGold},
-      {2, "CHAMPION", "II",  "WHEN ELITES ARE EASY", champOrange},
-      {3, "OVERLORD", "III", "WHEN CHAMPIONS ARE",  overlordViolet},
+      {1, "ELITE",    "I",   clockText(1),              eliteGold},
+      {2, "CHAMPION", "II",  clockText(2) + " IF " + killsText(2), champOrange},
+      {3, "OVERLORD", "III", clockText(3) + " IF " + killsText(3), overlordViolet},
   };
 
   b.text(24.0F, 100.0F, 1.8F, gold, "TRIBUNALS");
   const float tribW = (px - 48.0F) / 3.0F;
   const float tribY = 122.0F;
-  // Six text rows: roman+name at +8, traits/XP/gate at +26, the live gate status
-  // at +38, the stat line at +52, the resistance line at +66, then up to four
-  // wrapped pool lines from +80 at a 12px pitch -- which lands the last one at
-  // +116 and a 19px line, so 132 is the tight fit. It used to be 112, which is
-  // exactly why the stat line and the gate status ended up sharing a slot.
-  const float tribH = 132.0F;
+  // Seven text rows, one per fact, each with its own slot: roman+name at +8,
+  // traits/XP at +26, the arrival clock at +38, the live gate count at +50, the
+  // stat line at +64, the resistance line at +78, then up to four wrapped pool
+  // lines from +92 at a 12px pitch -- which lands the last one at +128 and a 19px
+  // line, so 150 is the tight fit.
+  //
+  // The one-fact-per-slot rule is the whole lesson here. Traits/XP and the gate
+  // text used to share +26, and the gate status shared +40 with the stat line; the
+  // stat line was drawn second and always won, so the gate progress -- the entire
+  // point of the director -- was never once visible on screen. Two facts that both
+  // matter get two rows.
+  const float tribH = 150.0F;
   for (std::size_t ti = 0; ti < 3; ++ti) {
     const auto& tb = tribunals[ti];
     const float x = 24.0F + static_cast<float>(ti) * tribW;
@@ -9095,25 +9323,24 @@ void Game::renderBestiary(core::render::Batcher& b, float px, float py) {
 
     b.text(x + 14.0F, tribY + 8.0F, 1.9F, tb.color,
            std::string(tb.roman) + ". " + tb.name);
-    const int traitCount = traitsForTier(tb.tier, simTime_);
+    const int traitCount = traitsForTier(tb.tier);
     const TierBuffs buffs = tierBuffs(tb.tier);
-    std::snprintf(buf, sizeof(buf), "%d TRAIT%s   XP x%.0f   %s",
+    std::snprintf(buf, sizeof(buf), "%d TRAIT%s   XP x%.0f",
                   traitCount, traitCount == 1 ? "" : "S",
-                  static_cast<double>(buffs.xp), tb.gate);
+                  static_cast<double>(buffs.xp));
     b.text(x + 14.0F, tribY + 26.0F, 1.25F, dim, buf);
-    // Live gate status: closed tiers show how far the player is from opening
-    // them, which is the whole point of the adaptive director.
+    b.text(x + 14.0F, tribY + 38.0F, 1.25F, dim, tb.gate);
+    // Live gate status, as a COUNT rather than a percentage of a decaying rate.
+    // A percentage was the old answer and it was unreadable twice over: the
+    // denominator was a rate, so a shut tribunal that was one elite from opening
+    // could also read 3%, and the number meant nothing the player could act on.
+    // Four elites killed out of four needed is a thing you can go and do.
     if (tb.tier >= 2) {
-      const float have = tierPressure_[tb.tier - 1];
-      const float need = tb.tier == 2 ? kChampionPressure : kOverlordPressure;
-      const int pct = static_cast<int>(std::clamp(have / need, 0.0F, 1.0F) * 100.0F);
-      std::snprintf(buf, sizeof(buf), "%s  %d%%", open ? "OPEN" : "LOCKED", pct);
-      // Its OWN row, at tribY + 38. This used to be drawn at tribY + 40 -- the
-      // exact slot the stat line below uses -- so the two overwrote each other
-      // and the gate progress, which is the whole point of the adaptive
-      // director, was never once visible on screen. The stat line was drawn
-      // second, so it always won.
-      b.text(x + 14.0F, tribY + 38.0F, 1.25F,
+      const int need = tierKillGate(tb.tier);
+      const int have = tierGateProgress(tb.tier);
+      std::snprintf(buf, sizeof(buf), "%s  %d/%d %s", open ? "OPEN" : "LOCKED",
+                    std::min(have, need), need, tb.tier == 2 ? "ELITES" : "CHAMPIONS");
+      b.text(x + 14.0F, tribY + 50.0F, 1.25F,
              open ? tb.color : Color{dim.r, dim.g, dim.b, 0.7F}, buf);
     }
 
@@ -9121,7 +9348,7 @@ void Game::renderBestiary(core::render::Batcher& b, float px, float py) {
                   static_cast<double>(buffs.hpMin), static_cast<double>(buffs.hpMax),
                   static_cast<double>(buffs.touch), static_cast<double>(buffs.speed),
                   static_cast<int>(enemyDefense(simTime_, tb.tier)));
-    b.text(x + 14.0F, tribY + 52.0F, 1.25F, statBlue, buf);
+    b.text(x + 14.0F, tribY + 64.0F, 1.25F, statBlue, buf);
 
     // Resistances at the current run time (they grow with it, so this is the
     // live number, not a constant).
@@ -9129,7 +9356,7 @@ void Game::renderBestiary(core::render::Batcher& b, float px, float py) {
                   static_cast<int>(enemyLifestealResistance(simTime_, tb.tier, false) * 100.0F),
                   static_cast<int>(enemyKnockbackResistance(simTime_, tb.tier, false) * 100.0F),
                   static_cast<int>(stats_.armorPierce));
-    b.text(x + 14.0F, tribY + 66.0F, 1.25F, resOrange, buf);
+    b.text(x + 14.0F, tribY + 78.0F, 1.25F, resOrange, buf);
 
     // The full ability pool, word-wrapped. The wrap is 56 characters, not 40:
     // at 40 the eleven trait names needed four lines and the fourth -- which is
@@ -9143,7 +9370,7 @@ void Game::renderBestiary(core::render::Batcher& b, float px, float py) {
       pool += n;
     }
     const std::vector<std::string> lines = wrapWords(pool, 56);
-    float ly = tribY + 80.0F;
+    float ly = tribY + 92.0F;
     for (std::size_t li = 0; li < lines.size() && li < 4; ++li) {
       b.text(x + 14.0F, ly, 1.15F, violet, lines[li]);
       ly += 12.0F;

@@ -323,16 +323,27 @@ float mitigateDamage(float raw, float defense);
 // one place the direction is written down, can be a free function a test calls.
 constexpr float kChainSkyDrop = 4.2F;
 
-// A tier's HP multiplier band, as {min, max}, and the largest share of spawns it
-// can ever take.
+// A tier's HP multiplier band, as {min, max}, and how long between one of that
+// tier's arrivals and the next, in seconds.
 //
 // Both are pure functions of the tier, and both are what a balance pass actually
-// turns. They were inline magic values inside `tierSpawnChance` and a switch
+// turns. They were inline magic values inside a per-spawn chance roll and a switch
 // inside `tierBuffs`, which is how the champion ended up arriving every seven
 // seconds while its own ceiling sat unnoticed in the middle of a range. Naming
 // them is what lets a test hold the ladder's shape.
 [[nodiscard]] std::pair<float, float> tierHpBand(int tier);
-[[nodiscard]] float tierSpawnCap(int tier);
+[[nodiscard]] std::pair<float, float> tierCadence(int tier);
+// How early a tier may appear at all, in seconds, regardless of whether its
+// tribunal is earned. The first rung of the ladder and a floor for the other two.
+//
+// It was declared and never read for two of the three tiers, which is the worst
+// kind of dead constant: the source said "no champion before this" and the game
+// said nothing of the kind. Named and free, so a test can cross it.
+[[nodiscard]] float tierMinTime(int tier);
+// How many of a tier may be alive at once. A CEILING, not a quota: the size of an
+// arrival is drawn from the player's form, and this is the promise that it can
+// never exceed the number the ladder can carry.
+[[nodiscard]] int tierEventCap(int tier);
 
 // Where the sky end of a chain bolt's drop is, and how far down it has got.
 //
@@ -375,9 +386,9 @@ float enemyDefense(float simTime, int tier);
 float enemyLifestealResistance(float simTime, int tier, bool resistant);
 // Knockback resistance: scales incoming push, grows with time.
 float enemyKnockbackResistance(float simTime, int tier, bool resistant);
-// How many traits a given tier rolls: elite = exactly 1, champions several,
-// overlords even more. Grows a little with run time.
-int traitsForTier(int tier, float simTime);
+// How many traits a given tier rolls: elite exactly 1, champion 3, overlord 7, out
+// of a pool of eleven. Flat, not a function of the clock -- see the definition.
+int traitsForTier(int tier);
 
 enum class RunState {
   Playing,
@@ -651,10 +662,45 @@ public:
   // paint a wall of cards over the game.
   static constexpr std::size_t kMaxMilestoneSlots = 4;
 
+  // --- The tier ladder --------------------------------------------------------
+  // Published, not internal, because four separate readers need the same three
+  // numbers and each of them used to have its own copy: the bestiary draws them,
+  // the docs generator reads them out of this header, a test holds the ladder's
+  // shape, and the director obeys them. A balance pass that moves one of these now
+  // moves all four, which is the entire reason a ladder can be balanced at all.
+  //
+  // How many of a tier may be alive at once.
+  //
+  // This is a CEILING, not a quota. The ask was "one or two at a time, maybe
+  // three or four if they are already easy", and a ceiling is the only version of
+  // that which is guaranteed: the size of an arrival is drawn from the player's
+  // form (tierEventSize) and this is the promise that it can never exceed the
+  // number the ladder can carry. An elite is the most common tier so it gets the
+  // most room; an overlord is the run's boss and there is only ever one.
+  static constexpr std::array<int, 4> kTierLiveCap = {0, 4, 2, 1};
+  // How early a tier may appear at all, in seconds, earned tribunal or not. Even
+  // a great player waits: the first minute is for the build. These are here rather
+  // than spelled as literals in tierUnlocked's switch because they are two of the
+  // three numbers the ladder is made of, and a ladder with one rung typed inline is
+  // a rung the docs cannot read.
+  //
+  // Two of the three used to be DECLARED AND NEVER READ, which is the worst kind of
+  // dead constant: the source said "no champion before this" and the game said
+  // nothing of the kind. Named, and enforced by tierUnlocked.
+  static constexpr float kEliteMinTime = 90.0F;
+  static constexpr float kChampionMinTime = 120.0F;
+  static constexpr float kOverlordMinTime = 420.0F;
+
   // How many cards the chest reveal panel can name at once. An overlord's box is
-  // the largest thing on the floor (five), so this is the hard ceiling on the
-  // panel rather than a chosen number.
-  static constexpr std::size_t kChestRevealMax = 5;
+  // the largest thing on the floor, so this is the hard ceiling on the panel
+  // rather than a chosen number.
+  //
+  // It is a ceiling, not a size, and the two are different: the panel has to fit
+  // the largest box the game can produce PLUS whatever Deep Cache adds to it, and
+  // a cap that is too small does not show fewer cards, it hides the ones at the
+  // bottom of a list the player is about to be told is complete. That is worse
+  // than a tall panel, so the number is generous and the layout handles the rest.
+  static constexpr std::size_t kChestRevealMax = 10;
 
   // --- Fast-enemy pacing ----------------------------------------------------
   //
@@ -890,6 +936,10 @@ public:
   int testSpawnChest(float x, float y, int tier, int grants);
   // Test helper: how many chest bodies are on the floor right now.
   [[nodiscard]] int testChestCount() const;
+  // The transient HUD banner as it stands right now, so a test can ask whether a
+  // warning was actually raised. A callout that is drawn but unreadable is not a
+  // callout, and "is it up yet" is a question only the running frame can answer.
+  [[nodiscard]] std::string_view testTierBanner() const { return tierBanner_; }
   // How many spheres orbit a chest. Pure, so "one sphere per card, and Deep Cache
   // puts more in the ring" is a claim a test can make instead of a rendering
   // detail nobody can see from outside a GL context.
@@ -974,6 +1024,9 @@ public:
   // Test helper: elites-and-above currently alive. The spawner consults it so
   // the screen cannot fill with elites, and so a test can pin that cap.
   [[nodiscard]] int testLiveTierCount() const;
+  // Per tier, because the live cap is per tier: "there is something on the screen"
+  // and "there is an overlord on the screen" are different questions.
+  [[nodiscard]] int testLiveTierCount(int tier) const;
   // Test helper: move the player straight to a level and rebuild the offer, so a
   // test can look at a milestone screen without playing four minutes to reach it.
   // Level-up is a state machine in the real game; this jumps the counter only.
@@ -1190,30 +1243,74 @@ public:
   // the bestiary and to unlock the elite/champion/overlord player outlines.
   [[nodiscard]] std::uint8_t tierKillMask() const { return tierKillMask_; }
   // --- Adaptive tribunal director (test + HUD introspection) -----------------
-  // True while a tier is allowed to spawn at all. Tier 0 always, tier 1 from
-  // 90s on, tier 2 once elites are routine, tier 3 once champions are.
+  // True while a tier is allowed to appear at all. Tier 0 always; each other
+  // once its tribunal is earned AND the run is old enough (tierMinTime).
   [[nodiscard]] bool tierUnlocked(int tier) const;
-  // Per-member spawn chance for a tier right now (0 while the tier is shut).
-  [[nodiscard]] float tierSpawnChance(int tier) const;
-  // Decaying "handling" score for a tier (elite/champion scores drive the
-  // next tier's gate).
+  // Seconds until this tier's next scheduled arrival, 0 when it is due. The
+  // cadence is a clock, not a per-spawn chance, so this is the number that
+  // actually decides when a tier shows up.
+  [[nodiscard]] float tierCooldown(int tier) const {
+    return (tier >= 0 && tier < 4) ? tierCooldown_[tier] : 0.0F;
+  }
+  // How many scheduled arrivals of each tier this run, and how many bodies they
+  // put on screen. The pair is what a test asserts the cadence against: the count
+  // proves the clock, the bodies prove the size rule.
+  [[nodiscard]] int tierEventsFired(int tier) const {
+    return (tier >= 1 && tier < 4) ? tierEventsFired_[tier] : 0;
+  }
+  [[nodiscard]] int tierEventBodies(int tier) const {
+    return (tier >= 1 && tier < 4) ? tierEventBodies_[tier] : 0;
+  }
+  // Decaying "handling" score for a tier. It no longer opens anything -- that is
+  // a kill count now -- it only decides whether the next arrival is a pair or a
+  // group, so it is allowed to be a rate again.
   [[nodiscard]] float tierPressure(int tier) const {
     return tier >= 0 && tier < 4 ? tierPressure_[tier] : 0.0F;
   }
-  // Test hook: feed the director directly, so the champion/overlord gates can be
-  // tested without simulating minutes of real kills.
-  //
-  // The pressure a tier must reach before the NEXT one opens. Public so a test
-  // crosses the gate by asking what it is: the literals 8.0 and 7.0 that used to
-  // sit in that test were a second copy of kChampionPressure and
-  // kOverlordPressure, and they were the reason raising the gates broke a build
-  // instead of just making the game harder.
-  [[nodiscard]] static float tierGate(int tier) {
-    return tier == 2 ? kChampionPressure
-                     : (tier == 3 ? kOverlordPressure : 0.0F);
+  // Whether the player is far enough past this tier that its next arrival comes as
+  // a group rather than a pair. A test asks this rather than inferring it from a
+  // spawn count, because the whole rule is one comparison against one line.
+  [[nodiscard]] int tierComfort(int tier) const {
+    return (tier >= 1 && tier < 4 && tierPressure_[tier] >= tierComfortLine(tier))
+               ? 1
+               : 0;
   }
+  // The size rule itself, so a test can check it without running the director.
+  // Rolls the game's own RNG, hence non-const and hence the mutable seed below.
+  // No tier argument: the per-tier promise is kTierLiveCap, applied where the
+  // spawns are filled, and a parameter that only ever sat unused in the body was
+  // a second, wrong-looking place to look for "how many champions can there be".
+  [[nodiscard]] int tierEventSizeFor(bool comfortable) const;
+  // The rate at which a tier is being handled right now, above which the next
+  // arrival comes as a group rather than a pair. Scaled to the new supply of
+  // kills rather than to a gate that no longer exists -- see the definition.
+  [[nodiscard]] static float tierComfortLine(int tier);
+  // Cumulative kills of a tier this run, asked of the director's own ledger rather
+  // than counted in the test. A test that tallied kills itself was a second copy of
+  // the rule, and it was the reason a build that could clear ten elites did not get
+  // a champion.
+  [[nodiscard]] int tierKills(int tier) const {
+    return (tier >= 0 && tier < 4) ? tierKills_[tier] : 0;
+  }
+  // How many kills of the tier below open this one. Public because the bestiary
+  // draws it, a test crosses it and the docs generator reads it out of the header:
+  // three readers of one ladder, so it is stated once and read rather than retyped.
+  [[nodiscard]] static int tierKillGate(int tier) {
+    return tier == 2 ? kChampionKills : (tier == 3 ? kOverlordKills : 0);
+  }
+  // How many kills of the tier below this one open its tribunal, and how far along
+  // the player is towards it. The pair is what the bestiary draws and what a test
+  // crosses the gate with.
+  [[nodiscard]] int tierGateProgress(int tier) const {
+    return (tier >= 2 && tier < 4) ? tierKills_[tier - 1] : 0;
+  }
+  // Test hooks: feed the director directly, so the champion/overlord milestones
+  // can be tested without simulating minutes of real kills.
   void testAddTierPressure(int tier, float amount) {
     if (tier > 0 && tier < 4) tierPressure_[tier] += amount;
+  }
+  void testAddTierKills(int tier, int amount) {
+    if (tier > 0 && tier < 4) tierKills_[tier] += amount;
   }
   void testSetTierOpen(int tier, bool open) {
     if (tier > 0 && tier < 4) tierOpen_[tier] = open;
@@ -1228,6 +1325,10 @@ public:
   // Full spawn-eligibility rule used by pickDef (unlocked AND not retired,
   // unless it is one of the 3 most recent types).
   [[nodiscard]] bool typeCanSpawn(int def) const;
+  // Weighted archetype pick among the types that rule admits. A member because a
+  // scheduled tier event picks its own archetype, and two copies of a weighted
+  // picker is two places for them to disagree about which types are legal.
+  int pickDef();
   // Run time before `def` becomes eligible at all: the later of its own
   // unlock_at and, for a `fast` archetype, kFastEnemyMinTime. Public so a test
   // can reason about the gate instead of duplicating the rule (and going stale
@@ -1580,6 +1681,14 @@ private:
     std::uint8_t tier = 0;
   };
 
+  // A tiered body's stats: the tier's band, its rolled trait bonuses, and the
+  // global time ramps on top. Shared by the scheduled events and the test hook so
+  // the two cannot roll from different tables -- a champion that rolled its
+  // bonuses from a different list than the bestiary describes is a champion the
+  // player cannot predict.
+  void fillTierSpawn(PendingSpawn& p, int tier, float hpScale, float speedScale,
+                     float touchScale);
+
   // Elite name labels are no longer drawn; elites/champions/overlords are
   // marked by a coloured outline instead (see render()).
 
@@ -1853,8 +1962,10 @@ private:
   int savedStrongestDef_ = -1;
   std::uint8_t savedTierKillMask_ = 0;
   float savedTierPressure_[4] = {0.0F, 0.0F, 0.0F, 0.0F};
+  float savedTierCooldown_[4] = {0.0F, 0.0F, 0.0F, 0.0F};
+  int savedTierWarned_[4] = {0, 0, 0, 0};
   bool savedTierOpen_[4] = {false, true, false, false};
-  float savedTierGrace_[4] = {0.0F, 0.0F, 0.0F, 0.0F};
+  int savedTierKills_[4] = {0, 0, 0, 0};
   std::string savedTierBanner_;
   float savedTierBannerT_ = 0.0F;
   int savedStreak_ = 0;
@@ -1896,7 +2007,7 @@ private:
   entt::registry registry_;
   core::sim::SpatialHash hash_{1.0F};
   core::sim::FixedTimestep timestep_{1.0 / 60.0, 2};
-  std::mt19937 rng_;
+  mutable std::mt19937 rng_;
 
   RunState state_ = RunState::Playing;
   float simTime_ = 0.0F;
@@ -1928,62 +2039,81 @@ private:
   // Bit per tier (1<<tier) of tiers killed at least once this run.
   std::uint8_t tierKillMask_ = 0;
 
-  // --- Adaptive tribunal director --------------------------------------------
-  // The heavy tiers are NOT on a timer: champions only start showing up once the
-  // player is handling ELITES easily, and overlords once champions are routine.
-  // `tierPressure_` is a decaying "how well is this tier being handled" score:
-  // every kill of that tier adds weight, the score bleeds away over
-  // kPressureWindow seconds, and the next tier is gated on the current one.
+  // --- Tribunal director -------------------------------------------------------
+  // Two separate questions, kept separate because conflating them is what broke
+  // this twice:
+  //
+  //   MAY this tier show up?   A kill MILESTONE. You have killed four elites this
+  //                            run, so the champion tribunal is yours. It does
+  //                            not close again.
+  //   HOW MANY will arrive?    A decaying rate. Are you handling them right now,
+  //                            in which case a pair would be an interruption.
+  //
+  // They used to be one number, a decaying score that both opened and closed the
+  // next tier. That only works while tiers are a share of every spawn. On a clock
+  // there are five elites in ten minutes, the score drains over thirty seconds,
+  // and the old gate of 14 asked for more sustained elite kills than the entire
+  // game supplies -- so champions and overlords never appeared at all, and the
+  // "adaptive" difficulty curve was silently absent rather than wrong.
+  //
+  // `tierPressure_` is the rate half: 1.0 for an elite kill, 1.25 for a champion
+  // or overlord, bled away over kPressureWindow seconds.
   static constexpr float kPressureWindow = 30.0F;
-  // Elite kills (weighted 1.0) needed before champions are allowed at all.
+  // Elites killed this run before the champion tribunal opens.
   //
-  // 7 was low enough that the gate was really a formality. Elite spawn chance
-  // tops out at 10% and a mid-screen pack dies in a couple of seconds, so seven
-  // elite kills is roughly twenty seconds of ordinary play -- which means the
-  // "champion tribunal" opened at a minute and a half, when the player has a
-  // starter and one or two upgrades, and stayed open for the rest of the run.
-  //
-  // The score drains at 1/kPressureWindow per second, so this number is really a
-  // statement about a SUSTAINED elite kill rate, not a total: 14 says "you are
-  // handling elites comfortably and have been for a while".
-  static constexpr float kChampionPressure = 14.0F;
-  // Champion kills needed before overlords are allowed. Champions are now rare
-  // enough that this is a genuine second milestone rather than something a
-  // strong build stumbles into two minutes after the first one.
-  static constexpr float kOverlordPressure = 9.0F;
-  // How many elite-and-above bodies may be alive at once. The ask was not "make
-  // elites weaker" -- they are supposed to be the spike -- but "make them rarer,
-  // so there are one or two on screen and meeting one is an event". A live cap
-  // is the only version of that which is actually guaranteed: per-member spawn
-  // chances are independent, so a pack of three can roll three elites and three
-  // packs can roll nine, and no amount of tuning the percentage promises the
-  // player a quiet screen. Rolling the tier happens only when there is room.
-  static constexpr int kLiveTierCap = 2;
-  // Even a great player waits this long: the first minute is for the build.
-  // The elite gate is here rather than in tierUnlocked's switch because it is
-  // one of the three numbers the tier ladder is made of, and a ladder with one
-  // rung spelled as a literal is a ladder the docs cannot read.
-  static constexpr float kEliteMinTime = 90.0F;
-  static constexpr float kChampionMinTime = 90.0F;
-  static constexpr float kOverlordMinTime = 240.0F;
-  // Once earned, a tier stays open for a while so the director does not
-  // flicker on and off between two kills.
-  static constexpr float kTierGrace = 20.0F;
+  // Four, and the number is set by the SUPPLY of elites, which is the whole
+  // lesson. A tier on a clock brings one or two bodies every couple of minutes, so
+  // a run has about five elite kills in ten minutes: a gate of ten asks for more
+  // than the game provides and the champion tier is dead on arrival. Four is two
+  // to four arrivals -- a champion by the middle of a run, which is where the
+  // second rung of a ladder belongs.
+  static constexpr int kChampionKills = 4;
+  // Champions killed before the overlord tribunal opens. Two, for the same reason
+  // one rung down: champions arrive every four or five minutes, so three of them
+  // is a fifteen-minute commitment and an overlord nobody in a normal run ever
+  // meets. Two is the run's boss, earned late and met once.
+  static constexpr int kOverlordKills = 2;
   float tierPressure_[4] = {0.0F, 0.0F, 0.0F, 0.0F};
+  // Cumulative kills of each tier this run. Never decays: a tribunal is earned.
+  int tierKills_[4] = {0, 0, 0, 0};
   bool tierOpen_[4] = {false, true, false, false};
-  float tierGrace_[4] = {0.0F, 0.0F, 0.0F, 0.0F};
+  // Seconds until this tier's next scheduled arrival. 0 means DUE, and a due tier
+  // that cannot land (a busy screen) stays due rather than being rescheduled --
+  // see fireTierEvent, which re-arms the clock from the moment it actually fired.
+  float tierCooldown_[4] = {0.0F, 0.0F, 0.0F, 0.0F};
+  // Whether this tier has already been called out for its pending arrival, so a
+  // tier waiting for room does not re-announce itself every frame.
+  int tierWarned_[4] = {0, 0, 0, 0};
+  static constexpr const char* kTierCalloutLabel[4] = {
+      "", "ELITE INCOMING", "CHAMPION INCOMING", "OVERLORD INCOMING"};
   // Transient HUD banner ("CHAMPION TRIBUNAL OPEN", "HORDE INCOMING"). One
   // channel is enough: the newest message replaces the old one.
   std::string tierBanner_;
   float tierBannerT_ = 0.0F;
   [[nodiscard]] int liveTierCount() const;
+  [[nodiscard]] int liveTierCount(int tier) const;
+  [[nodiscard]] static int tierEventCap(int tier) {
+    return (tier >= 1 && tier < 4) ? kTierLiveCap[static_cast<std::size_t>(tier)] : 0;
+  }
   void showBanner(std::string text, float seconds) {
     tierBanner_ = std::move(text);
     tierBannerT_ = seconds;
   }
 
-  // Per-tick update of the director (decay + open/close with hysteresis).
+  // Per-tick update of the director (milestone gates, the handling score, then the
+  // cadence clocks and any arrival that is due).
   void updateTierDirector();
+  // One tier's scheduled arrival, if it is due, unlocked and there is room.
+  // Returns whether it landed, because a tier that could not land stays due.
+  bool fireTierEvent(int tier);
+  // How many of a tier walk in together: one or two ordinarily, three or four once
+  // the player is far enough past the tier that a pair would be an interruption.
+  int tierEventSize(int tier);
+  // Tally of what the cadence has actually done this run. Both are per tier and
+  // both are reset with the run, because "how often did an overlord show up" is a
+  // question the answer to which has to mean something.
+  int tierEventsFired_[4] = {0, 0, 0, 0};
+  int tierEventBodies_[4] = {0, 0, 0, 0};
 
   // --- Momentum (the kill chain) ---------------------------------------------
   // Every kill adds to the chain; the chain dies if you stop killing for

@@ -142,28 +142,43 @@ An elite and above is a trash mob with a body count problem. Its stats are
 a multiplier on whatever trash archetype it rolled, so a champion is always
 the same fight wearing a different body. HP is a range, rolled per spawn.
 
-| Tier | HP x trash | Touch | Speed | XP | Opens at | Gate | Rare at best |
-|------|-----------|-------|-------|----|----------|------|--------------|
-| Elite | 5-8 | x1.25 | x1.08 | x3 | 1:30 | the elite rate rises with the clock | 10% of spawns |
-| Champion | 28-46 | x1.9 | x1.18 | x5 | 1:30 | tier-1 pressure 14 | 2.5% of spawns |
-| Overlord | 100-150 | x2.8 | x1.3 | x10 | 4:00 | tier-2 pressure 9 | 1.2% of spawns |
+**Each tier is x5 the one below it.** 6.5x, 32.5x, 162.5x on the midpoints,
+which is a number you can hold in your head: each rung is a different fight,
+not a bigger version of the last one.
 
-At most **2** of a tier are alive at once, and a promotion
-is followed by 20s of grace, so a fresh champion never lands
-on top of the one that just died.
+| Tier | HP x trash | Touch | Speed | XP | Traits | Opens at | Gate | Arrives |
+|------|-----------|-------|-------|----|--------|----------|------|---------|
+| Elite | 5-8 | x1.25 | x1.08 | x3 | 1 | 1:30 | the clock alone | every 100-130s |
+| Champion | 25-40 | x1.9 | x1.18 | x5 | 3 | 2:00 | after 4 elites | every 250-320s |
+| Overlord | 125-200 | x2.8 | x1.3 | x10 | 7 | 7:00 | after 2 champions | every 470-590s |
 
-**The frequency is the balance here, not the HP.** A champion is meant to
-be an event. Its chance of any given spawn is
-`min(2.5%, (pressure - 14) * 0.0022)`,
-so a player who has only just earned one gets a trickle, and a build far
-past the gate still tops out at one in forty. An overlord is the run's boss:
-`min(1.2%, (pressure - 9) * 0.0012)`,
-a couple in a ten-minute run, each one a fight the player had to make room
-for.
+**The frequency is the balance here, not the HP.** A tier used to be a share
+of every spawn, which made it a tax on the trash rather than an event: an
+elite was one body in ten, forever, so a busy screen produced a champion
+every seven seconds -- and since every tiered body drops a box, a ten-minute
+run handed over 42 chests and the player had the whole arsenal by minute
+three. A tier is on a clock now, and the box is the only thing in the game
+that decides how often you are handed new cards.
 
-A floor matters as much as a ceiling: capping a boss at
-2.5% only means something if the garbage below it is more
-common than that, which is what the elite rate is for.
+An arrival is **one or two bodies**, or **three or four** once you are far
+enough past that tier to be handling it rather than meeting it. A player who
+has outgrown a tier gets more of the same fight rather than a new label,
+which is the only answer that keeps the tier's identity readable. Per tier, at
+most 4, 2 and 1 alive at once: an overlord
+is the run's boss and there is only ever one.
+
+A tribunal is a **milestone you have reached**, not a mood you are in. Kill
+4 elites and champions are yours for the rest of the run; kill
+2 champions and overlords are. It does not close again. A
+struggling build simply never gets there, which is the punishment, and it is a
+thing the player can see and count towards in the bestiary.
+
+The gate used to be a decaying score instead, calibrated against a supply of
+elite kills that a clock-driven elite no longer produces -- so the two tiers
+above the elite were unreachable, and an unreachable gate is worse than a wrong
+one, because the curve that was supposed to be adapting was simply absent.
+Each tier's clock starts when its tribunal opens, so a champion earned at
+minute nine does not land on the same frame.
 
 The XP multiplier is deliberately NOT scaled down with the HP. An elite is a
 reward before it is a threat, and if killing one is worse value than killing
@@ -185,7 +200,7 @@ a hand never lands four times on the same gun.
 |------------|-------|------------|
 | Elite | 1 | One card. The small change. |
 | Champion | 3 | A whole hand. |
-| Overlord | 5 | Most of the arsenal in one pickup. |
+| Overlord | 7 | Most of the arsenal in one pickup. |
 
 `Deep Cache` adds one more card to every box in the game. The count is
 deliberately NOT clamped to the size of the arsenal: clamping here would
@@ -447,7 +462,7 @@ Shown in the game with **F1** (main menu, live run, or the pause screen). **17 p
 - `abilities` — ABILITIES JKL (23 lines)
 - `stats` — YOUR STATS (32 lines)
 - `cards` — CARDS (27 lines)
-- `enemies` — ENEMIES (18 lines)
+- `enemies` — ENEMIES (30 lines)
 - `sandbox` — TEST SANDBOX (19 lines)
 - `profile` — PROFILE (17 lines)
 
@@ -650,7 +665,7 @@ Shown in the game with **F1** (main menu, live run, or the pause screen). **17 p
     # HOW MANY
     > ELITE      1 CARD.    THE SMALL CHANGE.
     > CHAMPION   3 CARDS.   A WHOLE HAND.
-    > OVERLORD   5 CARDS.   MOST OF THE ARSENAL AT ONCE.
+    > OVERLORD   7 CARDS.   MOST OF THE ARSENAL AT ONCE.
     DEEP CACHE ADDS ONE MORE CARD TO EVERY BOX IN THE GAME. THE SPHERES AROUND
     THE BOX ARE THE CARDS IT WILL GIVE YOU, SO COUNT THEM BEFORE YOU TOUCH IT.
 
@@ -844,16 +859,28 @@ Shown in the game with **F1** (main menu, live run, or the pause screen). **17 p
     MORE HP, FASTER, AND HARDER HITS.
 
     # ELITES AND ABOVE
-    ELITE    FROM 1:30. ONE RANDOM TRAIT.
-    CHAMPION OPENS WHEN ELITES STOP BEING
-             A PROBLEM. SEVERAL TRAITS.
-    OVERLORD OPENS WHEN CHAMPIONS DO.
-             MANY TRAITS.
+    THEY ARE EVENTS, NOT A SHARE OF THE PACK.
+    EACH WALKS IN ON ITS OWN CLOCK:
 
-    THE TRIBUNAL DIRECTOR WATCHES HOW WELL
-    YOU ARE DOING AND PROMOTES YOU WHEN
-    YOU HAVE EARNED IT. KILL ONE OF EACH
-    TIER TO UNLOCK ITS OUTLINE.
+    ELITE     FROM 1:30, THEN EVERY 1:40-2:10.
+              ONE TRAIT.  HP x5.  BOX OF 1.
+    CHAMPION  AFTER 4 ELITES, THEN EVERY
+              4:10-5:20.  THREE TRAITS.
+              HP x25.  BOX OF 3.
+    OVERLORD  AFTER 2 CHAMPIONS, THEN EVERY
+              7:50-9:50.  SEVEN TRAITS.
+              HP x125.  BOX OF 7.
+
+    AN ARRIVAL IS ONE OR TWO BODIES, OR
+    THREE OR FOUR ONCE YOU ARE HANDLING
+    THAT TIER RATHER THAN MEETING IT. AT
+    MOST 4, 2 AND 1 ALIVE AT A TIME. EVERY
+    TIERED BODY DROPS A BOX.
+
+    THE TRIBUNAL DIRECTOR PROMOTES YOU BY
+    COUNTING KILLS, AND IT NEVER TAKES IT
+    BACK. KILL ONE OF EACH TIER TO UNLOCK
+    ITS OUTLINE.
 
     PRESS B WHILE PAUSED FOR THE FULL
     BESTIARY, INCLUDING TRAITS AND SCALING.
