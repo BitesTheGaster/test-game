@@ -15,6 +15,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <memory>
 #include <string>
 #include <utility>
@@ -7183,4 +7184,90 @@ TEST_CASE("The Void Gyre's damage is a function of what it is holding") {
   // on its own would explain -- which is the only way to know the bonus is being
   // applied and not just that six targets shared a tick.
   REQUIRE(packed > solo * 2.0F);
+}
+
+// --- Round 17: a milestone must beat the repeatable card on its own axis -------
+
+TEST_CASE("No milestone is the weaker buy against a plain card on the same axis") {
+  // A milestone closes its siblings for the rest of the run. A plain card does
+  // not. So for the same effect id, a milestone has to win twice: on the number
+  // it hands you for ONE take, and on the number it hands you over the whole run.
+  //
+  // The rule exists because of a real defect the player named: the regeneration
+  // milestone was +1.2 while a plain card handed out +2, so the "reward" for
+  // locking away two other options was a strictly worse buy. The audit behind it
+  // found two more -- Overload totalled less damage than a stacked Might, and
+  // Tempest added exactly one projectile, the same as a plain Twin Shot.
+  //
+  // It is a test rather than a note in the data file because the ask was the
+  // general one: when anything new is added, look at everything else so balance
+  // does not get spoiled. A comment is a promise someone has to remember to keep;
+  // this is the same question asked of the shipped numbers on every run.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+
+  // The strongest repeatable card on an effect, judged on both axes.
+  struct Best {
+    float perTake = 0.0F;
+    float perRun = 0.0F;
+    std::string id;
+  };
+  std::map<std::string, Best> plain;
+  for (const auto& u : content.upgrades) {
+    if (u.kind == "milestone") continue;
+    const float v = static_cast<float>(u.value);
+    const float total = v * static_cast<float>(u.maxStacks);
+    auto& b = plain[u.effect];
+    if (b.id.empty() || v > b.perTake) {
+      b.perTake = std::max(b.perTake, v);
+      b.id = u.id;
+    }
+    b.perRun = std::max(b.perRun, total);
+  }
+
+  int checked = 0;
+  for (const auto& u : content.upgrades) {
+    if (u.kind != "milestone") continue;
+    const auto it = plain.find(u.effect);
+    // A milestone with no repeatable counterpart (the on-hit marks) owns its
+    // axis outright, and there is nothing to beat.
+    if (it == plain.end()) continue;
+    const Best& b = it->second;
+    const float v = static_cast<float>(u.value);
+    const float total = v * static_cast<float>(u.maxStacks);
+    CAPTURE(u.id);
+    CAPTURE(u.effect);
+    CAPTURE(b.id);
+    CAPTURE(v);
+    CAPTURE(total);
+    CAPTURE(b.perTake);
+    CAPTURE(b.perRun);
+    REQUIRE(v > b.perTake);
+    REQUIRE(total > b.perRun);
+    ++checked;
+  }
+  // Every axis that HAS a repeatable card was actually compared, so emptying the
+  // milestone pool or renaming the effects cannot quietly turn this test green.
+  REQUIRE(checked >= 12);
+}
+
+TEST_CASE("No card carries a fraction on an effect the game counts in whole numbers") {
+  // The applier feeds a count effect through `static_cast<int>`, so "+0.5
+  // projectiles" becomes "+0 projectiles" and the card is a lie that renders
+  // beautifully. The count set is asked of the applier, not restated here,
+  // because a second list is a list that drifts.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  int counts = 0;
+  for (const auto& u : content.upgrades) {
+    if (!game::effectIsWholeNumberOnly(u.effect)) continue;
+    ++counts;
+    CAPTURE(u.id);
+    CAPTURE(u.effect);
+    CAPTURE(u.value);
+    // Whole, and at least one: a count of zero is as dead as a fraction, and is
+    // the same bug wearing a different hat.
+    REQUIRE(u.value >= 1.0F);
+    REQUIRE(u.value == std::floor(u.value));
+  }
+  // And the set is not empty, so a rename cannot turn this green by accident.
+  REQUIRE(counts >= 8);
 }

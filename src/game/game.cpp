@@ -154,6 +154,40 @@ core::render::Color eliteTint(core::render::Color c) {
 
 } // namespace
 
+// Effects whose value is a COUNT, not a number: the applier feeds them through
+// `static_cast<int>`, so a fractional value in the data is silently truncated
+// and anything under 1.0 truncates to nothing at all. A card that says "+0.5
+// projectiles" is a card that prints a promise and does nothing.
+//
+// The list is a function rather than a comment because the only way to keep a
+// data file and an applier agreeing is to ask the applier, and then to have a
+// test ask it. Sixteen separate `static_cast<int>(value)` calls with no shared
+// name is how the sixteenth one gets forgotten.
+bool effectIsWholeNumberOnly(std::string_view effect) {
+  static constexpr std::string_view kCounts[] = {
+      "proj_add",
+      "pierce_add",
+      "lifesteal_heal",
+      "extra_choice",
+      "reroll_add",
+      "weapon_slot_add",
+      "chest_bonus",
+      "momentum_chain",
+      "w_proj_add",
+      "w_pierce_add",
+      "w_unique_prism",
+      "w_unique_thunderlord",
+      "w_unique_reaim",
+      "w_unique_lash",
+      "w_zone_pools",
+      "w_prism_lattice",
+  };
+  for (const auto& id : kCounts) {
+    if (effect == id) return true;
+  }
+  return false;
+}
+
 UpgradeEffectResult applyUpgrade(PlayerStats& stats, std::string_view effect, float value) {
   if (effect == "damage_mul") {
     stats.damageMul += value;

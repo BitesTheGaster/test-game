@@ -1578,9 +1578,14 @@ group = "survivor"
 [[upgrade]]
 id = "m4_renewal"
 name = "Verdant Renewal"
-desc = "Regeneration +1.2 HP/s"
+desc = "Regeneration +3 HP/s"
 effect = "regen_add"
-value = 1.2
+# +3, not the +1.2 this used to be. A plain Vitality is +2 a stack, so the
+# milestone was the WORSE buy on the axis it exists to win, which is not a reward
+# for committing -- it is a tax. A milestone closes its two siblings for the rest
+# of the run, so it has to beat the repeatable card on the per-take number and on
+# the whole-run total, or the player is right to walk away from it.
+value = 3.0
 max_stacks = 3
 kind = "milestone"
 level = 4
@@ -1601,11 +1606,16 @@ group = "survivor"
 # axes every damage card in the game is secretly a fraction of, so the milestone
 # asks the question outright.
 [[upgrade]]
+# The three EXECUTION members share one stack count on purpose. The group is a
+# single question, and a question whose three answers have three different
+# numbers of "how many more times can I take this" stops being one question.
+# They also each beat the best REPEATABLE card on their own axis, per take
+# and over the whole run -- see the test that enforces it.
 id = "m8_overload"
 name = "Overload"
-desc = "All damage +35%"
+desc = "All damage +55%"
 effect = "damage_mul"
-value = 0.35
+value = 0.55
 max_stacks = 2
 kind = "milestone"
 level = 8
@@ -1614,9 +1624,9 @@ group = "execution"
 [[upgrade]]
 id = "m8_frenzy"
 name = "Frenzy"
-desc = "Fire rate +30%"
+desc = "Fire rate +40%"
 effect = "fire_rate"
-value = 0.30
+value = 0.40
 max_stacks = 2
 kind = "milestone"
 level = 8
@@ -1625,9 +1635,19 @@ group = "execution"
 [[upgrade]]
 id = "m8_tempest"
 name = "Tempest"
-desc = "Every weapon fires 1 more projectile"
+desc = "Every weapon fires 3 more projectiles"
 effect = "proj_add"
-value = 1
+# +3, and a whole number on purpose. This used to be +1 -- the exact number a
+# plain Twin Shot hands out for a repeatable card, and half of a plain Barrage --
+# and on the strongest axis in the game, where Vampire Survivors' own rule is
+# that a weapon's top levels are pure extra shots, a milestone that adds one is
+# not a reward.
+#
+# It has to be a whole number because the applier casts the value to int: a
+# tempting +2.5 here truncates to +2 and the card silently does less than it
+# says, and anything under 1.0 truncates to nothing at all. There is a test for
+# that, and it is why the number is 3 and not 2.5.
+value = 3
 max_stacks = 2
 kind = "milestone"
 level = 8
@@ -1689,7 +1709,10 @@ id = "m32_bloodthirst"
 name = "Bloodthirst"
 desc = "The kill chain feeds twice as fast, lasts twice as long, and its top end lifesteals"
 effect = "momentum_bloodthirst"
-value = 1.0
+# 2, not the 1 this used to be -- the exact number a plain Bloodthirst card hands
+# out, repeatable, for one sixth of the cost. A milestone that ties the free card
+# on its own axis is not a reward for locking the other two out.
+value = 2.0
 max_stacks = 2
 kind = "milestone"
 level = 32

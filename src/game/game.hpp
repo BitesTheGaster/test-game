@@ -289,6 +289,16 @@ struct UpgradeEffectResult {
 // Applies one upgrade effect to stats. Shared between Game and unit tests.
 UpgradeEffectResult applyUpgrade(PlayerStats& stats, std::string_view effect, float value);
 
+// Effects whose `value` is a COUNT, so the applier feeds it through
+// `static_cast<int>`. A fractional value in the data is silently truncated, and
+// anything below 1.0 truncates to nothing: a card that says "+0.5 projectiles"
+// is a card that prints a promise and does nothing.
+//
+// Public so the content test can ask the applier which ids are counts instead of
+// keeping its own list -- which is exactly how a card ships a number the game
+// quietly throws away.
+[[nodiscard]] bool effectIsWholeNumberOnly(std::string_view effect);
+
 // Defense formula: flat part (1 point per 5 defense) plus a percent part that
 // approaches 50% as defense grows. Never makes damage negative.
 float mitigateDamage(float raw, float defense);
