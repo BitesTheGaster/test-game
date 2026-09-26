@@ -10,6 +10,7 @@
 #include <entt/entity/registry.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <random>
 #include <string>
@@ -261,6 +262,18 @@ struct PlayerStats {
   // box worth as much as a champion's -- and it stacks, because the whole point
   // of the card is that the count is the reward.
   int chestBonus = 0;
+  // Weapons get a little better as the run goes on, without the player having to
+  // spend a card on it. Every kWeaponLevelEvery player levels each equipped
+  // weapon gains a level, and a level is a flat amount of damage plus a touch of
+  // fire rate -- deliberately small, because this is a floor under a build rather
+  // than a reward for levelling. It exists so that a weapon picked up at 4:00 is
+  // not strictly worse than the same weapon picked up at 0:30, and so the late
+  // game does not depend entirely on cards.
+  //
+  // `PlayerStats::weaponGrowth` scales the whole thing. A card that raises it is
+  // the only way to make weapon levels the MAIN axis of a build instead of the
+  // free one, which is what turns it from a rounding error into a choice.
+  float weaponGrowth = 1.0F;
   // --- Active abilities (J / K / L) -------------------------------------------
   // Three buttons that exist in every run from the first second — no unlock, no
   // card, no level. They are what the player reaches for when a build is done
@@ -532,6 +545,47 @@ public:
   // exactly this many today; it can never ship more.
   static constexpr int kMaxSlotCards = kMaxWeapons - kBaseWeapons;
 
+  // --- Weapon levels ---------------------------------------------------------
+  // One weapon level every kWeaponLevelEvery player levels, and each level is
+  // worth kWeaponLevelDamage damage and kWeaponLevelCooldown of fire rate --
+  // scaled by PlayerStats::weaponGrowth, and scaled DOWN by
+  // kWeaponLevelDecay for every level already paid for.
+  //
+  // The decay is the whole design. A flat gain per level is not "a bit better",
+  // it is a second stat axis that nobody chose: at the level a twenty-minute run
+  // reaches it hands out more than every weapon card the player actually picked.
+  // A geometric series converges, so the free bump is worth at most
+  // kWeaponLevelDamage / (1 - kWeaponLevelDecay) -- a floor under a build, about
+  // one full weapon card's worth, and then it stops. The level COUNTER keeps
+  // climbing past that, so the sheet still shows a weapon still levelling while
+  // the number it is worth has already stopped moving, which is exactly the shape
+  // of a bonus you stop noticing.
+  static constexpr int kWeaponLevelEvery = 4;
+  static constexpr float kWeaponLevelDamage = 2.0F;
+  static constexpr float kWeaponLevelCooldown = 0.012F;
+  static constexpr float kWeaponLevelDecay = 0.86F;
+  // What weapon level `k` (0-based: level 0 is the FIRST one) is worth. Shared
+  // with the tests so a retune here cannot leave a hard-coded expectation behind.
+  [[nodiscard]] static float weaponLevelDamageGain(int k) {
+    return kWeaponLevelDamage * std::pow(kWeaponLevelDecay, static_cast<float>(k));
+  }
+  [[nodiscard]] static float weaponLevelCooldownGain(int k) {
+    return kWeaponLevelCooldown * std::pow(kWeaponLevelDecay, static_cast<float>(k));
+  }
+  // What a weapon is worth from its levels ALONE, at `level` of them. The sum,
+  // not a per-level number, is the thing that has to converge -- so this is the
+  // function a test pins, and the one a retune has to keep small.
+  [[nodiscard]] static float weaponLevelDamageTotal(int level) {
+    float sum = 0.0F;
+    for (int k = 0; k < level; ++k) sum += weaponLevelDamageGain(k);
+    return sum;
+  }
+  [[nodiscard]] static float weaponLevelCooldownTotal(int level) {
+    float sum = 0.0F;
+    for (int k = 0; k < level; ++k) sum += weaponLevelCooldownGain(k);
+    return sum;
+  }
+
   // How many cards a single milestone screen may hold. A milestone used to be a
   // flat two no matter what the content had, which is why a four-way question had
   // to be split across two screens and half of it was never asked. Now the
@@ -742,6 +796,14 @@ public:
   // enemy" is not good enough once a test has more than one on the floor, and
   // registry view order is not something a test should depend on.
   void testKillLastSpawned();
+  // Test helper: the weapon level of one equipped slot, and the arsenal's.
+  [[nodiscard]] int testWeaponLevel(int slot) const;
+  // Test helper: one live number off an equipped slot, by name. A test that
+  // asserts a weapon is "better" needs to say WHICH number moved, and adding a
+  // whole snapshot comparison for one float buries the assertion in noise.
+  [[nodiscard]] float testWeaponStat(int slot, std::string_view name) const;
+  [[nodiscard]] int testWeaponLevel() const { return weaponLevel_; }
+  void testSyncWeaponLevels() { syncWeaponLevels(); }
   // Test helper: put a chest on the floor and report what it would spend.
   int testSpawnChest(float x, float y, int tier, int grants);
   // Test helper: how many chest bodies are on the floor right now.
@@ -815,6 +877,11 @@ public:
     level_ = level;
     milestoneOffer_ = false;
     buildChoices();
+    // Weapons level with the player, so jumping the level counter has to be
+    // followed by the same catch-up a real level-up performs. A test that sets a
+    // level and then reads a weapon's damage is otherwise reading a weapon that
+    // has not been told the run went on without it.
+    syncWeaponLevels();
   }
   // Test helper: whether an upgrade card has been closed off by an earlier pick
   // from its mutually exclusive group.
@@ -1098,6 +1165,11 @@ private:
   // Owned weapons (fixed slots, no allocation on the hot path).
   struct WeaponSlot {
     int def = -1;
+    // How many times this weapon has levelled on its own (see PlayerStats
+    // ::weaponGrowth). Kept beside the stats it paid for so the HUD can show a
+    // weapon's level next to its cards without having to remember what the
+    // player's level was when it was picked up.
+    int level = 0;
     AttackType attackType = AttackType::Projectile;
     float cooldown = 0.5F;
     float timer = 0.0F;
@@ -1477,6 +1549,15 @@ private:
   // The four on-hit marks. Split out so the damage path stays readable and so a
   // test can call them directly on a known body.
   void applyMarks(entt::entity e, float towardX, float towardY);
+  // Brings every equipped weapon up to the level the player's level implies.
+  // Idempotent, and safe to call at any time: the whole thing is a comparison
+  // against a remembered high-water mark, so a missed call is a delayed level
+  // rather than a permanently wrong one.
+  void syncWeaponLevels();
+  // How many weapon levels the current player level is worth.
+  [[nodiscard]] int weaponLevelFor(int playerLevel) const {
+    return playerLevel / kWeaponLevelEvery;
+  }
   void updateChestToast(float dt);
   // Chill/status helper. `mul` < 1 is the speed the enemy is pinned to; the
   // strongest chill in play wins and any chill refreshes the timer.
@@ -1757,6 +1838,10 @@ private:
   // actually gave, and how long the toast stays up. The toast is a courtesy --
   // a box spends itself whether or not anybody reads it -- but a reward the
   // player cannot identify is a reward that feels like nothing happened.
+  // The weapon level the arsenal is currently at. syncWeaponLevels() compares
+  // against this rather than mutating the weapons, so a growth card that changes
+  // the size of a level cannot retroactively rewrite levels already paid out.
+  int weaponLevel_ = 0;
   int lastChestCard_ = -1;
   int lastChestGrants_ = 0;
   float lastChestTimer_ = 0.0F;

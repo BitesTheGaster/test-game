@@ -290,6 +290,18 @@ UpgradeEffectResult applyUpgrade(PlayerStats& stats, std::string_view effect, fl
     stats.markDefStrip += value;
     return {true, 0.0F, 0.0F};
   }
+  if (effect == "weapon_growth") {
+    // Doubles (or halves) what a weapon LEVEL is worth. This is the only card
+    // that touches the free per-level bump, and it exists so weapon levels can be
+    // a build rather than a rounding error: without it the growth is fixed and
+    // the only question left is which cards to spend, which is the question the
+    // game was already asking.
+    stats.weaponGrowth += value;
+    // A growth of zero would mean a weapon level costs the player something,
+    // which is never a good surprise. One is the floor.
+    stats.weaponGrowth = std::max(1.0F, stats.weaponGrowth);
+    return {true, 0.0F, 0.0F};
+  }
   if (effect == "chest_bonus") {
     // One more weapon per box. It is on a card rather than baked into the tier
     // numbers because the count IS the reward: making the elite's box bigger is
@@ -654,6 +666,7 @@ void Game::reset() {
 
   // No starter weapon is granted; advance() opens the three-weapon pick.
   weaponCount_ = 0;
+  weaponLevel_ = 0;
 
   // Paint the freshly created player with the profile's skin/outline.
   applyProfileToPlayer();
@@ -5754,6 +5767,8 @@ void Game::completeLevelUp() {
   xp_ -= xpNext_;
   ++level_;
   xpNext_ = xpForLevel(level_);
+  // Weapons level with the player, so a level-up is the moment they improve.
+  syncWeaponLevels();
 
   if (xp_ >= xpNext_) {
     enterLevelUp(); // queued level-ups
@@ -5878,6 +5893,42 @@ void Game::reroll() {
   buildChoices();
 }
 
+void Game::syncWeaponLevels() {
+  const int want = weaponLevelFor(level_);
+  if (want <= weaponLevel_) return;
+  // Only the levels actually gained, so a growth card that doubles the per-level
+  // amount applies to future levels and not to every level already paid for.
+  for (int k = weaponLevel_; k < want; ++k) {
+    // k is the number of levels the weapon is ABOUT to have, so the first level
+    // it ever earns indexes 0 and takes the full amount. Each later one is worth
+    // less, which is what makes the total converge.
+    const float dmg = weaponLevelDamageGain(k) * stats_.weaponGrowth;
+    const float cd = weaponLevelCooldownGain(k) * stats_.weaponGrowth;
+    for (int s = 0; s < weaponCount_; ++s) {
+      ++weapons_[s].level;
+      weapons_[s].damage += dmg;
+      weapons_[s].cdBonus += cd;
+    }
+  }
+  weaponLevel_ = want;
+}
+
+float Game::testWeaponStat(int slot, std::string_view name) const {
+  if (slot < 0 || slot >= weaponCount_) return -1.0F;
+  const auto& w = weapons_[slot];
+  if (name == "damage") return w.damage;
+  if (name == "cdBonus") return w.cdBonus;
+  if (name == "cooldown") return w.cooldown;
+  if (name == "projectiles") return static_cast<float>(w.projectiles);
+  if (name == "pierce") return static_cast<float>(w.pierce);
+  return -1.0F;
+}
+
+int Game::testWeaponLevel(int slot) const {
+  if (slot < 0 || slot >= weaponCount_) return -1;
+  return weapons_[slot].level;
+}
+
 void Game::addWeapon(int defIndex) {
   // Two guards, deliberately: weaponCap() is the design cap and kMaxWeapons is
   // the array bound. Anything that could push weaponCount_ past the array is a
@@ -5887,6 +5938,7 @@ void Game::addWeapon(int defIndex) {
   const auto& def = content_.weapons[static_cast<std::size_t>(defIndex)];
   auto& w = weapons_[weaponCount_++];
   w.def = defIndex;
+  w.level = 0;
   w.attackType = def.attackType;
   w.cooldown = def.cooldown;
   w.timer = 0.0F;
@@ -6060,6 +6112,23 @@ void Game::addWeapon(int defIndex) {
   // projectiles (see syncVortices).
   if (w.attackType == AttackType::Vortex && player_ != entt::null && registry_.valid(player_)) {
     syncVortices(weaponCount_ - 1);
+  }
+
+  // A weapon picked up at 6:00 is not a level-zero weapon. It joins at whatever
+  // level the rest of the arsenal is already at, paid for by the same geometric
+  // series syncWeaponLevels would have paid, so a late pickup is never strictly
+  // worse than an early one.
+  //
+  // LAST in the function on purpose. Every line above overwrites a field from the
+  // content default -- `w.damage = def.damage` and `w.cdBonus = 0` among them --
+  // so a catch-up added earlier in the body is silently wiped out and the weapon
+  // joins at level 2 with level-0 damage, which is the exact bug this was written
+  // to prevent.
+  const int catchUp = weaponLevel_;
+  if (catchUp > 0) {
+    w.level = catchUp;
+    w.damage += weaponLevelDamageTotal(catchUp) * stats_.weaponGrowth;
+    w.cdBonus += weaponLevelCooldownTotal(catchUp) * stats_.weaponGrowth;
   }
 }
 
@@ -6839,6 +6908,10 @@ void Game::grantXp(float amount) {
 
 void Game::testClearWeapons() {
   weaponCount_ = 0;
+  // The arsenal is gone, so the level the arsenal was at has to go with it.
+  // Leaving it behind would make the next testAddWeapon start six levels ahead of
+  // level 1.
+  weaponLevel_ = 0;
   starterChoicePending_ = false; // test sandbox: no opening pick
   // Collect first, destroy after: destroying an entity while an EnTT view over
   // that same component is being walked is undefined behaviour, and an entity
@@ -8345,7 +8418,11 @@ void Game::renderPlayerStats(core::render::Batcher& b, float px, float py) {
   for (int i = 0; i < weaponCount_; ++i) {
     const auto& w = weapons_[i];
     const auto& def = content_.weapons[static_cast<std::size_t>(w.def)];
-    rows.push_back(def.name + " [" + attackTypeName(w.attackType) + "] D" +
+    // The weapon's own level, so the per-level growth is visible in the sheet
+    // instead of being an invisible constant folded into D. It is also the only
+    // way a player can tell that a late pickup caught up with the rest.
+    const std::string lvl = w.level > 0 ? " LV" + std::to_string(w.level) : "";
+    rows.push_back(def.name + lvl + " [" + attackTypeName(w.attackType) + "] D" +
                    std::to_string(static_cast<int>(w.damage)) + " N" +
                    std::to_string(w.projectiles) + " CD" + fit1(w.cooldown) + "S");
   }

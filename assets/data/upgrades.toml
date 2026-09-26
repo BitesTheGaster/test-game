@@ -828,6 +828,14 @@ effect = "weapon_slot_add"
 value = 1
 max_stacks = 3
 [[upgrade]]
+id = "u_whetstone"
+name = "Whetstone"
+desc = "Every weapon level is worth twice as much"
+effect = "weapon_growth"
+value = 1.0
+max_stacks = 3
+
+[[upgrade]]
 id = "u_deep_cache"
 name = "Deep Cache"
 desc = "Every chest improves one more of your weapons"

@@ -6901,3 +6901,108 @@ TEST_CASE("The screen never holds more than two elites at a time") {
   // under-spent on a quiet roll, but it may never be over-spent.
   REQUIRE(g.testLiveTierCount() <= 2);
 }
+
+TEST_CASE("Weapons level with the player, and a late pickup joins at the arsenal's level") {
+  // "Stacks for weapons, so they are just a bit better at levels." Two promises:
+  // they improve without the player spending anything, and picking a weapon up
+  // late is not strictly worse than picking it up early. The second is the one
+  // that quietly stops being true in every game like this.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  REQUIRE(game::Game::kWeaponLevelEvery == 4);
+
+  game::Game g{content, 17};
+  g.testClearWeapons();
+  const int wand = g.testWeaponContentIndex("wand");
+  g.testAddWeapon(wand);
+  const float baseDamage = g.testWeaponStat(0, "damage");
+  REQUIRE(g.testWeaponLevel(0) == 0);
+  REQUIRE(g.testWeaponLevel() == 0);
+
+  g.testSetLevel(8);
+  REQUIRE(g.testWeaponLevel() == 2);
+  REQUIRE(g.testWeaponLevel(0) == 2);
+  // Two levels, each worth its own geometric step -- asserted against the shared
+  // formula rather than a hard-coded sum, so a retune of the decay cannot leave a
+  // stale expectation quietly passing or failing for the wrong reason.
+  REQUIRE(g.testWeaponStat(0, "damage") ==
+          Catch::Approx(baseDamage + game::Game::weaponLevelDamageTotal(2)));
+  // And the second level is worth strictly less than the first, which is the
+  // property the whole system rests on.
+  REQUIRE(game::Game::weaponLevelDamageGain(1) <
+          game::Game::weaponLevelDamageGain(0));
+
+  // A weapon picked up now is at the same level as the one already here, and it
+  // has the same LEVEL bonus on top of its own (different) base damage.
+  const int dagger = g.testWeaponContentIndex("dagger");
+  game::Game early{content, 17};
+  early.testAddWeapon(dagger);
+  const float daggerBase = early.testWeaponStat(0, "damage");
+  g.testAddWeapon(dagger);
+  REQUIRE(g.testWeaponLevel(1) == 2);
+  REQUIRE(g.testWeaponStat(1, "damage") ==
+          Catch::Approx(daggerBase + game::Game::weaponLevelDamageTotal(2)));
+}
+
+TEST_CASE("A weapon level is worth what the growth card says, and only from then on") {
+  // A growth card that retroactively rewrote levels already paid out would make
+  // the same run worth different amounts depending on when the card turned up,
+  // which is the kind of thing that only shows up as a balance complaint weeks
+  // later. So the growth applies forward only, and the high-water mark is what
+  // makes that true.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  int idx = -1;
+  for (std::size_t i = 0; i < content.upgrades.size(); ++i) {
+    if (content.upgrades[i].id == "u_whetstone") idx = static_cast<int>(i);
+  }
+  REQUIRE(idx >= 0);
+  REQUIRE(content.upgrades[static_cast<std::size_t>(idx)].effect == "weapon_growth");
+
+  game::Game g{content, 21};
+  g.testClearWeapons();
+  g.testAddWeapon(g.testWeaponContentIndex("wand"));
+  g.testSetLevel(4);
+  const float afterOne = g.testWeaponStat(0, "damage");
+  REQUIRE(g.testWeaponLevel(0) == 1);
+
+  REQUIRE(g.testGrantUpgrade(idx));
+  REQUIRE(g.stats().weaponGrowth == Catch::Approx(2.0F));
+  // The level already paid for is untouched.
+  REQUIRE(g.testWeaponStat(0, "damage") == Catch::Approx(afterOne));
+  // The next one is worth double.
+  g.testSetLevel(8);
+  REQUIRE(g.testWeaponLevel(0) == 2);
+  // The first level was already paid at the old rate, the second at the new one,
+  // so the difference is exactly one doubled step.
+  REQUIRE(g.testWeaponStat(0, "damage") ==
+          Catch::Approx(afterOne + 2.0F * game::Game::weaponLevelDamageGain(1)));
+}
+
+TEST_CASE("Weapon levels never run away on a long run") {
+  // The free bump is a rounding error against a build, which is the only reason
+  // it is safe to have. This pins that: at the level a very long run reaches, it
+  // is still smaller than a single ordinary card.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  int damageCard = -1;
+  for (std::size_t i = 0; i < content.upgrades.size(); ++i) {
+    if (content.upgrades[i].id == "w_wand_power") damageCard = static_cast<int>(i);
+  }
+  REQUIRE(damageCard >= 0);
+  const auto& card = content.upgrades[static_cast<std::size_t>(damageCard)];
+
+  game::Game g{content, 23};
+  g.testClearWeapons();
+  g.testAddWeapon(g.testWeaponContentIndex("wand"));
+  g.testSetLevel(256);
+  const int levels = g.testWeaponLevel(0);
+  CAPTURE(levels);
+  REQUIRE(levels == 256 / game::Game::kWeaponLevelEvery);
+  const float fromLevels = game::Game::weaponLevelDamageTotal(levels);
+  CAPTURE(fromLevels);
+  // One fully-stacked ordinary weapon card, and the free bump is still smaller --
+  // and it stays smaller no matter how far past that the run goes, which is the
+  // part the decay buys.
+  REQUIRE(fromLevels < card.value * static_cast<float>(card.maxStacks));
+  g.testSetLevel(1024);
+  REQUIRE(game::Game::weaponLevelDamageTotal(g.testWeaponLevel(0)) < fromLevels +
+                                                          card.value * 0.5F);
+}
