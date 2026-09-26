@@ -15,6 +15,7 @@
 #include <random>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace game {
@@ -313,6 +314,17 @@ float mitigateDamage(float raw, float defense);
 // namespace-scope rather than a class constant so that chainChargeY() below, the
 // one place the direction is written down, can be a free function a test calls.
 constexpr float kChainSkyDrop = 4.2F;
+
+// A tier's HP multiplier band, as {min, max}, and the largest share of spawns it
+// can ever take.
+//
+// Both are pure functions of the tier, and both are what a balance pass actually
+// turns. They were inline magic values inside `tierSpawnChance` and a switch
+// inside `tierBuffs`, which is how the champion ended up arriving every seven
+// seconds while its own ceiling sat unnoticed in the middle of a range. Naming
+// them is what lets a test hold the ladder's shape.
+[[nodiscard]] std::pair<float, float> tierHpBand(int tier);
+[[nodiscard]] float tierSpawnCap(int tier);
 
 // Where the sky end of a chain bolt's drop is, and how far down it has got.
 //
@@ -1098,6 +1110,16 @@ public:
   }
   // Test hook: feed the director directly, so the champion/overlord gates can be
   // tested without simulating minutes of real kills.
+  //
+  // The pressure a tier must reach before the NEXT one opens. Public so a test
+  // crosses the gate by asking what it is: the literals 8.0 and 7.0 that used to
+  // sit in that test were a second copy of kChampionPressure and
+  // kOverlordPressure, and they were the reason raising the gates broke a build
+  // instead of just making the game harder.
+  [[nodiscard]] static float tierGate(int tier) {
+    return tier == 2 ? kChampionPressure
+                     : (tier == 3 ? kOverlordPressure : 0.0F);
+  }
   void testAddTierPressure(int tier, float amount) {
     if (tier > 0 && tier < 4) tierPressure_[tier] += amount;
   }
@@ -1812,10 +1834,22 @@ private:
   // every kill of that tier adds weight, the score bleeds away over
   // kPressureWindow seconds, and the next tier is gated on the current one.
   static constexpr float kPressureWindow = 30.0F;
-  // Elite kills (weighted 1.0) needed inside the window to call elites routine.
-  static constexpr float kChampionPressure = 7.0F;
-  // Champion kills needed inside the window to call champions routine.
-  static constexpr float kOverlordPressure = 6.0F;
+  // Elite kills (weighted 1.0) needed before champions are allowed at all.
+  //
+  // 7 was low enough that the gate was really a formality. Elite spawn chance
+  // tops out at 10% and a mid-screen pack dies in a couple of seconds, so seven
+  // elite kills is roughly twenty seconds of ordinary play -- which means the
+  // "champion tribunal" opened at a minute and a half, when the player has a
+  // starter and one or two upgrades, and stayed open for the rest of the run.
+  //
+  // The score drains at 1/kPressureWindow per second, so this number is really a
+  // statement about a SUSTAINED elite kill rate, not a total: 14 says "you are
+  // handling elites comfortably and have been for a while".
+  static constexpr float kChampionPressure = 14.0F;
+  // Champion kills needed before overlords are allowed. Champions are now rare
+  // enough that this is a genuine second milestone rather than something a
+  // strong build stumbles into two minutes after the first one.
+  static constexpr float kOverlordPressure = 9.0F;
   // How many elite-and-above bodies may be alive at once. The ask was not "make
   // elites weaker" -- they are supposed to be the spike -- but "make them rarer,
   // so there are one or two on screen and meeting one is an event". A live cap

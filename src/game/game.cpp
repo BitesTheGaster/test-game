@@ -72,21 +72,64 @@ float boltJitter(unsigned seed) {
 // that should be lethal leaves a "0 HP" enemy alive.
 constexpr float kEnemyDeathEpsilon = 1.0e-3F;
 
-// Base HP multiplier ranges per enemy tier. Rolled per spawn so each elite is
-// tougher than the last; higher tiers are exponentially beefier so they never
-// simply melt. Applied on top of the global time-based hp scale.
-// These came down across the board. An elite is meant to be the thing that
-// interrupts a good run, not the thing that ends it: at 5-10x base HP an elite
-// of an ordinary trash type was already a health bar, and a champion at 25-100x
-// was a wall. The bands are still far enough apart to read at a glance (a
-// champion is visibly a different proposition from an elite) but they no longer
-// out-scale everything the player can own by minute three.
-constexpr float kEliteHpMin = 3.5F;
-constexpr float kEliteHpMax = 6.5F;
-constexpr float kChampionHpMin = 15.0F;
-constexpr float kChampionHpMax = 55.0F;
-constexpr float kOverlordHpMin = 70.0F;
-constexpr float kOverlordHpMax = 450.0F;
+// Base HP multiplier ranges per enemy tier, as a MULTIPLE OF THE TRASH ON THE
+// FIELD AT THE SAME MOMENT (the global time ramp is applied on top of these, so
+// the ratio is what stays constant as the run's trash gets tougher).
+//
+// The ladder is the whole design, so it is worth saying out loud what each rung
+// is for. Measured against a mid-run arsenal, the tier that arrives should be a
+// fight whose length the player can feel:
+//
+//   elite     ~5-8x     an interrupt. You notice it, you clear it, you move on.
+//   champion  ~28-46x   a real fight. It costs you a position or an ability.
+//   overlord  ~100-150x a boss. It is worth clearing your screen to deal with it.
+//
+// Three things were wrong with the old bands, all in the same direction:
+//
+// 1. The champion's FLOOR was 15x while its CEILING was 55x -- a 3.7x spread
+//    inside one label. A "champion" that rolled low was a pushover and one that
+//    rolled high was a wall, from the same spawn table, with the same banner and
+//    the same three-card chest. That is why the tier read as decorative: the
+//    player could not tell which kind they were about to meet, and the weak roll
+//    is what they remember. The spread is now 1.6x.
+// 2. The overlord's ceiling of 450x was a health CHECK, not a boss. At minute
+//    twelve that is a nine-hundred-thousand-HP wall that a small crowd cannot
+//    chew through, which is not a reward for out-playing the game.
+// 3. The elite's floor of 3.5x was below the noise floor of a mid-run screen: an
+//    elite died in the time it took the player's weapons to line up, so it never
+//    interrupted anything. And because elite kills are the currency that opens
+//    the champion tribunal, a trivial elite also meant the next tier arrived
+//    early -- the two problems fed each other.
+constexpr float kEliteHpMin = 5.0F;
+constexpr float kEliteHpMax = 8.0F;
+constexpr float kChampionHpMin = 28.0F;
+constexpr float kChampionHpMax = 46.0F;
+constexpr float kOverlordHpMin = 100.0F;
+constexpr float kOverlordHpMax = 150.0F;
+
+// How OFTEN each heavy tier arrives, as a share of all spawns.
+//
+// This is the number that answered "why is the champion so easy", and it was not
+// the health bar. At a 0.006 slope and a 5% ceiling, a build comfortably past
+// the gate met a champion roughly every seven seconds: a soft mob wearing a
+// boss's name, worth a three-card chest, gone in the time it took to line your
+// weapons up. Nothing you meet every seven seconds is a trial, however much HP
+// it has, and the banner announcing the tribunal had stopped meaning anything a
+// minute after it appeared.
+//
+// So a champion is an event. The slope is under a third of the old one, so a
+// player only just past the gate gets a trickle rather than a flood, and even a
+// dominant build tops out at one spawn in forty. An overlord is the run's boss:
+// a couple in a ten-minute run, each one a fight the player had to make room
+// for.
+//
+// A floor matters as much as a ceiling. The elite rate is a curve on the clock
+// (see tierSpawnChance), and capping a boss at 2.5% only means something if the
+// garbage below it is more common than that.
+constexpr float kChampionChanceSlope = 0.0022F;
+constexpr float kChampionChanceCap = 0.025F;
+constexpr float kOverlordChanceSlope = 0.0012F;
+constexpr float kOverlordChanceCap = 0.012F;
 
 // Trait pool. Elites roll exactly one; champions and overlords roll several
 // (see traitsForTier).
@@ -148,6 +191,27 @@ core::render::Color eliteTint(core::render::Color c) {
 }
 
 } // namespace
+
+// A tier's HP multiplier band, as {min, max}. A pure function of the tier: a
+// balance pass turns these two numbers, and they are the reason a tier is an
+// interrupt, a fight, or a wall. Exposed so a test can ask the ladder what shape
+// it is instead of trusting that the last person to edit it meant to.
+std::pair<float, float> tierHpBand(int tier) {
+  const TierBuffs b = tierBuffs(tier);
+  return {b.hpMin, b.hpMax};
+}
+
+// The largest share of spawns a tier can take. Only reached by a build far past
+// the gate, which is exactly when it matters: this is the frequency that decides
+// whether a boss is an event or a mob.
+float tierSpawnCap(int tier) {
+  switch (tier) {
+    case 1: return 0.10F; // the curve tops out here; see tierSpawnChance
+    case 2: return kChampionChanceCap;
+    case 3: return kOverlordChanceCap;
+    default: return 0.0F;
+  }
+}
 
 ChainDropSpan chainDropSpan(float targetY, float born) {
   const float sky = chainChargeY(targetY);
@@ -5489,14 +5553,13 @@ float Game::tierSpawnChance(int tier) const {
   }
   if (tier == 2) {
     // The further above the "elites are routine" line the player is, the more
-    // champions show up — up to the old late-game cap, so an overwhelming
-    // build still gets a real fight instead of an endless stream.
+    // champions show up. See kChampionChanceSlope for why this is small.
     const float over = tierPressure_[1] - kChampionPressure;
-    return std::clamp(over * 0.006F, 0.0F, 0.05F);
+    return std::clamp(over * kChampionChanceSlope, 0.0F, kChampionChanceCap);
   }
   if (tier == 3) {
     const float over = tierPressure_[2] - kOverlordPressure;
-    return std::clamp(over * 0.003F, 0.0F, 0.02F);
+    return std::clamp(over * kOverlordChanceSlope, 0.0F, kOverlordChanceCap);
   }
   return 0.0F;
 }

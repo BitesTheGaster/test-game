@@ -3085,8 +3085,12 @@ TEST_CASE("Champions wait for elites to be easy, overlords for champions") {
   REQUIRE(g.tierPressure(1) > 0.0F);
   REQUIRE_FALSE(g.tierUnlocked(2));
 
-  // Handle enough of them and the champion tribunal opens by itself.
-  g.testAddTierPressure(1, 8.0F);
+  // Handle enough of them and the champion tribunal opens by itself. The amount
+  // is the gate plus one frame of decay, asked of the game rather than written
+  // out: a literal here is a second copy of kChampionPressure, and the last time
+  // the two disagreed this test failed for a reason that had nothing to do with
+  // what it was checking.
+  g.testAddTierPressure(1, game::Game::tierGate(2) + 0.05F);
   g.advance(1.0F / 60.0F, in);
   REQUIRE(g.tierUnlocked(2));
   REQUIRE(g.tierSpawnChance(2) > 0.0F);
@@ -3100,7 +3104,7 @@ TEST_CASE("Champions wait for elites to be easy, overlords for champions") {
   g.testSetSimTime(300.0F);
   g.advance(1.0F / 60.0F, in);
   REQUIRE_FALSE(g.tierUnlocked(3));
-  g.testAddTierPressure(2, 7.0F);
+  g.testAddTierPressure(2, game::Game::tierGate(3) + 0.05F);
   g.advance(1.0F / 60.0F, in);
   REQUIRE(g.tierUnlocked(3));
   REQUIRE(g.tierSpawnChance(3) > 0.0F);
@@ -3112,12 +3116,13 @@ TEST_CASE("Champions wait for elites to be easy, overlords for champions") {
   fading.testClearWeapons();
   fading.advance(1.0F / 60.0F, in);
   fading.testSetSimTime(200.0F);
-  fading.testAddTierPressure(1, 7.5F);
+  const float gate = game::Game::tierGate(2);
+  fading.testAddTierPressure(1, gate + 0.5F);
   fading.advance(1.0F / 60.0F, in);
   REQUIRE(fading.tierUnlocked(2));
-  fading.testAddTierPressure(1, -8.0F); // form is gone
-  REQUIRE(fading.tierPressure(1) < 7.0F);
-  REQUIRE(fading.tierUnlocked(2));      // still inside the grace window
+  fading.testAddTierPressure(1, -(gate + 1.0F)); // form is gone
+  REQUIRE(fading.tierPressure(1) < gate);
+  REQUIRE(fading.tierUnlocked(2));               // still inside the grace window
   for (int i = 0; i < 24 * 60; ++i) fading.advance(1.0F / 60.0F, in);
   REQUIRE_FALSE(fading.tierUnlocked(2));
   REQUIRE_FALSE(fading.tierUnlocked(3));
@@ -7436,4 +7441,71 @@ TEST_CASE("A chain bolt's first hit waits for the drop to finish falling") {
   // it is something you can watch rather than something that has already
   // happened by the time you look at it.
   REQUIRE(game::Game::kChainStrike > 0.05F);
+}
+
+TEST_CASE("Each tier is one clear step above the one below it, and none is a wall") {
+  // The complaint this answers is "the balance is terrible, and why is the
+  // champion so easy". The measured answer was that the frequency mattered more
+  // than the health bar -- but the health bar had its own defect, and it is the
+  // one a data edit can silently break again, so both are held here.
+  //
+  // What a tier is FOR, in order, and the shape that delivers it:
+  //
+  //   elite     an interrupt: you notice it, you clear it, you move on
+  //   champion  a real fight: it costs you a position, or an ability
+  //   overlord  a boss: it is worth clearing your screen to deal with it
+  //
+  // So each rung must be meaningfully above the last, and none may be a health
+  // check. Both halves matter: too close and the tiers are the same enemy with
+  // different names, too far apart and the top of the ladder is an arithmetic
+  // problem rather than a fight.
+  const auto [eliteLo, eliteHi] = game::tierHpBand(1);
+  const auto [champLo, champHi] = game::tierHpBand(2);
+  const auto [lordLo, lordHi] = game::tierHpBand(3);
+
+  // Every rung is a real step up from the one below. The floor of each band --
+  // not its ceiling -- is the number that has to clear, because a champion that
+  // rolled low used to be a pushover and a champion that rolled high a wall, out
+  // of the same spawn table with the same banner.
+  REQUIRE(champLo > eliteHi * 2.0F);
+  REQUIRE(lordLo > champHi * 2.0F);
+
+  // And no rung is a health check. The old overlord ceiling of 450x a
+  // contemporaneous mob was a wall: at minute twelve it was a
+  // nine-hundred-thousand-HP thing a small crowd could not chew through, which
+  // is not a reward for out-playing the game.
+  REQUIRE(lordHi <= 160.0F);
+  REQUIRE(champHi <= 60.0F);
+
+  // The within-tier spread is narrow. A 3.7x spread inside one label meant the
+  // player could not tell which kind of champion they were about to meet, and
+  // the weak roll is the one they remember.
+  REQUIRE(champHi / champLo <= 2.0F);
+  REQUIRE(lordHi / lordLo <= 2.0F);
+  REQUIRE(eliteHi / eliteLo <= 2.0F);
+}
+
+TEST_CASE("A heavy tier is an event, not a stream") {
+  // The rest of the answer to "why is the champion so easy". A tier that arrives
+  // every few seconds is not a trial, whatever its health bar says, and its
+  // three-card chest stops being a reward. These are shares of ALL spawns, so a
+  // champion at 5% is a champion roughly every seven seconds on a busy screen.
+  const float champCap = game::tierSpawnCap(2);
+  const float lordCap = game::tierSpawnCap(3);
+  const float eliteCap = game::tierSpawnCap(1);
+
+  CAPTURE(champCap);
+  CAPTURE(lordCap);
+  CAPTURE(eliteCap);
+
+  // A floor matters as much as a ceiling: the elite is the currency that opens
+  // the champion tribunal, so the garbage below the boss has to be more common
+  // than the boss or the ladder inverts.
+  REQUIRE(eliteCap > champCap);
+  REQUIRE(champCap > lordCap);
+
+  // The boss tiers stay events. A champion no more than one spawn in forty, an
+  // overlord no more than one in eighty.
+  REQUIRE(champCap <= 0.025F);
+  REQUIRE(lordCap <= 0.012F);
 }
