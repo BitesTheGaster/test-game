@@ -290,18 +290,6 @@ UpgradeEffectResult applyUpgrade(PlayerStats& stats, std::string_view effect, fl
     stats.markDefStrip += value;
     return {true, 0.0F, 0.0F};
   }
-  if (effect == "weapon_growth") {
-    // Doubles (or halves) what a weapon LEVEL is worth. This is the only card
-    // that touches the free per-level bump, and it exists so weapon levels can be
-    // a build rather than a rounding error: without it the growth is fixed and
-    // the only question left is which cards to spend, which is the question the
-    // game was already asking.
-    stats.weaponGrowth += value;
-    // A growth of zero would mean a weapon level costs the player something,
-    // which is never a good surprise. One is the floor.
-    stats.weaponGrowth = std::max(1.0F, stats.weaponGrowth);
-    return {true, 0.0F, 0.0F};
-  }
   if (effect == "chest_bonus") {
     // One more weapon per box. It is on a card rather than baked into the tier
     // numbers because the count IS the reward: making the elite's box bigger is
@@ -666,7 +654,6 @@ void Game::reset() {
 
   // No starter weapon is granted; advance() opens the three-weapon pick.
   weaponCount_ = 0;
-  weaponLevel_ = 0;
 
   // Paint the freshly created player with the profile's skin/outline.
   applyProfileToPlayer();
@@ -2758,10 +2745,20 @@ float Game::displacementResistance(entt::entity e) const {
 }
 
 float Game::continuousPullScale(entt::entity e) const {
-  // 80% of the resistance applies to a sustained field, with a 20% floor. A
-  // fully resistant overlord can still be nudged, but it cannot be corkscrewed
-  // and deleted by an aura alone.
-  return std::max(0.2F, 1.0F - 0.8F * displacementResistance(e));
+  // 94% of the resistance applies to a sustained field, with a 6% floor. A fully
+  // resistant overlord can still be nudged, but it cannot be corkscrewed and
+  // deleted by an aura alone.
+  //
+  // The old curve was 80% with a 20% floor, and the floor was quietly load-bearing
+  // in the wrong direction: these four fields move a body POSITIONALLY every
+  // frame, so 20% of the Void Gyre's 8.0 is 1.6 u/s of drag held for as long as
+  // the body stays in reach -- faster than any enemy walks, and enough to reel a
+  // fully knockback-immune boss onto the player. A resistance stat that does not
+  // stop a pull is not a resistance stat, and the complaint that arrived about
+  // Void Nova dragging things into you is this same number seen from another
+  // angle. Six percent is still visible: 0.48 u/s is a body being walked toward
+  // you, not a body that cannot be moved.
+  return std::max(0.06F, 1.0F - 0.94F * displacementResistance(e));
 }
 
 // Applies knockback to an enemy, reduced by its knockback resistance.
@@ -3280,6 +3277,11 @@ void Game::updateVortices() {
     // weapon. A well with collapseAt <= 0 never charges and never bursts, which
     // is what keeps the Void Gyre a patient permanent drag.
     const float collapseAt = owned ? w.vortexCollapseAt : vx.collapseAt;
+    // The crowd bonus. Read from the OWNING weapon, and deliberately zero for an
+    // unowned well: a Vortex that belongs to nobody is a sandbox artefact, and
+    // giving it a rule that no weapon in the content has would be a test-only
+    // behaviour pretending to be a mechanic.
+    const float crowd = owned ? w.vortexCrowd : 0.0F;
     const float burstDamage = owned ? w.vortexBurstDamage : vx.burstDamage;
     const float burstRadius = owned ? w.vortexBurstRadius : vx.burstRadius;
 
@@ -3398,7 +3400,19 @@ void Game::updateVortices() {
       inside.push_back(en);
     }
     const float vortexMul = aoeFalloff(static_cast<int>(inside.size()), pierce);
-    const float tickDamage = damage * std::max(0.02F, vx.tickRate) * vortexMul;
+    // THE Void Gyre's whole identity, and the reason it is not the Event Horizon
+    // with a bigger number on it. A snare that grinds what it holds is worthless
+    // against one enemy and enormous against ten, so the answer to "which well do
+    // I want" is "do I want to stand in a crowd", and the two weapons end up
+    // wanting opposite positions on the screen. The falloff above is left in: the
+    // crowd bonus is on top of a well that still respects crowd falloff, so ten
+    // bodies in a core is a jackpot and a hundred spread over three cores is not
+    // a hundred times anything.
+    const float crowdMul =
+        crowd > 0.0F
+            ? 1.0F + crowd * static_cast<float>(std::max(0, static_cast<int>(inside.size()) - 1))
+            : 1.0F;
+    const float tickDamage = damage * std::max(0.02F, vx.tickRate) * vortexMul * crowdMul;
     for (const auto en : inside) {
       if (!registry_.valid(en)) continue;
       applyEnemyDamage(en, tickDamage);
@@ -4478,11 +4492,16 @@ void Game::updateNovaRing() {
 
 // --- Elite chests -------------------------------------------------------------
 // The tier's gift. An elite opens one box, a champion three, an overlord five,
-// plus whatever the Deep Cache card adds, and the box spends itself on the
-// player's OWN weapons -- one legal card each, preferring a weapon that has none
-// yet. So the run gets rarer elites precisely so that meeting one is worth
-// something, and the size of the box is the visible difference between a tier and
-// the one below it.
+// plus whatever the Deep Cache card adds. So the run gets rarer elites precisely
+// so that meeting one is worth something, and the size of the box is the visible
+// difference between a tier and the one below it.
+//
+// A box improves the player's build, and the build is not only weapons. Half of
+// what a run collects is item cards -- health, shields, regeneration, the four
+// on-hit marks, the weapon-wide improvement items -- and a box that could only
+// hand out weapon cards was ignoring most of the run it was rewarding. So each
+// grant is an independent roll over BOTH pools, weapon cards and item cards, and
+// an item card is exactly as likely to come out of a box as a weapon upgrade.
 std::vector<int> Game::legalWeaponCards(int weaponSlot) const {
   std::vector<int> out;
   if (weaponSlot < 0 || weaponSlot >= weaponCount_) return out;
@@ -4492,6 +4511,23 @@ std::vector<int> Game::legalWeaponCards(int weaponSlot) const {
     if (u.weapon != id) continue;
     if (blocked_[i]) continue;
     if (stacks_[i] >= u.maxStacks) continue;
+    out.push_back(static_cast<int>(i));
+  }
+  return out;
+}
+
+// Item cards a box may hand out: every non-milestone card with no weapon of its
+// own. Milestones are excluded on purpose -- a milestone is a question the run
+// gets asked at a level, and a corpse must not be able to skip it -- and so are
+// cards whose weapon is not equipped, which would be dead picks.
+std::vector<int> Game::legalItemCards() const {
+  std::vector<int> out;
+  for (std::size_t i = 0; i < content_.upgrades.size(); ++i) {
+    const auto& u = content_.upgrades[i];
+    if (u.kind == "milestone" || !u.weapon.empty()) continue;
+    if (blocked_[i]) continue;
+    if (stacks_[i] >= u.maxStacks) continue;
+    if (!upgradeIsUsable(static_cast<int>(i))) continue;
     out.push_back(static_cast<int>(i));
   }
   return out;
@@ -4508,19 +4544,33 @@ int Game::openChest(int grants) {
     for (int s = 0; s < weaponCount_; ++s) {
       if (!legalWeaponCards(s).empty()) slots.push_back(s);
     }
-    if (slots.empty()) break;
-    // Prefer a weapon this box has not touched yet. Without that, a chest picks
-    // uniformly and stacks the first weapon's damage card four times, which is
-    // the same thing a level-up card would have done and much less interesting.
-    std::vector<int> fresh;
-    for (const int s : slots) {
-      if (legalWeaponCards(s).size() > 1 || given == 0) fresh.push_back(s);
+    const std::vector<int> items = legalItemCards();
+    if (slots.empty() && items.empty()) break;
+
+    // A 50/50 roll between the two pools, and it only falls back to whatever is
+    // left when the coin came up on an empty side. Without the fallback a fully
+    // maxed arsenal would make a champion's box a single item and an overlord's
+    // a single item, which is the tier's whole reward evaporating because the
+    // player maxed one half of the pool.
+    const bool wantItem =
+        (!items.empty() && (slots.empty() || (rng_() % 2u) == 0u));
+    int card = -1;
+    if (wantItem) {
+      card = items[static_cast<std::size_t>(rng_() % items.size())];
+    } else {
+      // Prefer a weapon this box has not touched yet. Without that, a chest picks
+      // uniformly and stacks the first weapon's damage card four times, which is
+      // the same thing a level-up card would have done and much less interesting.
+      std::vector<int> fresh;
+      for (const int s : slots) {
+        if (legalWeaponCards(s).size() > 1 || given == 0) fresh.push_back(s);
+      }
+      if (!fresh.empty()) slots = fresh;
+      const int slot = slots[static_cast<std::size_t>(rng_() % slots.size())];
+      const auto cards = legalWeaponCards(slot);
+      if (cards.empty()) continue;
+      card = cards[static_cast<std::size_t>(rng_() % cards.size())];
     }
-    if (!fresh.empty()) slots = fresh;
-    const int slot = slots[static_cast<std::size_t>(rng_() % slots.size())];
-    const auto cards = legalWeaponCards(slot);
-    if (cards.empty()) continue;
-    const int card = cards[static_cast<std::size_t>(rng_() % cards.size())];
     if (applyUpgradeAt(card)) {
       ++given;
       // The HUD wants to say what came out of the box.
@@ -5617,8 +5667,7 @@ void Game::buildChoices() {
     //
     // Two groups may share a screen when both are narrow, and picking from one
     // does NOT close the other: that is what lets the player choose the subject
-    // as well as the card, and it leaves a group with a spare choice to be
-    // revisited at the next milestone instead of quietly vanishing.
+    // as well as the card.
     std::vector<std::string> groupNames;
     std::vector<int> ungrouped;
     for (std::size_t i = 0; i < content_.upgrades.size(); ++i) {
@@ -5659,6 +5708,58 @@ void Game::buildChoices() {
     for (const int idx : ungrouped) {
       if (offer.size() >= kMaxMilestoneSlots) break;
       offer.push_back(idx);
+    }
+
+    // Whatever room is left goes to the questions the player has ALREADY
+    // answered. Every sibling of a taken card is blocked, so a group the run has
+    // committed to has exactly one member left, and that member still has stacks
+    // -- so the leftover slot is the same card again, one more application, and
+    // the STACKS line under it says which take this is.
+    //
+    // This is the half that makes the group a build rather than a one-time
+    // fork. Without it a milestone group is asked once and then gone, so
+    // "vampirism, several times over" would have to mean one card silently
+    // applying three times -- which is a number the player never sees and
+    // cannot plan around. Here it is a card on the screen, with a counter, that
+    // can come back four more times.
+    if (offer.size() < kMaxMilestoneSlots) {
+      std::vector<int> carry;
+      for (std::size_t i = 0; i < content_.upgrades.size(); ++i) {
+        const auto& u = content_.upgrades[i];
+        if (u.kind != "milestone" || u.group.empty()) continue;
+        // Only groups introduced BEFORE this level. A group at this level is
+        // already on the screen in full above, and a group from a later level
+        // does not exist yet.
+        if (u.level < 4 || u.level >= level_) continue;
+        if ((u.level & (u.level - 1)) != 0) continue; // milestones are powers of two
+        if (stacks_[i] >= u.maxStacks || blocked_[i]) continue;
+        // A group the run has NOT answered yet. Unblocked-and-unstacked is also
+        // true of a group that simply has not come up, and offering one of its
+        // cards in a leftover slot would put half of a question the player has
+        // not been asked on the same screen as the question they are being asked
+        // -- a card that is in the group but not in the group currently on
+        // offer, which is the exact thing an exclusive group is for. A sibling
+        // being blocked is the only reliable sign the run committed to this one.
+        bool answered = false;
+        for (std::size_t j = 0; j < content_.upgrades.size(); ++j) {
+          if (content_.upgrades[j].group != u.group) continue;
+          if (blocked_[j]) answered = true;
+        }
+        if (!answered) continue;
+        carry.push_back(static_cast<int>(i));
+      }
+      // One per group. Two members of the same answered group cannot both be
+      // unblocked, but asking the pool to prove it every level is cheaper than
+      // trusting that and being wrong in a screen the player reads.
+      std::shuffle(carry.begin(), carry.end(), rng_);
+      std::vector<std::string> seen;
+      for (const int idx : carry) {
+        if (offer.size() >= kMaxMilestoneSlots) break;
+        const std::string& name = content_.upgrades[static_cast<std::size_t>(idx)].group;
+        if (std::find(seen.begin(), seen.end(), name) != seen.end()) continue;
+        seen.push_back(name);
+        offer.push_back(idx);
+      }
     }
 
     if (!offer.empty()) {
@@ -5767,8 +5868,6 @@ void Game::completeLevelUp() {
   xp_ -= xpNext_;
   ++level_;
   xpNext_ = xpForLevel(level_);
-  // Weapons level with the player, so a level-up is the moment they improve.
-  syncWeaponLevels();
 
   if (xp_ >= xpNext_) {
     enterLevelUp(); // queued level-ups
@@ -5812,6 +5911,44 @@ void Game::chooseUpgrade(int slot) {
   completeLevelUp();
 }
 
+void Game::applyWeaponWide(WeaponSlot& w, std::string_view effect, float value) {
+  if (effect == "w_all_damage") {
+    w.damage *= 1.0F + value;
+  } else if (effect == "w_all_rate") {
+    w.cdBonus += value;
+  } else if (effect == "w_all_reach") {
+    // EVERY reach-ish field the roster has, so the card means the same thing on
+    // a beam, a crescent, a boomerang and a well. A card that widened four of
+    // them and quietly skipped the other nine would be worse than none.
+    w.life *= 1.0F + value;
+    w.speed *= 1.0F + value;
+    w.coneRange *= 1.0F + value;
+    w.beamRange *= 1.0F + value;
+    w.waveRange *= 1.0F + value;
+    w.waveWidth *= 1.0F + value;
+    w.sweepRadius *= 1.0F + value;
+    w.zoneRadius *= 1.0F + value;
+    w.novaMaxRadius *= 1.0F + value;
+    w.vortexRadius *= 1.0F + value;
+    w.vortexReach *= 1.0F + value;
+    w.orbitRadius *= 1.0F + value;
+    w.boomerangRange *= 1.0F + value;
+    w.bounceRange *= 1.0F + value;
+    w.bombExplodeRadius *= 1.0F + value;
+    w.haloInner *= 1.0F + value;
+    w.chainJumpRange *= 1.0F + value;
+    w.lureReach *= 1.0F + value;
+    w.lureRadius *= 1.0F + value;
+  } else if (effect == "w_all_knockback") {
+    w.bombKnockback *= 1.0F + value;
+    w.haloKnockback *= 1.0F + value;
+    w.sweepKnockback *= 1.0F + value;
+    w.waveKnockback *= 1.0F + value;
+    w.novaPull *= 1.0F + value;
+    w.vortexPull *= 1.0F + value;
+  }
+}
+
 // Applies one upgrade card. Returns false when the effect is unknown or when a
 // weapon-targeted card's weapon is no longer equipped (in both cases the level
 // up is left pending rather than silently consumed).
@@ -5822,33 +5959,31 @@ bool Game::applyUpgradeAt(int upgradeIndex) {
   const auto& def = content_.upgrades[static_cast<std::size_t>(upgradeIndex)];
 
   UpgradeEffectResult result{false, 0.0F, 0.0F};
-  if (def.weapon.empty()) {
-    // `grants` is how many times the effect lands. It is a separate field from
-    // `value` on purpose: "lifesteal, three times over" and "lifesteal +18" are
-    // the same number but only one of them tells the player what is about to
-    // happen, and a milestone that grants several applications is the whole
-    // point of the group it belongs to.
-    const int times = std::max(1, def.grants);
-    for (int k = 0; k < times; ++k) {
-      result = applyUpgrade(stats_, def.effect, def.value);
-      if (!result.valid) return false;
-    }
+  if (def.weapon.empty() && isWeaponWideEffect(def.effect)) {
+    // Valid on its own, even with an empty arsenal: the effect has no PlayerStats
+    // to move, it edits the weapons below. Handing it to applyUpgrade first would
+    // report "unknown effect" and silently drop the card -- which is how a card
+    // gets shipped that prints a promise and does nothing.
+    result.valid = true;
+  } else if (def.weapon.empty()) {
+    result = applyUpgrade(stats_, def.effect, def.value);
+    if (!result.valid) return false;
   } else {
     // Weapon-targeted upgrade (e.g. a weapon's personal Focus card).
     const int weaponSlot = findWeaponSlot(def.weapon);
     if (weaponSlot < 0) return false;
-    for (int k = 0; k < std::max(1, def.grants); ++k) {
-      applyWeaponEffect(weaponSlot, def.effect, def.value);
-    }
+    applyWeaponEffect(weaponSlot, def.effect, def.value);
     result.valid = true;
   }
   ++stacks_[static_cast<std::size_t>(upgradeIndex)];
 
   // Close the rest of the group. This is the exclusive half of the promise: the
   // card you took is now on the board, and its siblings can never be offered
-  // again this run, at a milestone or anywhere else. The card itself stays
-  // available if it stacks, so a group of one-stack cards is a one-time decision
-  // and a group with a stacking member can be leaned on.
+  // again this run, at a milestone or anywhere else. The card itself keeps its
+  // own max_stacks, so the group comes back at a later milestone with the
+  // siblings gone and the answer you already gave waiting to be taken again --
+  // which is what "this can drop several times and it stacks" has to mean once
+  // the siblings are locked out for good.
   if (!def.group.empty()) {
     for (std::size_t i = 0; i < content_.upgrades.size(); ++i) {
       if (i == static_cast<std::size_t>(upgradeIndex)) continue;
@@ -5867,6 +6002,17 @@ bool Game::applyUpgradeAt(int upgradeIndex) {
       } else if (weapons_[s].attackType == AttackType::Vortex) {
         syncVortices(s);
       }
+    }
+  }
+
+  // "Improve my weapons" is an ITEM, not a freebie. There is no hidden bump for
+  // levelling here: a weapon gets better because the player picked a card off the
+  // screen, the card has stacks, and every take lands once more. These four are
+  // the axes no player-stat card covers, because they are per-weapon geometry
+  // rather than a multiplier on the damage coming out of it.
+  if (isWeaponWideEffect(def.effect)) {
+    for (int s = 0; s < weaponCount_; ++s) {
+      applyWeaponWide(weapons_[s], def.effect, def.value);
     }
   }
 
@@ -5893,26 +6039,6 @@ void Game::reroll() {
   buildChoices();
 }
 
-void Game::syncWeaponLevels() {
-  const int want = weaponLevelFor(level_);
-  if (want <= weaponLevel_) return;
-  // Only the levels actually gained, so a growth card that doubles the per-level
-  // amount applies to future levels and not to every level already paid for.
-  for (int k = weaponLevel_; k < want; ++k) {
-    // k is the number of levels the weapon is ABOUT to have, so the first level
-    // it ever earns indexes 0 and takes the full amount. Each later one is worth
-    // less, which is what makes the total converge.
-    const float dmg = weaponLevelDamageGain(k) * stats_.weaponGrowth;
-    const float cd = weaponLevelCooldownGain(k) * stats_.weaponGrowth;
-    for (int s = 0; s < weaponCount_; ++s) {
-      ++weapons_[s].level;
-      weapons_[s].damage += dmg;
-      weapons_[s].cdBonus += cd;
-    }
-  }
-  weaponLevel_ = want;
-}
-
 float Game::testWeaponStat(int slot, std::string_view name) const {
   if (slot < 0 || slot >= weaponCount_) return -1.0F;
   const auto& w = weapons_[slot];
@@ -5924,11 +6050,6 @@ float Game::testWeaponStat(int slot, std::string_view name) const {
   return -1.0F;
 }
 
-int Game::testWeaponLevel(int slot) const {
-  if (slot < 0 || slot >= weaponCount_) return -1;
-  return weapons_[slot].level;
-}
-
 void Game::addWeapon(int defIndex) {
   // Two guards, deliberately: weaponCap() is the design cap and kMaxWeapons is
   // the array bound. Anything that could push weaponCount_ past the array is a
@@ -5938,7 +6059,6 @@ void Game::addWeapon(int defIndex) {
   const auto& def = content_.weapons[static_cast<std::size_t>(defIndex)];
   auto& w = weapons_[weaponCount_++];
   w.def = defIndex;
-  w.level = 0;
   w.attackType = def.attackType;
   w.cooldown = def.cooldown;
   w.timer = 0.0F;
@@ -6061,6 +6181,7 @@ void Game::addWeapon(int defIndex) {
   w.vortexOrbitSpeed = def.vortexOrbitSpeed;
   w.vortexTickRate = def.vortexTickRate;
   w.vortexCollapseAt = def.vortexCollapseAt;
+  w.vortexCrowd = def.vortexCrowd;
   w.vortexBurstDamage = def.vortexBurstDamage;
   w.vortexBurstRadius = def.vortexBurstRadius;
 
@@ -6112,23 +6233,6 @@ void Game::addWeapon(int defIndex) {
   // projectiles (see syncVortices).
   if (w.attackType == AttackType::Vortex && player_ != entt::null && registry_.valid(player_)) {
     syncVortices(weaponCount_ - 1);
-  }
-
-  // A weapon picked up at 6:00 is not a level-zero weapon. It joins at whatever
-  // level the rest of the arsenal is already at, paid for by the same geometric
-  // series syncWeaponLevels would have paid, so a late pickup is never strictly
-  // worse than an early one.
-  //
-  // LAST in the function on purpose. Every line above overwrites a field from the
-  // content default -- `w.damage = def.damage` and `w.cdBonus = 0` among them --
-  // so a catch-up added earlier in the body is silently wiped out and the weapon
-  // joins at level 2 with level-0 damage, which is the exact bug this was written
-  // to prevent.
-  const int catchUp = weaponLevel_;
-  if (catchUp > 0) {
-    w.level = catchUp;
-    w.damage += weaponLevelDamageTotal(catchUp) * stats_.weaponGrowth;
-    w.cdBonus += weaponLevelCooldownTotal(catchUp) * stats_.weaponGrowth;
   }
 }
 
@@ -6911,7 +7015,6 @@ void Game::testClearWeapons() {
   // The arsenal is gone, so the level the arsenal was at has to go with it.
   // Leaving it behind would make the next testAddWeapon start six levels ahead of
   // level 1.
-  weaponLevel_ = 0;
   starterChoicePending_ = false; // test sandbox: no opening pick
   // Collect first, destroy after: destroying an entity while an EnTT view over
   // that same component is being walked is undefined behaviour, and an entity
@@ -7491,6 +7594,13 @@ int Game::testSpawnChest(float x, float y, int tier, int grants) {
 int Game::testWeaponContentIndex(std::string_view id) const {
   for (std::size_t i = 0; i < content_.weapons.size(); ++i) {
     if (content_.weapons[i].id == id) return static_cast<int>(i);
+  }
+  return -1;
+}
+
+int Game::testUpgradeContentIndex(std::string_view id) const {
+  for (std::size_t i = 0; i < content_.upgrades.size(); ++i) {
+    if (content_.upgrades[i].id == id) return static_cast<int>(i);
   }
   return -1;
 }
@@ -8082,10 +8192,15 @@ std::vector<std::string> wrapToWidth(std::string_view str, float maxWidth, float
   return lines;
 }
 
-// The card body's hanging indent. Twice the card's 16px left padding, so a
-// wrapped continuation line sits visibly inboard of the first line instead of
-// blending into it.
-constexpr float kCardIndent = 32.0F;
+// The card body's left inset for EVERY line.
+//
+// This used to be a hanging indent: the first line started at the card's 16px
+// padding and every wrapped line was pushed 32px further in, on the theory that
+// a stepped block reads as a paragraph. Players read it as a bug -- the first
+// line looked right and everything under it looked like a different, slightly
+// wrong element that had been shoved sideways. So the block is flush now: one
+// left edge, one measure, one column of text you can scan down.
+constexpr float kCardIndent = 0.0F;
 
 // The card body is set at a FIXED scale, not derived from the card width.
 //
@@ -8102,22 +8217,31 @@ constexpr float kCardIndent = 32.0F;
 // The value is deliberately modest. Blowing the body text up to fill the card
 // was tried and it was the wrong instinct: bigger is not more readable once the
 // measure drops to a dozen characters per line, and it made the card a wall of
-// type. The wrapped lines are where the emphasis belongs, not the first.
+// type. The description is the card's body copy, and body copy is set at one
+// size, top to bottom.
 constexpr float kCardDescScale = 1.6F;
 
-// Horizontal padding and body line pitch of the card, and how much louder the
-// wrapped lines speak than the first one.
+// Horizontal padding and body line pitch of the card.
+//
+// The pitch is 21px for a 7-row glyph box drawn at 1.6, which is 11.2px tall:
+// about 10px of air between lines. The old pitch was 15px for the first line and
+// 21.75px for the wrapped ones, and that combination is why a wrapped
+// description looked cramped even though its line advance was larger than the
+// first's -- the wrapped lines were also 18% BIGGER, so the extra advance was
+// spent on taller glyphs rather than on space between them. One size and one
+// roomy pitch fixes both halves at once.
 constexpr float kCardPadX = 16.0F;
-constexpr float kCardLineH = 15.0F;
-constexpr float kCardContScaleMul = 1.18F;
-constexpr float kCardContLineMul = 1.45F;
+constexpr float kCardLineH = 21.0F;
+// Every line is the first line: same size, same advance. Kept as multipliers
+// rather than folded away so the layout struct still describes the shape of a
+// block, and so the wrap has a single scale to measure against.
+constexpr float kCardContScaleMul = 1.0F;
+constexpr float kCardContLineMul = 1.0F;
 
 CardTextLayout cardTextLayout(float cardW) {
   CardTextLayout lay;
   lay.width = cardW - kCardPadX * 2.0F;
   lay.scale = kCardDescScale;
-  // Wrapped lines are set LARGER than the first, not smaller, and are pushed
-  // down a little further than the normal pitch: same indent, more ink.
   lay.contScale = lay.scale * kCardContScaleMul;
   lay.lineH = kCardLineH;
   lay.contLineH = kCardLineH * kCardContLineMul;
@@ -8418,11 +8542,7 @@ void Game::renderPlayerStats(core::render::Batcher& b, float px, float py) {
   for (int i = 0; i < weaponCount_; ++i) {
     const auto& w = weapons_[i];
     const auto& def = content_.weapons[static_cast<std::size_t>(w.def)];
-    // The weapon's own level, so the per-level growth is visible in the sheet
-    // instead of being an invisible constant folded into D. It is also the only
-    // way a player can tell that a late pickup caught up with the rest.
-    const std::string lvl = w.level > 0 ? " LV" + std::to_string(w.level) : "";
-    rows.push_back(def.name + lvl + " [" + attackTypeName(w.attackType) + "] D" +
+    rows.push_back(def.name + " [" + attackTypeName(w.attackType) + "] D" +
                    std::to_string(static_cast<int>(w.damage)) + " N" +
                    std::to_string(w.projectiles) + " CD" + fit1(w.cooldown) + "S");
   }
@@ -9060,6 +9180,7 @@ Game::WeaponSnapshot Game::testWeaponSnapshot(int slotIndex) const {
   s.vortexOrbitSpeed = w.vortexOrbitSpeed;
   s.vortexTickRate = w.vortexTickRate;
   s.vortexCollapseAt = w.vortexCollapseAt;
+  s.vortexCrowd = w.vortexCrowd;
   s.vortexBurstDamage = w.vortexBurstDamage;
   s.vortexBurstRadius = w.vortexBurstRadius;
   s.prismRange = w.prismRange;

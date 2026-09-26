@@ -2329,7 +2329,7 @@ TEST_CASE("Outline unlocks persist across runs (they are not run-local)") {
 
 // --- Round 10: lifesteal nerf, arsenal slots, new supers, sandbox ----------
 
-TEST_CASE("Vampirism is reachable, the milestone grants it repeatedly, the trigger is a kill") {
+TEST_CASE("Vampirism is reachable, the milestone stacks it, the trigger is a kill") {
   const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
   const auto find = [&content](const char* id) -> const game::UpgradeDef* {
     for (const auto& u : content.upgrades) {
@@ -2355,23 +2355,24 @@ TEST_CASE("Vampirism is reachable, the milestone grants it repeatedly, the trigg
   // everywhere -- it is a build you commit to.
   REQUIRE(gold->value == Catch::Approx(4.0F));
   REQUIRE(soul->value == Catch::Approx(6.0F));
-  // The milestone one is "several times over", which is a different promise from
-  // a big number and is the reason `grants` exists at all.
+  // The milestone one is a SMALL number with STACKS, which is the promise the
+  // player can actually plan around: three separate takes, each one visible on a
+  // milestone screen, rather than one take that silently applies three times.
   REQUIRE(crimson->value == Catch::Approx(9.0F));
-  REQUIRE(crimson->grants == 3);
+  REQUIRE(crimson->maxStacks >= 2);
   REQUIRE(crown->value == Catch::Approx(40.0F));
-  REQUIRE(crown->grants == 2);
+  REQUIRE(crown->maxStacks >= 2);
   // And the strongest single number in the game for lifesteal is a MILESTONE, so
   // vampirism has somewhere to go and the run has to be pointed at it.
   float best = 0.0F;
   for (const auto& u : content.upgrades) {
     if (u.effect != "lifesteal_add") continue;
     CAPTURE(u.id);
-    best = std::max(best, u.value * static_cast<float>(u.grants));
+    best = std::max(best, u.value);
   }
-  REQUIRE(best >= 80.0F);
-  // A milestone card that grants several applications must be the top of that
-  // list and must be exclusive with the two other survival answers.
+  REQUIRE(best >= 40.0F);
+  // A milestone lifesteal card must be exclusive with the two other survival
+  // answers, and the run has to be able to lean on it more than once.
   REQUIRE((crown->group == "survivor" || crimson->group == "survivor"));
   int survivor = 0;
   for (const auto& u : content.upgrades) {
@@ -2935,19 +2936,39 @@ TEST_CASE("Void Gyre drag and shove both shrink against enemy resistance") {
   REQUIRE(gyre >= 0);
 
   // Identical runs, only the target's knockback resistance differs.
+  //
+  // Two details make this a measurement of the pull rather than of the clock.
+  // The target starts OUTSIDE the core (2.4): inside it the body is already being
+  // ground and how far the drag carried it says nothing about how strong the drag
+  // is. And the result is the MEAN distance to the player over the last second,
+  // not the distance on the final frame -- the wells orbit, so a single-frame
+  // reading is a snapshot of where a well happened to be, and a badly-timed one
+  // fails or passes for reasons that have nothing to do with resistance.
   const auto dragged = [&content, gyre](float res) {
     game::Game g{content, 58};
     g.testDisableWaves();
     g.testClearWeapons();
     g.testAddWeapon(gyre);
-    g.testSpawnEnemyAt(2.2F, 0.0F); // stationary target, no self-movement
+    g.testSpawnEnemyAt(2.9F, 0.0F); // stationary target, no self-movement
     g.testSetFirstEnemyKnockbackRes(res);
     game::FrameInput in{};
     for (int i = 0; i < 120; ++i) g.advance(1.0F / 60.0F, in);
-    return g.testFirstEnemyDistToVortex();
+    float sum = 0.0F;
+    int samples = 0;
+    for (int i = 0; i < 60; ++i) {
+      g.advance(1.0F / 60.0F, in);
+      const float d = g.testFirstEnemyDistToPlayer();
+      if (d >= 0.0F) {
+        sum += d;
+        ++samples;
+      }
+    }
+    return samples > 0 ? sum / static_cast<float>(samples) : -1.0F;
   };
   const float soft = dragged(0.0F);
   const float tough = dragged(1.0F);
+  CAPTURE(soft);
+  CAPTURE(tough);
   REQUIRE(soft > 0.0F);
   REQUIRE(tough > 0.0F);
   // A fully resistant enemy is dragged in far less: the aura can no longer
@@ -3978,7 +3999,7 @@ TEST_CASE("No card points at an effect the game does not implement") {
   for (const auto& def : content.upgrades) {
     CAPTURE(def.id);
     CAPTURE(def.effect);
-    if (def.weapon.empty()) {
+    if (def.weapon.empty() && !game::Game::isWeaponWideEffect(def.effect)) {
       game::PlayerStats s{};
       const auto r = game::applyUpgrade(s, def.effect, def.value);
       REQUIRE(r.valid);
@@ -4338,9 +4359,9 @@ TEST_CASE("Every card description fits the card, and no card text is silently lo
   REQUIRE_FALSE(content.weapons.empty());
 
   // Card body geometry. These come from game::cardTextLayout rather than being
-  // mirrored here, because the card sets its wrapped lines LARGER than the
-  // first -- a copy of the constants would quietly test the wrong layout the
-  // next time the style moved.
+  // mirrored here, because the card sets every line at one size and one pitch --
+  // a copy of the constants would quietly test the wrong layout the next time the
+  // style moved.
   constexpr float kCardMinW = 200.0F;
   constexpr float kCardMaxW = 400.0F;
   constexpr float kGap = 24.0F;
@@ -4384,12 +4405,19 @@ TEST_CASE("Every card description fits the card, and no card text is silently lo
     // The row itself must fit the screen, or the last card is off the edge.
     REQUIRE(static_cast<float>(n) * cardW + static_cast<float>(n - 1) * kGap <=
             game::Game::kRefScreenWidth);
-    // The body scale is derived, not fixed, so the measure stays readable in
-    // every row, and the wrapped lines are set larger than the first.
+    // The body is ONE column: every line the same size, flush to the same left
+    // edge, on a pitch with real air in it. This is a style, not a preference --
+    // the card used to set its wrapped lines 18% larger and indent them 32px
+    // inboard, which players read as a rendering fault, so the asymmetry is
+    // pinned here so it cannot creep back in.
     const auto lay = game::cardTextLayout(cardW);
     REQUIRE(lay.scale >= 1.3F);
-    REQUIRE(lay.contScale > lay.scale);
-    REQUIRE(lay.contLineH > lay.lineH);
+    REQUIRE(lay.contScale == lay.scale);
+    REQUIRE(lay.contLineH == lay.lineH);
+    REQUIRE(lay.indent == 0.0F);
+    // Room between lines, or the paragraph reads as a wall. A 7-row glyph at 1.6
+    // is 11.2px tall, so the pitch has to clear it with a visible gap.
+    REQUIRE(lay.lineH >= 7.0F * lay.scale + 6.0F);
     // The renderer must not truncate below the fitted height, or a long
     // description silently loses its last clause. capLines is monotone, so
     // checking the ceiling holds every smaller case too.
@@ -4400,9 +4428,7 @@ TEST_CASE("Every card description fits the card, and no card text is silently lo
       CAPTURE(u.id);
       const auto lines = game::wrapToWidth(u.desc, lay.width, lay.scale, lay.indent,
                                            lay.contScale);
-      // ...and no line is wider than its own budget. The continuation lines are
-      // bigger AND indented, so their budget is the tightest of the three and
-      // is the one that overflows if the wrap is measured at the wrong size.
+      // ...and no line is wider than its own budget.
       const auto firstMax = static_cast<std::size_t>(lay.width / (6.0F * lay.scale));
       REQUIRE(lines[0].size() <= firstMax);
       for (std::size_t i = 1; i < lines.size(); ++i) {
@@ -4744,6 +4770,7 @@ TEST_CASE("No evolution is a numbers-only copy of one of its parents") {
     if (w.novaEcho > 0.0F) return {true, "fires a second, delayed ring"};
     if (w.haloInner > 0.0F) return {true, "leaves a hole at its centre"};
     if (w.vortexCollapseAt > 0.0F) return {true, "collapses and reopens"};
+    if (w.vortexCrowd > 0.0F) return {true, "damages per body it holds"};
     if (w.sweepHook) return {true, "drags its catch in"};
     if (w.orbitWindow) return {true, "has a gap in the ring"};
     if (w.auraRadius > 0.0F) return {true, "carries a chilling aura"};
@@ -6499,7 +6526,13 @@ TEST_CASE("A milestone lays out a whole exclusive group, and taking one closes t
     ++milestoneCards;
     CAPTURE(u.id);
     REQUIRE_FALSE(u.group.empty());
-    REQUIRE(u.maxStacks == 1); // one decision, not a grind
+    // The card you take STACKS. That is the other half of the ask: the siblings
+    // are locked for the run, so if the chosen card were one-stack the group
+    // would be a one-time fork and "vampirism several times over" would have to
+    // mean one card quietly applying three times -- a number the player never
+    // sees. A group whose members cannot all be taken twice is not a group the
+    // player gets to lean on.
+    REQUIRE(u.maxStacks >= 2);
     if (std::find(groups.begin(), groups.end(), u.group) == groups.end()) {
       groups.push_back(u.group);
     }
@@ -6567,23 +6600,36 @@ TEST_CASE("A milestone screen shows every card of the group it drew, and the res
     REQUIRE(g.milestoneOffer());
     for (const auto& c : offer) REQUIRE(c.kind == game::Choice::Kind::Upgrade);
 
-    // Take the first one. Every sibling is now closed off, and it can never be
-    // offered again -- checked by advancing to the NEXT milestone and confirming
-    // that no card from this group is on the screen.
+    // Take the first one. Every sibling is now closed off for the run. The card
+    // that was taken is allowed back -- it is the one that stacks, and a leftover
+    // slot at the next milestone is where the answer compounds -- but nothing
+    // else from the group may ever appear again.
     const int taken = offer.front().index;
+    const std::string takenId = content.upgrades[static_cast<std::size_t>(taken)].id;
     REQUIRE(g.testGrantUpgrade(taken));
-    for (int nxt : {level * 2, level * 2 + 0}) {
-      if (nxt == level) continue;
-      g.testSetLevel(nxt);
-      for (const auto& c : g.upgradeChoices()) {
-        CAPTURE(nxt);
-        CAPTURE(c.index);
-        // -1 is the "skip / nothing left" card, which has no group at all.
-        if (c.index < 0) continue;
-        const auto& u = content.upgrades[static_cast<std::size_t>(c.index)];
-        REQUIRE(u.group != gname);
+    for (const auto& u : content.upgrades) {
+      if (u.group != gname || u.id == takenId) continue;
+      CAPTURE(u.id);
+      REQUIRE(g.testUpgradeBlocked(g.testUpgradeContentIndex(u.id)));
+    }
+    // Advancing to the next milestone must never show a sibling.
+    const int nxt = level * 2;
+    g.testSetLevel(nxt);
+    int seen = 0;
+    for (const auto& c : g.upgradeChoices()) {
+      // -1 is the "skip / nothing left" card, which has no group at all.
+      if (c.index < 0) continue;
+      const auto& u = content.upgrades[static_cast<std::size_t>(c.index)];
+      CAPTURE(nxt);
+      CAPTURE(u.id);
+      if (u.group == gname) {
+        // Only ever the card the run already committed to, and only once.
+        REQUIRE(u.id == takenId);
+        ++seen;
       }
     }
+    CAPTURE(seen);
+    REQUIRE(seen <= 1);
   }
 }
 
@@ -6593,41 +6639,80 @@ TEST_CASE("A group is only closed by taking one of its cards, not by passing the
   // of its upgrade space because it skipped a level-up to read the screen.
   const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
 
+  // Reading the level-4 screen must not lock anything by itself. The same level,
+  // offered twice in a row, has to show the same question both times.
+  const auto drawSurvivor = [&content]() {
+    game::Game g{content, 99};
+    g.testClearWeapons();
+    g.testSetLevel(4);
+    std::vector<int> out;
+    for (const auto& c : g.upgradeChoices()) {
+      if (c.index < 0) continue;
+      if (content.upgrades[static_cast<std::size_t>(c.index)].group == "survivor") {
+        out.push_back(c.index);
+      }
+    }
+    return out;
+  };
+  REQUIRE(drawSurvivor().size() == 3);
+  REQUIRE(drawSurvivor().size() == 3);
+  // A brand new run has none of it locked either.
+  game::Game fresh{content, 99};
+  fresh.testSetLevel(4);
+  for (const auto& c : fresh.upgradeChoices()) {
+    if (c.index < 0) continue;
+    REQUIRE_FALSE(fresh.testUpgradeBlocked(c.index));
+  }
+
+  // Now actually take one. The two siblings are gone for good, and the card that
+  // was taken comes BACK -- alone in the group, with its stacks showing -- at the
+  // next milestone. That is the whole shape: one question, one answer, and then
+  // the answer compounds.
   game::Game g{content, 99};
   g.testClearWeapons();
   g.testSetLevel(4);
-  const auto first = g.upgradeChoices();
-  REQUIRE(first.size() == 3);
-  // Skip without taking anything.
-  g.testClearWeapons();
-  g.testSetLevel(4);
-  REQUIRE(g.upgradeChoices().size() == 3);
-  for (const auto& c : g.upgradeChoices()) REQUIRE(c.index >= 0);
-
-  // Now actually take one and confirm the same three are NOT on offer again.
-  const int idx = g.upgradeChoices().front().index;
-  REQUIRE(g.testGrantUpgrade(idx));
-  g.testSetLevel(4);
-  // Level 4 is a one-shot level, so buildChoices will fall back to a normal
-  // level-up; what matters is that none of the group is in it.
-  int survivors = 0;
-  for (const auto& u : content.upgrades) {
-    if (u.group == "survivor") ++survivors;
+  int taken = -1;
+  for (const auto& c : g.upgradeChoices()) {
+    if (c.index < 0) continue;
+    if (content.upgrades[static_cast<std::size_t>(c.index)].group == "survivor") {
+      taken = c.index;
+      break;
+    }
   }
-  REQUIRE(survivors == 3);
+  REQUIRE(taken >= 0);
+  const std::string takenId = content.upgrades[static_cast<std::size_t>(taken)].id;
+  REQUIRE(g.testGrantUpgrade(taken));
+  for (const auto& u : content.upgrades) {
+    if (u.group != "survivor" || u.id == takenId) continue;
+    CAPTURE(u.id);
+    REQUIRE(g.testUpgradeBlocked(g.testUpgradeContentIndex(u.id)));
+  }
+
+  // L8 is a fresh question, and the leftover slot carries the L4 answer forward.
+  g.testSetLevel(8);
+  int freshGroup = 0;
+  int carried = 0;
   for (const auto& c : g.upgradeChoices()) {
     if (c.index < 0) continue;
     const auto& u = content.upgrades[static_cast<std::size_t>(c.index)];
     CAPTURE(u.id);
-    REQUIRE(u.group != "survivor");
+    if (u.group == "execution") ++freshGroup;
+    if (u.id == takenId) ++carried;
+    // Nothing from a closed group except the card that was taken.
+    if (u.group == "survivor") REQUIRE(u.id == takenId);
   }
+  CAPTURE(freshGroup);
+  CAPTURE(carried);
+  REQUIRE(freshGroup == 3);
+  REQUIRE(carried == 1);
 }
 
-TEST_CASE("A card that grants several applications lands them all") {
+TEST_CASE("A milestone card that improves vampirism several times really can") {
   // "An item that improves vampirism several times" is a promise about HOW MANY
-  // TIMES, not a bigger number, which is why `grants` is its own field: the
-  // player can see the count before committing. Tested through the real effect so
-  // a card that lies about its count cannot ship.
+  // TIMES the card can drop, not a bigger number on a card that lands once. So
+  // the card has stacks, every take applies the effect once, and the effect stops
+  // being offered when the stacks run out -- all three of which is the difference
+  // between "several times over" as a mechanic and as a description.
   const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
   int idx = -1;
   for (std::size_t i = 0; i < content.upgrades.size(); ++i) {
@@ -6636,14 +6721,37 @@ TEST_CASE("A card that grants several applications lands them all") {
   REQUIRE(idx >= 0);
   const auto& def = content.upgrades[static_cast<std::size_t>(idx)];
   REQUIRE(def.effect == "lifesteal_add");
-  REQUIRE(def.grants == 3);
+  REQUIRE(def.maxStacks >= 2);
 
   game::Game g{content, 7};
   g.testClearWeapons();
   const float before = g.stats().lifesteal;
+  // One take is ONE application. A card that quietly applied three would make the
+  // STACKS line on the card a lie.
   REQUIRE(g.testGrantUpgrade(idx));
-  // Three applications of value, not one, and not three times value either.
-  REQUIRE(g.stats().lifesteal == Catch::Approx(before + def.value * 3.0F));
+  REQUIRE(g.stats().lifesteal == Catch::Approx(before + def.value));
+
+  // It can be taken again, and again, up to maxStacks -- and the group siblings
+  // stay locked out the whole time, which is the other half of the promise.
+  for (int take = 1; take < def.maxStacks; ++take) {
+    REQUIRE(g.upgradeStacks(static_cast<std::size_t>(idx)) == take);
+    REQUIRE(g.testGrantUpgrade(idx));
+    REQUIRE(g.stats().lifesteal == Catch::Approx(before + def.value * (take + 1)));
+    // The other two survival answers are still closed.
+    for (const char* sib : {"m4_renewal", "m4_aegis"}) {
+      int s = -1;
+      for (std::size_t i = 0; i < content.upgrades.size(); ++i) {
+        if (content.upgrades[i].id == sib) s = static_cast<int>(i);
+      }
+      REQUIRE(s >= 0);
+      REQUIRE(g.testUpgradeBlocked(s));
+    }
+  }
+  // Maxed. A further take is refused, and the total is exactly the stacks.
+  REQUIRE(g.upgradeStacks(static_cast<std::size_t>(idx)) == def.maxStacks);
+  REQUIRE_FALSE(g.testGrantUpgrade(idx));
+  REQUIRE(g.stats().lifesteal ==
+          Catch::Approx(before + def.value * static_cast<float>(def.maxStacks)));
 }
 
 TEST_CASE("The four on-hit marks are exclusive, real, and none of them is free") {
@@ -6902,107 +7010,177 @@ TEST_CASE("The screen never holds more than two elites at a time") {
   REQUIRE(g.testLiveTierCount() <= 2);
 }
 
-TEST_CASE("Weapons level with the player, and a late pickup joins at the arsenal's level") {
-  // "Stacks for weapons, so they are just a bit better at levels." Two promises:
-  // they improve without the player spending anything, and picking a weapon up
-  // late is not strictly worse than picking it up early. The second is the one
-  // that quietly stops being true in every game like this.
+TEST_CASE("Improving your weapons is an item, and it stacks") {
+  // "Weapon improvement" is a card you pick off the level-up screen like any
+  // other item -- there is no hidden bump for levelling, because a free stat axis
+  // nobody chose is a stat axis that competes with every card they DID choose.
+  // So the promise is three things: the card exists as an ordinary item, every
+  // take lands once, and a late weapon improves exactly like an early one.
   const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
-  REQUIRE(game::Game::kWeaponLevelEvery == 4);
+  const auto* stone = content.upgrade("u_whetstone");
+  REQUIRE(stone != nullptr);
+  REQUIRE(stone->kind == "normal");
+  REQUIRE(stone->group.empty());
+  REQUIRE(stone->maxStacks >= 3);
 
-  game::Game g{content, 17};
+  game::Game g{content, 31};
   g.testClearWeapons();
-  const int wand = g.testWeaponContentIndex("wand");
-  g.testAddWeapon(wand);
+  g.testAddWeapon(g.testWeaponContentIndex("wand"));
   const float baseDamage = g.testWeaponStat(0, "damage");
-  REQUIRE(g.testWeaponLevel(0) == 0);
-  REQUIRE(g.testWeaponLevel() == 0);
 
-  g.testSetLevel(8);
-  REQUIRE(g.testWeaponLevel() == 2);
-  REQUIRE(g.testWeaponLevel(0) == 2);
-  // Two levels, each worth its own geometric step -- asserted against the shared
-  // formula rather than a hard-coded sum, so a retune of the decay cannot leave a
-  // stale expectation quietly passing or failing for the wrong reason.
-  REQUIRE(g.testWeaponStat(0, "damage") ==
-          Catch::Approx(baseDamage + game::Game::weaponLevelDamageTotal(2)));
-  // And the second level is worth strictly less than the first, which is the
-  // property the whole system rests on.
-  REQUIRE(game::Game::weaponLevelDamageGain(1) <
-          game::Game::weaponLevelDamageGain(0));
-
-  // A weapon picked up now is at the same level as the one already here, and it
-  // has the same LEVEL bonus on top of its own (different) base damage.
-  const int dagger = g.testWeaponContentIndex("dagger");
-  game::Game early{content, 17};
-  early.testAddWeapon(dagger);
-  const float daggerBase = early.testWeaponStat(0, "damage");
-  g.testAddWeapon(dagger);
-  REQUIRE(g.testWeaponLevel(1) == 2);
-  REQUIRE(g.testWeaponStat(1, "damage") ==
-          Catch::Approx(daggerBase + game::Game::weaponLevelDamageTotal(2)));
-}
-
-TEST_CASE("A weapon level is worth what the growth card says, and only from then on") {
-  // A growth card that retroactively rewrote levels already paid out would make
-  // the same run worth different amounts depending on when the card turned up,
-  // which is the kind of thing that only shows up as a balance complaint weeks
-  // later. So the growth applies forward only, and the high-water mark is what
-  // makes that true.
-  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
-  int idx = -1;
-  for (std::size_t i = 0; i < content.upgrades.size(); ++i) {
-    if (content.upgrades[i].id == "u_whetstone") idx = static_cast<int>(i);
-  }
-  REQUIRE(idx >= 0);
-  REQUIRE(content.upgrades[static_cast<std::size_t>(idx)].effect == "weapon_growth");
-
-  game::Game g{content, 21};
-  g.testClearWeapons();
-  g.testAddWeapon(g.testWeaponContentIndex("wand"));
-  g.testSetLevel(4);
+  // One take, one application. The card's number is the number on the card.
+  REQUIRE(g.testGrantUpgrade(g.testUpgradeContentIndex("u_whetstone")));
   const float afterOne = g.testWeaponStat(0, "damage");
-  REQUIRE(g.testWeaponLevel(0) == 1);
+  REQUIRE(afterOne == Catch::Approx(baseDamage * (1.0F + stone->value)));
 
-  REQUIRE(g.testGrantUpgrade(idx));
-  REQUIRE(g.stats().weaponGrowth == Catch::Approx(2.0F));
-  // The level already paid for is untouched.
-  REQUIRE(g.testWeaponStat(0, "damage") == Catch::Approx(afterOne));
-  // The next one is worth double.
-  g.testSetLevel(8);
-  REQUIRE(g.testWeaponLevel(0) == 2);
-  // The first level was already paid at the old rate, the second at the new one,
-  // so the difference is exactly one doubled step.
-  REQUIRE(g.testWeaponStat(0, "damage") ==
-          Catch::Approx(afterOne + 2.0F * game::Game::weaponLevelDamageGain(1)));
+  // It stacks, multiplicatively, and every take is visible on the weapon.
+  REQUIRE(g.testGrantUpgrade(g.testUpgradeContentIndex("u_whetstone")));
+  const float afterTwo = g.testWeaponStat(0, "damage");
+  REQUIRE(afterTwo == Catch::Approx(baseDamage * (1.0F + stone->value) * (1.0F + stone->value)));
+  REQUIRE(afterTwo > afterOne);
+
+  // A weapon picked up at 6:00 is worth exactly what the same weapon was worth
+  // at 0:30, and it improves on the SAME terms. That is the promise that quietly
+  // stops being true in every game like this.
+  const int dagger = g.testWeaponContentIndex("dagger");
+  const float daggerFresh = [&] {
+    game::Game fresh{content, 31};
+    fresh.testClearWeapons();
+    fresh.testAddWeapon(dagger);
+    return fresh.testWeaponStat(0, "damage");
+  }();
+  g.testAddWeapon(dagger);
+  REQUIRE(g.testWeaponStat(1, "damage") == Catch::Approx(daggerFresh));
+  REQUIRE(g.testGrantUpgrade(g.testUpgradeContentIndex("u_whetstone")));
+  REQUIRE(g.testWeaponStat(1, "damage") == Catch::Approx(daggerFresh * (1.0F + stone->value)));
+  // ...and both weapons moved together on the very next take.
+  const float wandBefore = g.testWeaponStat(0, "damage");
+  REQUIRE(g.testGrantUpgrade(g.testUpgradeContentIndex("u_whetstone")));
+  REQUIRE(g.testWeaponStat(0, "damage") > wandBefore);
+  REQUIRE(g.testWeaponStat(1, "damage") == Catch::Approx(daggerFresh * (1.0F + stone->value) * (1.0F + stone->value)));
 }
 
-TEST_CASE("Weapon levels never run away on a long run") {
-  // The free bump is a rounding error against a build, which is the only reason
-  // it is safe to have. This pins that: at the level a very long run reaches, it
-  // is still smaller than a single ordinary card.
+TEST_CASE("Levelling changes a weapon on its own") {
+  // The negative half of the same promise, pinned because a regression here is
+  // invisible: the game still plays, the weapons still fire, and the player just
+  // quietly gets stronger for reasons that are not on any card. So a level-up
+  // must not touch a single weapon number.
   const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
-  int damageCard = -1;
-  for (std::size_t i = 0; i < content.upgrades.size(); ++i) {
-    if (content.upgrades[i].id == "w_wand_power") damageCard = static_cast<int>(i);
-  }
-  REQUIRE(damageCard >= 0);
-  const auto& card = content.upgrades[static_cast<std::size_t>(damageCard)];
-
-  game::Game g{content, 23};
+  game::Game g{content, 33};
   g.testClearWeapons();
   g.testAddWeapon(g.testWeaponContentIndex("wand"));
-  g.testSetLevel(256);
-  const int levels = g.testWeaponLevel(0);
-  CAPTURE(levels);
-  REQUIRE(levels == 256 / game::Game::kWeaponLevelEvery);
-  const float fromLevels = game::Game::weaponLevelDamageTotal(levels);
-  CAPTURE(fromLevels);
-  // One fully-stacked ordinary weapon card, and the free bump is still smaller --
-  // and it stays smaller no matter how far past that the run goes, which is the
-  // part the decay buys.
-  REQUIRE(fromLevels < card.value * static_cast<float>(card.maxStacks));
-  g.testSetLevel(1024);
-  REQUIRE(game::Game::weaponLevelDamageTotal(g.testWeaponLevel(0)) < fromLevels +
-                                                          card.value * 0.5F);
+  const float damage = g.testWeaponStat(0, "damage");
+  const float cooldown = g.testWeaponStat(0, "cdBonus");
+  const float projectiles = g.testWeaponStat(0, "projectiles");
+  g.testSetLevel(200);
+  REQUIRE(g.testWeaponStat(0, "damage") == Catch::Approx(damage));
+  REQUIRE(g.testWeaponStat(0, "cdBonus") == Catch::Approx(cooldown));
+  REQUIRE(g.testWeaponStat(0, "projectiles") == Catch::Approx(projectiles));
+}
+
+TEST_CASE("Every weapon-wide item moves the weapon's own numbers, not the player's") {
+  // The four weapon-wide items cover the axes no player-stat card covers, because
+  // they are the weapon's geometry rather than a multiplier on what comes out of
+  // it. Each one has to actually move something on a weapon, or it is a card that
+  // prints a promise and does nothing.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  const auto* wand = content.weapon("wand");
+  REQUIRE(wand != nullptr);
+  for (const char* id : {"u_whetstone", "u_oiled_gear", "u_long_barrel", "u_heavy_stock"}) {
+    const auto* card = content.upgrade(id);
+    CAPTURE(id);
+    REQUIRE(card != nullptr);
+    REQUIRE(card->kind == "normal");
+    REQUIRE(card->maxStacks >= 3);
+  }
+  // The reach item is the only one that must widen something every weapon has,
+  // and it is a percentage of the weapon's OWN reach, so the content number is
+  // what a card stacks on top of.
+  const auto* barrel = content.upgrade("u_long_barrel");
+  REQUIRE(barrel->value > 0.0F);
+  REQUIRE(wand->projLife > 0.0F);
+}
+
+TEST_CASE("The two vortex weapons are a snare and a charge, not one weapon twice") {
+  // "The super-evolutions are too similar conceptually; the player barely feels a
+  // difference." Two of the three were literally the same well with a bigger
+  // number on it: permanent drag, and drag that stopped for three seconds first.
+  // The difference between those is a timer, and a timer is not a concept. So one
+  // of them was rebuilt around a DIFFERENT question -- not "how hard does the well
+  // hit" but "how many bodies is the well holding" -- and the two now want
+  // opposite positions on the screen.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  const auto* gyre = content.weapon("vortex");
+  const auto* horizon = content.weapon("eventhorizon");
+  REQUIRE(gyre != nullptr);
+  REQUIRE(horizon != nullptr);
+
+  // One rule each, never both, and never neither.
+  REQUIRE(gyre->vortexCrowd > 0.0F);
+  REQUIRE(horizon->vortexCrowd == 0.0F);
+  REQUIRE(gyre->vortexCollapseAt == 0.0F);
+  REQUIRE(horizon->vortexCollapseAt > 0.0F);
+
+  // And the snare's answer to a single enemy has to be feeble, or the crowd bonus
+  // would never be the reason to take it and it would just be a stronger charge.
+  // A crowd of six is worth 3x the tick; that is the whole payoff.
+  const float sixBody = 1.0F + gyre->vortexCrowd * 5.0F;
+  CAPTURE(sixBody);
+  REQUIRE(sixBody >= 2.5F);
+
+  // The charge, meanwhile, must be worth holding on its own, because it is paid
+  // by the clock and has no reason to wait for a crowd.
+  REQUIRE(horizon->damage > gyre->damage);
+  // And the snare has to be the one that can actually HOLD a crowd, so its grip
+  // and reach are the better of the two.
+  REQUIRE(gyre->vortexReach > horizon->vortexReach);
+  REQUIRE(gyre->vortexPull > horizon->vortexPull);
+}
+
+TEST_CASE("The Void Gyre's damage is a function of what it is holding") {
+  // Tested as a ratio rather than a number, so the assertion is about the RULE
+  // and survives a retune. One body in the core versus six.
+  //
+  // The bodies are spawned as a tight knot and the window is four seconds, not a
+  // handful of frames. The wells ORBIT at 2.8 units and reach 3.4, so a body has
+  // to be dragged in by the pull before it is inside a 1.4 core at all, and the
+  // well that is doing the dragging is itself moving. A short window with the
+  // bodies spread on a wide ring measures how long the test happened to be
+  // looking at, not what the weapon does.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 71};
+  g.testDisableWaves();
+  g.testClearWeapons();
+  const int gyre = g.testWeaponContentIndex("vortex");
+  REQUIRE(gyre >= 0);
+  g.testAddWeapon(gyre);
+  const float crowd = content.weapon("vortex")->vortexCrowd;
+  REQUIRE(crowd > 0.0F);
+
+  // One body held: the well has to scratch, not kill.
+  g.testSpawnEnemyAt(0.2F, 0.0F);
+  g.testAdvance(4.0F);
+  const float solo = 100000.0F - g.testFirstEnemyHp();
+  CAPTURE(solo);
+  REQUIRE(solo > 0.0F);
+
+  // Six bodies held: a different run, same well, same everything else. The knot
+  // is tight enough that all six sit in whichever core catches them, which is
+  // the state the weapon is FOR -- spread them and three wells each hold two,
+  // which is a different (and much smaller) number on purpose.
+  game::Game h{content, 71};
+  h.testDisableWaves();
+  h.testClearWeapons();
+  h.testAddWeapon(gyre);
+  for (int k = 0; k < 6; ++k) {
+    const float a = 6.28318F * static_cast<float>(k) / 6.0F;
+    h.testSpawnEnemyAt(std::cos(a) * 0.2F, std::sin(a) * 0.2F);
+  }
+  h.testAdvance(4.0F);
+  const float packed = 100000.0F - h.testFirstEnemyHp();
+  CAPTURE(packed);
+  // Strictly better per body, and by more than the crowd falloff the well applies
+  // on its own would explain -- which is the only way to know the bonus is being
+  // applied and not just that six targets shared a tick.
+  REQUIRE(packed > solo * 2.0F);
 }

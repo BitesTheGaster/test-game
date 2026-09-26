@@ -243,7 +243,16 @@ struct WeaponDef {
   // character -- a permanent, patient drag you can build a position around. A
   // weapon with a collapse is a different thing: it hoards, gathers, and pays out
   // in one violent moment, so its damage is lumpy and its threat is a clock.
+  // The other half of how the two vortex weapons are told apart. A well with a
+  // collapse clock pays a flat tick and then a lump; a well with a crowd bonus
+  // pays almost nothing to one body and everything to a knot of them. They are
+  // the same shape on purpose -- orbiting wells -- and they are NOT the same
+  // weapon, because one is a snare that grinds a crowd and the other is a charge
+  // that bursts.
   float vortexCollapseAt = 0.0F;
+  // Extra damage per EXTRA enemy the well is holding, on top of the first. Zero
+  // means a flat tick, which is what the Event Horizon is.
+  float vortexCrowd = 0.0F;
   float vortexBurstDamage = 0.0F;  // the collapse hit (0 = use a multiple of damage)
   float vortexBurstRadius = 0.0F; // 0 = use the core radius
 
@@ -313,12 +322,12 @@ struct UpgradeDef {
   // stands alone. Every card in a non-empty group is offered TOGETHER and taking
   // any one of them locks the rest out for the rest of the run, so a group is a
   // promise: "you may have this axis, or that one, and the run remembers."
+  //
+  // The card you took stays in the group. It keeps its max_stacks, so the same
+  // group can ask the same question at a later milestone and the answer can land
+  // again. "You may have this axis, or that one" and "and then keep leaning on
+  // it" are both true at once, and neither one costs the other.
   std::string group;
-  // How many times the effect is applied when the card is taken. A card that
-  // grants 3 reads as "lifesteal, three times over" -- which is a different kind
-  // of promise from one card with a large number on it, because the player can
-  // see how many times it lands.
-  int grants = 1;
 };
 
 // One screen of the in-game manual (assets/data/manual.toml).
@@ -342,6 +351,10 @@ struct Content {
 
   [[nodiscard]] const WeaponDef* weapon(std::string_view id) const;
   [[nodiscard]] const EnemyDef* enemy(std::string_view id) const;
+  // nullptr when the id is unknown. Present so a test can read a card's own
+  // numbers without walking the vector and re-deriving the "first match wins"
+  // rule the loader already settled.
+  [[nodiscard]] const UpgradeDef* upgrade(std::string_view id) const;
   // nullptr when the id is unknown.
   [[nodiscard]] const ManualPage* manualPage(std::string_view id) const;
 };

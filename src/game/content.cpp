@@ -123,6 +123,15 @@ const EnemyDef* Content::enemy(std::string_view id) const {
   return nullptr;
 }
 
+const UpgradeDef* Content::upgrade(std::string_view id) const {
+  for (const auto& u : upgrades) {
+    if (u.id == id) {
+      return &u;
+    }
+  }
+  return nullptr;
+}
+
 const ManualPage* Content::manualPage(std::string_view id) const {
   for (const auto& p : manual) {
     if (p.id == id) {
@@ -289,6 +298,7 @@ Content loadContent(const std::filesystem::path& dir) {
       def.vortexOrbitSpeed = (*t)["vortex_orbit_speed"].value_or(1.8F);
       def.vortexTickRate = (*t)["vortex_tick_rate"].value_or(0.1F);
       def.vortexCollapseAt = (*t)["vortex_collapse_at"].value_or(0.0F);
+      def.vortexCrowd = (*t)["vortex_crowd"].value_or(0.0F);
       def.vortexBurstDamage = (*t)["vortex_burst_damage"].value_or(0.0F);
       def.vortexBurstRadius = (*t)["vortex_burst_radius"].value_or(0.0F);
 
@@ -390,7 +400,6 @@ Content loadContent(const std::filesystem::path& dir) {
       def.weapon = (*t)["weapon"].value<std::string>().value_or("");
       def.level = static_cast<int>((*t)["level"].value_or(0));
       def.group = (*t)["group"].value_or(std::string());
-      def.grants = std::max(1, (*t)["grants"].value_or(1));
       content.upgrades.push_back(std::move(def));
     }
   }

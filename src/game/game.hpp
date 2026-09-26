@@ -52,13 +52,13 @@ std::vector<std::string> wrapWords(std::string_view str, std::size_t maxChars);
 
 // How the level-up card sets its body text, derived from the card width.
 //
-// The style is deliberately asymmetric: the FIRST line is body copy and the
-// wrapped lines after it are set larger and further apart. The first line
-// carries the gist -- "Shoots a bolt every 2s" -- and should be readable
-// instantly; the rest is the detail the player leans in for, and gets a heavier
-// voice to say so. Making all of it large was tried and it was the wrong
-// instinct: a wider scale shrinks the measure until a 5-card row is a dozen
-// characters per line, which is less readable, not more.
+// One size, one pitch, one left edge. The card used to set its wrapped lines
+// larger than the first and indent them inboard of it, which read as a mistake
+// rather than as a paragraph: the first line looked correct and the rest looked
+// like a second, cruder block that had been shoved sideways. So the fields are
+// still separate -- the wrap has to be able to measure continuation lines on
+// their own terms -- but the shipped values are uniform, and a card is one
+// column of body copy.
 //
 // Derived from the card width only for the TEXT BOX; the scale is a constant,
 // because the card being narrower already shortens the measure without any help.
@@ -66,21 +66,21 @@ std::vector<std::string> wrapWords(std::string_view str, std::size_t maxChars);
 struct CardTextLayout {
   float width = 0.0F;   // usable text box width, padding already removed
   float scale = 1.6F;   // first line
-  float contScale = 1.9F; // every line after the first
-  float lineH = 15.0F;  // first line's vertical advance
-  float contLineH = 22.0F; // every later line's advance
-  float indent = 32.0F; // hanging indent on continuation lines
+  float contScale = 1.6F; // every line after the first
+  float lineH = 21.0F;  // first line's vertical advance
+  float contLineH = 21.0F; // every later line's advance
+  float indent = 0.0F;  // left inset for continuation lines
 };
 
 [[nodiscard]] CardTextLayout cardTextLayout(float cardW);
 
 // Vertical space a body of `lines` lines takes. 1 line is a single body line; n
-// lines is the first line plus (n-1) larger ones.
+// lines is the first line plus (n-1) more at the continuation pitch.
 [[nodiscard]] float cardTextHeight(int lines, const CardTextLayout& lay);
 
 // How many lines of `lay` fit in `avail` pixels, which is what the renderer
 // clamps the wrap to. Exact inverse of cardTextHeight, not a division: the
-// continuation pitch is not the first line's pitch.
+// first line's advance and the continuation pitch are separate fields.
 [[nodiscard]] int cardTextLinesThatFit(float avail, const CardTextLayout& lay);
 
 // The level-up card's TITLE, as up to two lines.
@@ -262,18 +262,6 @@ struct PlayerStats {
   // box worth as much as a champion's -- and it stacks, because the whole point
   // of the card is that the count is the reward.
   int chestBonus = 0;
-  // Weapons get a little better as the run goes on, without the player having to
-  // spend a card on it. Every kWeaponLevelEvery player levels each equipped
-  // weapon gains a level, and a level is a flat amount of damage plus a touch of
-  // fire rate -- deliberately small, because this is a floor under a build rather
-  // than a reward for levelling. It exists so that a weapon picked up at 4:00 is
-  // not strictly worse than the same weapon picked up at 0:30, and so the late
-  // game does not depend entirely on cards.
-  //
-  // `PlayerStats::weaponGrowth` scales the whole thing. A card that raises it is
-  // the only way to make weapon levels the MAIN axis of a build instead of the
-  // free one, which is what turns it from a rounding error into a choice.
-  float weaponGrowth = 1.0F;
   // --- Active abilities (J / K / L) -------------------------------------------
   // Three buttons that exist in every run from the first second — no unlock, no
   // card, no level. They are what the player reaches for when a build is done
@@ -545,47 +533,6 @@ public:
   // exactly this many today; it can never ship more.
   static constexpr int kMaxSlotCards = kMaxWeapons - kBaseWeapons;
 
-  // --- Weapon levels ---------------------------------------------------------
-  // One weapon level every kWeaponLevelEvery player levels, and each level is
-  // worth kWeaponLevelDamage damage and kWeaponLevelCooldown of fire rate --
-  // scaled by PlayerStats::weaponGrowth, and scaled DOWN by
-  // kWeaponLevelDecay for every level already paid for.
-  //
-  // The decay is the whole design. A flat gain per level is not "a bit better",
-  // it is a second stat axis that nobody chose: at the level a twenty-minute run
-  // reaches it hands out more than every weapon card the player actually picked.
-  // A geometric series converges, so the free bump is worth at most
-  // kWeaponLevelDamage / (1 - kWeaponLevelDecay) -- a floor under a build, about
-  // one full weapon card's worth, and then it stops. The level COUNTER keeps
-  // climbing past that, so the sheet still shows a weapon still levelling while
-  // the number it is worth has already stopped moving, which is exactly the shape
-  // of a bonus you stop noticing.
-  static constexpr int kWeaponLevelEvery = 4;
-  static constexpr float kWeaponLevelDamage = 2.0F;
-  static constexpr float kWeaponLevelCooldown = 0.012F;
-  static constexpr float kWeaponLevelDecay = 0.86F;
-  // What weapon level `k` (0-based: level 0 is the FIRST one) is worth. Shared
-  // with the tests so a retune here cannot leave a hard-coded expectation behind.
-  [[nodiscard]] static float weaponLevelDamageGain(int k) {
-    return kWeaponLevelDamage * std::pow(kWeaponLevelDecay, static_cast<float>(k));
-  }
-  [[nodiscard]] static float weaponLevelCooldownGain(int k) {
-    return kWeaponLevelCooldown * std::pow(kWeaponLevelDecay, static_cast<float>(k));
-  }
-  // What a weapon is worth from its levels ALONE, at `level` of them. The sum,
-  // not a per-level number, is the thing that has to converge -- so this is the
-  // function a test pins, and the one a retune has to keep small.
-  [[nodiscard]] static float weaponLevelDamageTotal(int level) {
-    float sum = 0.0F;
-    for (int k = 0; k < level; ++k) sum += weaponLevelDamageGain(k);
-    return sum;
-  }
-  [[nodiscard]] static float weaponLevelCooldownTotal(int level) {
-    float sum = 0.0F;
-    for (int k = 0; k < level; ++k) sum += weaponLevelCooldownGain(k);
-    return sum;
-  }
-
   // How many cards a single milestone screen may hold. A milestone used to be a
   // flat two no matter what the content had, which is why a four-way question had
   // to be split across two screens and half of it was never asked. Now the
@@ -765,6 +712,7 @@ public:
     float vortexOrbitSpeed = 0;
     float vortexTickRate = 0;
     float vortexCollapseAt = 0;
+    float vortexCrowd = 0;
     float vortexBurstDamage = 0;
     float vortexBurstRadius = 0;
     float prismRange = 0;
@@ -796,14 +744,10 @@ public:
   // enemy" is not good enough once a test has more than one on the floor, and
   // registry view order is not something a test should depend on.
   void testKillLastSpawned();
-  // Test helper: the weapon level of one equipped slot, and the arsenal's.
-  [[nodiscard]] int testWeaponLevel(int slot) const;
   // Test helper: one live number off an equipped slot, by name. A test that
   // asserts a weapon is "better" needs to say WHICH number moved, and adding a
   // whole snapshot comparison for one float buries the assertion in noise.
   [[nodiscard]] float testWeaponStat(int slot, std::string_view name) const;
-  [[nodiscard]] int testWeaponLevel() const { return weaponLevel_; }
-  void testSyncWeaponLevels() { syncWeaponLevels(); }
   // Test helper: put a chest on the floor and report what it would spend.
   int testSpawnChest(float x, float y, int tier, int grants);
   // Test helper: how many chest bodies are on the floor right now.
@@ -830,6 +774,18 @@ public:
   // Test helper: content index of the weapon with this id (-1 if unknown), so a
   // test can add a NAMED weapon instead of trusting a row order.
   [[nodiscard]] int testWeaponContentIndex(std::string_view id) const;
+  // Test helper: which effect ids belong to the weapon-wide set. Public so the
+  // effect-coverage test asks the applier instead of keeping its own copy of the
+  // list -- which is exactly how a card ships that prints a promise and does
+  // nothing.
+  [[nodiscard]] static bool isWeaponWideEffect(std::string_view effect) {
+    return effect == "w_all_damage" || effect == "w_all_rate" ||
+           effect == "w_all_reach" || effect == "w_all_knockback";
+  }
+  // Test helper: the content index of an upgrade card by id, or -1. Every other
+  // "find this card" in the tests is a hand-rolled loop over the vector, which
+  // means every one of them re-decides what happens when two cards share an id.
+  [[nodiscard]] int testUpgradeContentIndex(std::string_view id) const;
   // Test helper: spend a chest exactly as walking into it would, and report how
   // many cards it actually gave.
   int testOpenChestFor(int grants) { return openChest(grants); }
@@ -877,11 +833,6 @@ public:
     level_ = level;
     milestoneOffer_ = false;
     buildChoices();
-    // Weapons level with the player, so jumping the level counter has to be
-    // followed by the same catch-up a real level-up performs. A test that sets a
-    // level and then reads a weapon's damage is otherwise reading a weapon that
-    // has not been told the run went on without it.
-    syncWeaponLevels();
   }
   // Test helper: whether an upgrade card has been closed off by an earlier pick
   // from its mutually exclusive group.
@@ -1165,11 +1116,6 @@ private:
   // Owned weapons (fixed slots, no allocation on the hot path).
   struct WeaponSlot {
     int def = -1;
-    // How many times this weapon has levelled on its own (see PlayerStats
-    // ::weaponGrowth). Kept beside the stats it paid for so the HUD can show a
-    // weapon's level next to its cards without having to remember what the
-    // player's level was when it was picked up.
-    int level = 0;
     AttackType attackType = AttackType::Projectile;
     float cooldown = 0.5F;
     float timer = 0.0F;
@@ -1406,6 +1352,9 @@ private:
     // a steady drip. A collapsing well hoards, gathers, and pays out in one
     // violent moment -- lumpier damage, but a threat you can read on a clock.
     float vortexCollapseAt = 0.0F;
+    // See WeaponDef::vortexCrowd. Lives here (not only on the def) so the tick
+    // can read the live value the way it reads pull, damage and reach.
+    float vortexCrowd = 0.0F;
     float vortexBurstDamage = 0.0F;
     float vortexBurstRadius = 0.0F;
 
@@ -1468,14 +1417,25 @@ private:
   // Drops a chest for a dead elite-and-above. Returns the entity, or null if this
   // death rolled no box.
   entt::entity spawnChest(float x, float y, int tier);
-  // Spends a chest on the player's weapons: `grants` random cards, each legal for
-  // one of the weapons the player actually holds, preferring a weapon that has no
-  // card yet so a box opens new lines instead of stacking a fourth copy of one.
-  // Returns how many cards were actually granted.
+  // Spends a chest on the player's build: `grants` cards, each one an independent
+  // 50/50 roll between a weapon's own cards and the item cards. A weapon card
+  // prefers a weapon that has no card yet, so a box opens new lines instead of
+  // stacking a fourth copy of one. Returns how many cards were actually granted.
   int openChest(int grants);
   // Every weapon-targeted card in the content that is legal for the weapon in
   // `weaponSlot` and not yet maxed.
   [[nodiscard]] std::vector<int> legalWeaponCards(int weaponSlot) const;
+  // Every ITEM card a box may hand out: no weapon of its own, not a milestone,
+  // not blocked by an answered milestone group, not maxed, and usable as things
+  // stand. This is the half of a chest that improves the run rather than one
+  // weapon -- health, shields, the on-hit marks, the weapon-wide items.
+  [[nodiscard]] std::vector<int> legalItemCards() const;
+
+  // Edits one weapon's own numbers for a weapon-wide item. Separate from
+  // applyWeaponEffect because the weapon-wide set answers a different question --
+  // what does this card mean on EVERY weapon, not on THIS one -- and one function
+  // with two halves is how the second half stops being tested.
+  static void applyWeaponWide(WeaponSlot& w, std::string_view effect, float value);
   // Spawns one chain bolt. `depth` > 0 means a fork thrown off a parent.
   void spawnChainBolt(float x, float y, const WeaponSlot& w,
                       std::uint32_t fromTarget);
@@ -1549,15 +1509,6 @@ private:
   // The four on-hit marks. Split out so the damage path stays readable and so a
   // test can call them directly on a known body.
   void applyMarks(entt::entity e, float towardX, float towardY);
-  // Brings every equipped weapon up to the level the player's level implies.
-  // Idempotent, and safe to call at any time: the whole thing is a comparison
-  // against a remembered high-water mark, so a missed call is a delayed level
-  // rather than a permanently wrong one.
-  void syncWeaponLevels();
-  // How many weapon levels the current player level is worth.
-  [[nodiscard]] int weaponLevelFor(int playerLevel) const {
-    return playerLevel / kWeaponLevelEvery;
-  }
   void updateChestToast(float dt);
   // Chill/status helper. `mul` < 1 is the speed the enemy is pinned to; the
   // strongest chill in play wins and any chill refreshes the timer.
@@ -1838,10 +1789,6 @@ private:
   // actually gave, and how long the toast stays up. The toast is a courtesy --
   // a box spends itself whether or not anybody reads it -- but a reward the
   // player cannot identify is a reward that feels like nothing happened.
-  // The weapon level the arsenal is currently at. syncWeaponLevels() compares
-  // against this rather than mutating the weapons, so a growth card that changes
-  // the size of a level cannot retroactively rewrite levels already paid out.
-  int weaponLevel_ = 0;
   int lastChestCard_ = -1;
   int lastChestGrants_ = 0;
   float lastChestTimer_ = 0.0F;

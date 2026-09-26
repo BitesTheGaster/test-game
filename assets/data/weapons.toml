@@ -650,26 +650,60 @@ sweep_lead = 2.2
 [[weapon]]
 id = "vortex"
 name = "Void Gyre"
-desc = "Dagger + Scythe + Void Orb. Suction zones circle you and drag prey into their cores. More projectiles means more wells, and bigger ones."
+desc = "Dagger + Scythe + Void Orb. Suction wells hold what they catch, and their damage is a function of HOW MANY they hold - feeble alone, enormous in a knot. More projectiles means more wells."
 attack_type = "vortex"
-damage = 40.0
+# Per WELL, not per body, and the wells overlap on a lone enemy standing on the
+# player. 26 keeps the lonely case feeble -- which is the half of the rule that
+# makes the crowded case worth wanting.
+damage = 26.0
 cooldown = 1.00
 projectiles = 3
 proj_speed = 0.0
 proj_life = 0.0
-pierce = 4
+pierce = 6
 spread = 0.0
 proj_color = [0.62, 0.36, 1.0, 1.0]
 requires = ["dagger", "scythe", "orb"]
-vortex_radius = 1.4
-vortex_reach = 2.8
-# Slightly stronger than the zone's own tangential speed (2.8 * 1.7 = 4.8
-# u/s) so early-game prey is held, while the growing knockback resistance over
-# a run makes late enemies slip through instead of being pinned forever.
-vortex_pull = 5.0
-vortex_orbit = 2.8
+# BIGGER THAN THE ORBIT. This is the load-bearing number of the whole weapon and
+# it was wrong until now: the wells orbited at 2.8 with a 1.4 core, so a knot of
+# enemies standing on the player was 2.8 units from EVERY well and therefore
+# inside none of them. Three symmetric pulls cancelled out, the crowd bonus
+# almost never engaged, and the Void Gyre paid about what the Event Horizon paid
+# for the same six bodies -- which is exactly the "the supers feel the same"
+# complaint, showing up as a weapon whose stated rule never fires.
+#
+# A core wider than the orbit is what makes the rule true: the wells sweep a disc
+# around the PLAYER, so whatever is fighting you is inside one, and how hard it is
+# ground depends on how much of it there is. Stand in a crowd and this is
+# enormous. Stand alone and three feeble ticks is all you get.
+vortex_radius = 2.4
+# The widest reach of any well, and the strongest pull. That is the point of the
+# Gyre: its damage is a function of how many bodies a well is holding, so the
+# only way to get that damage is to actually hold them, and holding them takes
+# reach and grip rather than a bigger number.
+vortex_reach = 3.4
+# Well above the well's own tangential speed (1.6 * 1.7 = 2.7 u/s) so early-game
+# prey is held, while the growing knockback resistance over a run makes late
+# enemies slip through instead of being pinned forever. And above the Event
+# Horizon's 4.0, which only has to gather bodies for three seconds and then
+# implode: holding on to them forever is the Gyre's whole job and a worse one.
+vortex_pull = 8.0
+# Close in, so the wells sweep the ground the player is actually fighting on. The
+# Event Horizon's orbit is 3.0 -- twice as far out, with a third of the core --
+# which is the pair's whole difference in one line: grind what is on top of you,
+# or lure what is out there.
+vortex_orbit = 1.6
 vortex_orbit_speed = 1.7
 vortex_tick_rate = 0.1
+# +75% damage per EXTRA enemy in the core. A lone enemy takes the flat tick,
+# which is deliberately feeble; six bodies take 4.75x before the crowd falloff the
+# well applies anyway, so 3.4x after it. The number has to clear the falloff by a
+# wide margin or the bonus is decoration: at +40% the two halves cancelled and the
+# weapon paid exactly what the Event Horizon paid for the same six bodies, which
+# is the "the supers feel the same" complaint arriving from the other direction.
+# Low per-hit damage on purpose: if a single well could kill a normal enemy the
+# crowd bonus would never be the reason to take this weapon.
+vortex_crowd = 0.75
 
 [[weapon]]
 id = "prism"
@@ -696,7 +730,7 @@ beam_duration = 0.18
 [[weapon]]
 id = "eventhorizon"
 name = "Event Horizon"
-desc = "Rail Rifle + Shock Core + Ember Sprayer. Four wells circle you swallowing the horde, then COLLAPSE - each implosion is a blast and the well reopens somewhere else."
+desc = "Rail Rifle + Shock Core + Ember Sprayer. Four wells circle you, swallow the horde, then COLLAPSE - each implosion is a blast and the well reopens across the orbit. A flat tick, on a clock."
 attack_type = "vortex"
 damage = 48.0
 cooldown = 1.00
@@ -709,7 +743,11 @@ proj_color = [0.52, 0.36, 0.92, 1.0]
 requires = ["railgun", "shockcore", "flame"]
 vortex_radius = 1.5
 vortex_reach = 3.2
-vortex_pull = 6.0
+# Half the Gyre's grip on purpose. This well has three seconds to gather and then
+# pays out in one implosion, so all it needs is enough drag to hold a knot still
+# long enough to reach the clock -- and a stronger permanent drag would make it
+# the Gyre again.
+vortex_pull = 4.0
 vortex_orbit = 3.0
 vortex_orbit_speed = 1.9
 vortex_tick_rate = 0.10
@@ -722,6 +760,11 @@ vortex_tick_rate = 0.10
 vortex_collapse_at = 3.0
 vortex_burst_damage = 110.0
 vortex_burst_radius = 3.4
+# No crowd bonus, and the tick is not feeble: this well is paid by the clock, so
+# it has to be worth holding on its own against a straggler. The two numbers
+# together are the difference between the two weapons -- a snare that multiplies,
+# and a charge that does not.
+vortex_crowd = 0.0
 
 [[weapon]]
 id = "rimewake"
