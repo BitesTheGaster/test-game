@@ -35,6 +35,17 @@ constexpr float kOrbitInnerMul = 0.35F;
 // "gap" would stop being a gap.
 constexpr float kOrbitWindowHalf = 0.42F;
 
+// The on-hit marks' two fixed numbers. A card supplies the SCALE (seconds of
+// chill, burn damage per second, how much hex a hit adds) and these supply the
+// shape, so four cards can never drift into four unrelated behaviours by each
+// picking its own constants.
+constexpr float kMarkChillMul = 0.60F;   // Frostbind's chill depth
+constexpr float kMarkBurnWindow = 4.0F;   // seconds a single hit keeps a body lit
+// How many hits' worth of hex one card is worth. The card sets the per-hit step
+// and this is what turns it into a ceiling, so "Hex" reads as "+12% damage taken
+// per hit, up to 96%" -- a ratchet with a visible end rather than an open ramp.
+constexpr float kMarkVulnHits = 8.0F;
+
 // How close a contracting nova will drag a victim to the player. The Void Nova's
 // whole fantasy is a knot of bodies pulled into a knot and then detonated, and
 // its pull used to obey no floor at all: it dragged everything right onto the
@@ -243,6 +254,40 @@ UpgradeEffectResult applyUpgrade(PlayerStats& stats, std::string_view effect, fl
     stats.spreadMul += value * 2.0F;
     stats.fireRateBonus += value;
     stats.aimJitter += value * 0.5236F; // 30 degrees
+    return {true, 0.0F, 0.0F};
+  }
+  // --- On-hit marks (the "element" milestone group) ---------------------------
+  // Four of them, and they are mutually exclusive by construction: the cards that
+  // grant them are all in one group, so a run can only ever own one. That is why
+  // they are allowed to be blunt -- each one is the whole answer to a question
+  // rather than one line in a long list of multipliers.
+  if (effect == "mark_slow") {
+    // Frostbind: seconds of chill per hit. A deeper chill than the ice weapons
+    // would ever give, and a shorter one, so a fast melee build can hold a front
+    // rank in place without turning into the Frost Shards build.
+    stats.markChillTime += value;
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "mark_burn") {
+    // Emberbrand: damage per second, refreshed on every hit. Refreshing rather
+    // than accumulating is what makes it a question of hit RATE, which is a
+    // different build from every other lifesteal/regen answer in the game.
+    stats.markBurnDps += value;
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "mark_vuln") {
+    // Hex: +damage taken per hit, and the ceiling. Both are on the card, because
+    // the per-hit step without a ceiling is a trap for a slow weapon and the
+    // ceiling without a step is a flat bonus.
+    stats.markVuln += value;
+    stats.markVulnMax = std::max(stats.markVulnMax, value * kMarkVulnHits);
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "mark_defstrip") {
+    // Armour Split: flat defence removed per hit. No cap needed -- the enemy's
+    // own defence is the cap, and hitting something with none is a no-op rather
+    // than a wasted effect.
+    stats.markDefStrip += value;
     return {true, 0.0F, 0.0F};
   }
   if (effect == "thorns") {
@@ -481,7 +526,10 @@ int traitsForTier(int tier, float simTime) {
 }
 
 Game::Game(const Content& content, std::uint32_t seed)
-    : content_(content), rng_(seed), stacks_(content.upgrades.size(), 0) {
+    : content_(content),
+      rng_(seed),
+      stacks_(content.upgrades.size(), 0),
+      blocked_(content.upgrades.size(), 0) {
   reset();
 }
 
@@ -500,6 +548,11 @@ void Game::reset() {
   healCd_ = 0.0F;
   stats_ = PlayerStats{};
   std::fill(stacks_.begin(), stacks_.end(), 0);
+  // A restart has to forget which milestone groups the last run closed off,
+  // exactly as it forgets the stacks. Leaving the lock behind would silently
+  // shrink the milestone groups of the next run -- and shrink them differently
+  // each time, which is the worst version of that bug.
+  std::fill(blocked_.begin(), blocked_.end(), 0);
   choices_.clear();
   pending_.clear();
   particles_.clear();
@@ -1283,6 +1336,19 @@ void Game::updateEnemies() {
     if (en.slowT > 0.0F) {
       en.slowT -= dt;
       effSpeed *= en.slowMul;
+    }
+    // Burning. Ticked here, next to the chill, for the same reason: it is a
+    // per-second effect on a body and the only place that owns a body's clock.
+    // `mark = false` because this damage came FROM the burn and must not set the
+    // burn again, or a lit body would be permanently re-ignited and would also
+    // hex itself every tick for free.
+    if (en.burnT > 0.0F) {
+      en.burnT -= dt;
+      if (en.burnDps > 0.0F) {
+        applyEnemyDamage(e, en.burnDps * dt, false);
+        if (!registry_.valid(e)) break;
+      }
+      if (en.burnT <= 0.0F) en.burnDps = 0.0F;
     }
 
     v.x = dx * effSpeed + sepX * 12.0F;
@@ -2378,12 +2444,53 @@ void Game::applyChill(entt::entity e, float mul, float time) {
   en->slowT = std::max(en->slowT, time);
 }
 
-void Game::applyEnemyDamage(entt::entity e, float dmg) {
+void Game::applyMarks(entt::entity e, float towardX, float towardY) {
+  if (!registry_.valid(e)) return;
+  // Frostbind: a hit chills, so a melee build gets an ice weapon's control for
+  // free. The chill is shallower than a deep freeze on purpose -- this is meant
+  // to be the everyday version of slow, not a second copy of the ice cards.
+  if (stats_.markChillTime > 0.0F) {
+    applyChill(e, kMarkChillMul, stats_.markChillTime);
+  }
+  // Emberbrand: a hit lights it up. Refreshed rather than accumulated, so the
+  // weapon you field decides whether a target stays alight, and a slow heavy
+  // hitter is honestly worse at this than a fast one.
+  if (stats_.markBurnDps > 0.0F) {
+    if (auto* en = registry_.try_get<Enemy>(e); en != nullptr) {
+      en->burnDps = std::max(en->burnDps, stats_.markBurnDps);
+      en->burnT = std::max(en->burnT, kMarkBurnWindow);
+    }
+  }
+  // Hex: this body is softer than it was. Applied AFTER this hit is resolved, so
+  // the ramp costs the first strike nothing and every strike after it more.
+  if (stats_.markVuln > 0.0F) {
+    if (auto* tr = registry_.try_get<EnemyTraits>(e); tr != nullptr) {
+      tr->vuln = std::min(tr->vuln + stats_.markVuln, stats_.markVulnMax);
+    }
+  }
+  // Armour Split: the target's own mitigation is taken off, permanently, a piece
+  // at a time. It only bites if the target has any left -- a naked bat cannot be
+  // made more naked -- which is what makes it a card for the late game, where the
+  // roster finally grows armour to strip.
+  if (stats_.markDefStrip > 0.0F) {
+    if (auto* tr = registry_.try_get<EnemyTraits>(e); tr != nullptr) {
+      tr->defense = std::max(0.0F, tr->defense - stats_.markDefStrip);
+    }
+  }
+  (void)towardX;
+  (void)towardY;
+}
+
+void Game::applyEnemyDamage(entt::entity e, float dmg, bool mark) {
   if (!registry_.valid(e)) return;
   auto* eh = registry_.try_get<Health>(e);
   if (eh == nullptr || eh->hp <= 0.0F) return;
   auto* tr = registry_.try_get<EnemyTraits>(e);
   const float hpBefore = eh->hp;
+  // A hexed body is hit harder, and the multiplier is read BEFORE the mark is
+  // applied again -- so the ramp is a ratchet that the current hit does not
+  // enjoy, only the ones after it.
+  if (tr != nullptr && tr->vuln > 0.0F) dmg *= 1.0F + tr->vuln;
   const float raw = dmg; // pre-mitigation damage, used for the lethal check
   const bool hadShield = tr != nullptr && tr->shield > 0.0F;
   // Enemy defense runs through the SAME flat+percent curve as the player's
@@ -2404,6 +2511,15 @@ void Game::applyEnemyDamage(entt::entity e, float dmg) {
                    {0.5F, 0.8F, 1.0F, 1.0F}, 2, 2.0F);
   }
   eh->hp -= dmg;
+  // The marks land on a hit that was actually dealt, not on an attempt. A body
+  // that is already dead does not need to be hexed, and applying them before the
+  // lethal check would make the last hit of every kill do free work.
+  if (mark && eh->hp > 0.0F) {
+    if (player_ != entt::null && registry_.valid(player_)) {
+      const auto& ptx = registry_.get<Transform>(player_);
+      applyMarks(e, ptx.x, ptx.y);
+    }
+  }
   // A hit whose raw damage already covers the remaining HP always kills:
   // defense mitigation must never leave a "0 HP" enemy standing. Shields are
   // exempt so the Shielded trait still buys its buffer.
@@ -5305,22 +5421,69 @@ void Game::buildChoices() {
   // Milestones arrive on every power-of-two level from 4 on (4, 8, 16, 32, ...).
   const bool milestone = level_ >= 4 && (level_ & (level_ - 1)) == 0;
   if (milestone) {
-    std::vector<int> pool;
-    pool.reserve(content_.upgrades.size());
+    // A milestone is a GROUP, not a pair of cards. Every still-available card of
+    // the group is laid out on the screen at once, and taking one of them closes
+    // the rest of the group for the rest of the run.
+    //
+    // This is what makes a milestone a decision instead of a lottery. It used to
+    // be three flat stat cards of which two were shown, which meant the screen
+    // said "damage, or more damage, or yet more damage" and the only real choice
+    // was which number was bigger. Now the members of a group are different axes
+    // of the run -- vampirism against regen against a shield, damage against fire
+    // rate against reach -- and the screen can be as wide as the group is, so a
+    // four-way group gets four slots (kMaxMilestoneSlots) instead of two.
+    //
+    // Two groups may share a screen when both are narrow, and picking from one
+    // does NOT close the other: that is what lets the player choose the subject
+    // as well as the card, and it leaves a group with a spare choice to be
+    // revisited at the next milestone instead of quietly vanishing.
+    std::vector<std::string> groupNames;
+    std::vector<int> ungrouped;
     for (std::size_t i = 0; i < content_.upgrades.size(); ++i) {
       const auto& u = content_.upgrades[i];
-      if (u.kind == "milestone" && u.level == level_ && stacks_[i] < u.maxStacks) {
-        pool.push_back(static_cast<int>(i));
+      if (u.kind != "milestone" || u.level != level_) continue;
+      if (stacks_[i] >= u.maxStacks || blocked_[i]) continue;
+      if (u.group.empty()) {
+        ungrouped.push_back(static_cast<int>(i));
+      } else if (std::find(groupNames.begin(), groupNames.end(), u.group) ==
+                 groupNames.end()) {
+        groupNames.push_back(u.group);
       }
     }
-    if (!pool.empty()) {
-      std::shuffle(pool.begin(), pool.end(), rng_);
-      milestoneOffer_ = true;
-      const std::size_t take = std::min<std::size_t>(2, pool.size());
-      choices_.reserve(take);
-      for (std::size_t k = 0; k < take; ++k) {
-        choices_.push_back({Choice::Kind::Upgrade, pool[k]});
+
+    std::vector<int> offer;
+    const auto membersOf = [this, level = level_](const std::string& name) {
+      std::vector<int> out;
+      for (std::size_t i = 0; i < content_.upgrades.size(); ++i) {
+        const auto& u = content_.upgrades[i];
+        if (u.kind != "milestone" || u.level != level) continue;
+        if (u.group != name) continue;
+        if (stacks_[i] >= u.maxStacks || blocked_[i]) continue;
+        out.push_back(static_cast<int>(i));
       }
+      return out;
+    };
+
+    std::shuffle(groupNames.begin(), groupNames.end(), rng_);
+    std::shuffle(ungrouped.begin(), ungrouped.end(), rng_);
+    for (const auto& name : groupNames) {
+      if (offer.size() >= kMaxMilestoneSlots) break;
+      for (const int idx : membersOf(name)) {
+        if (offer.size() >= kMaxMilestoneSlots) break;
+        offer.push_back(idx);
+      }
+    }
+    // A group-less milestone card is its own group of one.
+    for (const int idx : ungrouped) {
+      if (offer.size() >= kMaxMilestoneSlots) break;
+      offer.push_back(idx);
+    }
+
+    if (!offer.empty()) {
+      std::shuffle(offer.begin(), offer.end(), rng_);
+      milestoneOffer_ = true;
+      choices_.reserve(offer.size());
+      for (const int idx : offer) choices_.push_back({Choice::Kind::Upgrade, idx});
       return;
     }
     // No defined milestone for this exact level: behave like a normal level-up.
@@ -5355,7 +5518,7 @@ void Game::buildChoices() {
     std::vector<int> uniques;
     for (std::size_t i = 0; i < content_.upgrades.size(); ++i) {
       const auto& u = content_.upgrades[i];
-      if (u.kind != "unique" || stacks_[i] >= u.maxStacks) continue;
+      if (u.kind != "unique" || stacks_[i] >= u.maxStacks || blocked_[i]) continue;
       // A weapon's unique item only makes sense if that weapon is equipped.
       if (!u.weapon.empty() && findWeaponSlot(u.weapon) < 0) continue;
       uniques.push_back(static_cast<int>(i));
@@ -5373,6 +5536,10 @@ void Game::buildChoices() {
     const auto& u = content_.upgrades[i];
     if (u.kind != "normal") continue;
     if (stacks_[i] >= u.maxStacks) continue;
+    // Locked out by an earlier milestone pick. A group card is a milestone card,
+    // so this cannot fire today -- but the lock is the rule, and the rule should
+    // be the thing every pool goes through rather than a guard on one path.
+    if (blocked_[i]) continue;
     if (!u.weapon.empty() && findWeaponSlot(u.weapon) < 0) continue;
     normals.push_back(static_cast<int>(i));
   }
@@ -5391,7 +5558,7 @@ void Game::buildChoices() {
   // the player on the level-up screen forever.
   if (choices_.empty()) {
     for (std::size_t i = 0; i < content_.upgrades.size(); ++i) {
-      if (stacks_[i] >= content_.upgrades[i].maxStacks) continue;
+      if (stacks_[i] >= content_.upgrades[i].maxStacks || blocked_[i]) continue;
       if (!upgradeIsUsable(static_cast<int>(i))) continue;
       choices_.push_back({Choice::Kind::Upgrade, static_cast<int>(i)});
       break;
@@ -5472,16 +5639,38 @@ bool Game::applyUpgradeAt(int upgradeIndex) {
 
   UpgradeEffectResult result{false, 0.0F, 0.0F};
   if (def.weapon.empty()) {
-    result = applyUpgrade(stats_, def.effect, def.value);
-    if (!result.valid) return false;
+    // `grants` is how many times the effect lands. It is a separate field from
+    // `value` on purpose: "lifesteal, three times over" and "lifesteal +18" are
+    // the same number but only one of them tells the player what is about to
+    // happen, and a milestone that grants several applications is the whole
+    // point of the group it belongs to.
+    const int times = std::max(1, def.grants);
+    for (int k = 0; k < times; ++k) {
+      result = applyUpgrade(stats_, def.effect, def.value);
+      if (!result.valid) return false;
+    }
   } else {
     // Weapon-targeted upgrade (e.g. a weapon's personal Focus card).
     const int weaponSlot = findWeaponSlot(def.weapon);
     if (weaponSlot < 0) return false;
-    applyWeaponEffect(weaponSlot, def.effect, def.value);
+    for (int k = 0; k < std::max(1, def.grants); ++k) {
+      applyWeaponEffect(weaponSlot, def.effect, def.value);
+    }
     result.valid = true;
   }
   ++stacks_[static_cast<std::size_t>(upgradeIndex)];
+
+  // Close the rest of the group. This is the exclusive half of the promise: the
+  // card you took is now on the board, and its siblings can never be offered
+  // again this run, at a milestone or anywhere else. The card itself stays
+  // available if it stacks, so a group of one-stack cards is a one-time decision
+  // and a group with a stacking member can be leaned on.
+  if (!def.group.empty()) {
+    for (std::size_t i = 0; i < content_.upgrades.size(); ++i) {
+      if (i == static_cast<std::size_t>(upgradeIndex)) continue;
+      if (content_.upgrades[i].group == def.group) blocked_[i] = 1;
+    }
+  }
 
   // Global "+1 projectile" upgrades also add orbit blades / halo spokes /
   // vortex zones.
@@ -6601,6 +6790,7 @@ void Game::enterTestModeImpl() {
     savedPlayerY_ = t.y;
   }
   savedStats_ = stats_;
+  savedBlocked_ = blocked_;
   savedStacks_ = stacks_;
   savedBestiaryKills_ = bestiaryKills_;
   savedBestiaryTiers_ = bestiaryTiers_;
@@ -6726,6 +6916,7 @@ void Game::exitTestModeImpl() {
   weaponCount_ = savedWeaponCount_;
   for (int i = 0; i < weaponCount_; ++i) weapons_[i] = savedWeapons_[i];
   stats_ = savedStats_;
+  blocked_ = savedBlocked_;
   stacks_ = savedStacks_;
   bestiaryKills_ = savedBestiaryKills_;
   bestiaryTiers_ = savedBestiaryTiers_;
@@ -7283,6 +7474,18 @@ std::vector<float> Game::testEnemySpeeds() const {
   for (const auto e : view) {
     const auto& v = view.get<Velocity>(e);
     out.push_back(std::sqrt(v.x * v.x + v.y * v.y));
+  }
+  return out;
+}
+
+std::vector<float> Game::testEnemySpeedMuls() const {
+  std::vector<float> out;
+  auto view = registry_.view<Enemy>();
+  out.reserve(enemyCount() * 2);
+  for (const auto e : view) {
+    const auto& en = view.get<Enemy>(e);
+    out.push_back(en.slowT > 0.0F ? en.slowMul : 1.0F);
+    out.push_back(en.slowT);
   }
   return out;
 }
@@ -8894,8 +9097,40 @@ void Game::render(core::render::Batcher& b, float alpha) {
         body.g += (kIce.g - body.g) * depth;
         body.b += (kIce.b - body.b) * depth;
       }
+      // Burning reads as heat, the same way the chill reads as cold, and for the
+      // same reason: a damage-over-time the player cannot see is just an invisible
+      // multiplier. The pulse is tied to the burn's own remaining time rather than
+      // to the clock, so a freshly-lit body flares and a nearly-out one gutters.
+      const bool burning = en != nullptr && en->burnT > 0.0F;
+      if (burning) {
+        const float heat = std::clamp(en->burnT / 2.0F, 0.0F, 1.0F);
+        const float flick = 0.82F + 0.18F * std::sin(simTime_ * 17.0F + static_cast<float>(e) * 0.7F);
+        constexpr Color kEmber{1.0F, 0.42F, 0.12F, 1.0F};
+        const float k = heat * flick;
+        body.r += (kEmber.r - body.r) * k;
+        body.g += (kEmber.g - body.g) * k;
+        body.b += (kEmber.b - body.b) * k;
+      }
       if (s.circle) b.circle(x, y, r.r, body);
       else b.rect(x, y, r.r * 2.0F, r.r * 2.0F, body);
+      // A hexed body is outlined, because the hex is a stack: the player needs to
+      // be able to see it build without watching the damage numbers. The outline
+      // is a fraction of the elite ring so the two never read as the same thing.
+      if (const auto* tr = registry_.try_get<EnemyTraits>(e);
+          tr != nullptr && tr->vuln > 0.0F) {
+        const float depth = std::clamp(tr->vuln, 0.0F, 1.0F);
+        constexpr Color kHex{0.85F, 0.40F, 1.0F, 1.0F};
+        Color ring = kHex;
+        ring.a = 0.30F + 0.45F * depth;
+        constexpr int kHexDots = 12;
+        for (int k = 0; k < kHexDots; ++k) {
+          const float a =
+              (static_cast<float>(k) / static_cast<float>(kHexDots)) * 2.0F * kPi +
+              simTime_ * 1.4F;
+          b.circle(x + std::cos(a) * r.r * 1.09F, y + std::sin(a) * r.r * 1.09F, 0.06F,
+                   ring);
+        }
+      }
       // A hard freeze gets a ring, borrowing the elite outline's language so
       // "this one is pinned" reads at the same glance as "this one is tough".
       if (chilled && en->slowMul <= 0.55F) {
@@ -9831,9 +10066,13 @@ void Game::render(core::render::Batcher& b, float alpha) {
       for (std::size_t i = 2; i <= count; ++i) s += "/" + std::to_string(i);
       return s;
     };
-    const std::string title = choosingStarter_ ? "CHOOSE A STARTING WEAPON"
-                              : milestoneOffer_ ? "MILESTONE! CHOOSE 1/2"
-                              : "LEVEL UP! " + chooseRange(choices_.size());
+    // A milestone counts its own cards rather than claiming two. The screen used
+    // to say "CHOOSE 1/2" on a four-card question, which is the one place a
+    // player is told a lie while making the run's biggest decision.
+    const std::string title =
+        choosingStarter_ ? "CHOOSE A STARTING WEAPON"
+        : milestoneOffer_ ? "MILESTONE! " + chooseRange(choices_.size())
+        : "LEVEL UP! " + chooseRange(choices_.size());
     b.text(px * 0.5F - b.textWidth(4.0F, title) * 0.5F, py * 0.16F, 4.0F,
            (milestoneOffer_ && !choosingStarter_) ? violet : gold, title);
 

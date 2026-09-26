@@ -1480,193 +1480,272 @@ value = 1.0
 max_stacks = 3
 
 # --- Milestones (every power-of-two level from 4 on) -------------------------
+#
+# A milestone is an EXCLUSIVE GROUP. Every card of the group is laid out on the
+# same screen, the player takes exactly one, and every other card in that group is
+# closed off for the rest of the run. `group` names the set; `grants` is how many
+# times the effect lands when the card is taken.
+#
+# Why it works this way: the milestone pool used to be three flat stat cards of
+# which two were shown, so the screen said "damage, or more damage, or yet more
+# damage" and the only real decision was which number was printed larger. Now the
+# members of a group are different ANSWERS -- vampirism against regeneration
+# against a shield, chill against fire against hex against splitting armour -- and
+# the screen is as wide as the question is, up to four cards. Two groups may
+# share a screen when both are narrow, and picking from one does not close the
+# other, so the player chooses the subject as well as the card.
+#
+# Every milestone card therefore belongs to a group. A milestone card outside one
+# is a card that is neither exclusive nor part of a question, which is exactly the
+# flat number this section stopped being.
+
+# L4 --- SURVIVOR: how you outlast it. Three ways to be harder to kill, and the
+# run commits to one of them for good. "Several times" is `grants`, so the card
+# says how many times it lands instead of printing a big flat number.
+[[upgrade]]
+id = "m4_crimson"
+name = "Crimson Pact"
+desc = "Lifesteal +9%, granted three times over"
+effect = "lifesteal_add"
+value = 9
+grants = 3
+max_stacks = 1
+kind = "milestone"
+level = 4
+group = "survivor"
+
+[[upgrade]]
+id = "m4_renewal"
+name = "Verdant Renewal"
+desc = "Regeneration +1.2 HP/s, granted three times over"
+effect = "regen_add"
+value = 1.2
+grants = 3
+max_stacks = 1
+kind = "milestone"
+level = 4
+group = "survivor"
 
 [[upgrade]]
 id = "m4_aegis"
 name = "Aegis"
-desc = "MILESTONE: +45 regenerating shield"
+desc = "Shield +50, granted twice over, and it refills at once"
 effect = "shield_add"
-value = 45
+value = 50
+grants = 2
 max_stacks = 1
 kind = "milestone"
 level = 4
+group = "survivor"
 
+# L8 --- EXECUTION: how you kill. Reach, rate, or weight. These are the three
+# axes every damage card in the game is secretly a fraction of, so the milestone
+# asks the question outright.
 [[upgrade]]
-id = "m4_pact"
-name = "Blood Pact"
-desc = "MILESTONE: +6% lifesteal"
-effect = "lifesteal_add"
-value = 6
-max_stacks = 1
-kind = "milestone"
-level = 4
-
-[[upgrade]]
-id = "m4_tempest"
-name = "Tempest"
-desc = "MILESTONE: +2 projectiles to every weapon"
-effect = "proj_add"
-value = 2
-max_stacks = 1
-kind = "milestone"
-level = 4
-
-[[upgrade]]
-id = "m8_mantle"
-name = "Stone Mantle"
-desc = "MILESTONE: +60 defense"
-effect = "defense_add"
-value = 60
+id = "m8_overload"
+name = "Overload"
+desc = "All damage +55%"
+effect = "damage_mul"
+value = 0.55
 max_stacks = 1
 kind = "milestone"
 level = 8
+group = "execution"
 
 [[upgrade]]
 id = "m8_frenzy"
 name = "Frenzy"
-desc = "MILESTONE: +50% fire rate to every weapon"
+desc = "Fire rate +45%"
 effect = "fire_rate"
-value = 0.50
+value = 0.45
 max_stacks = 1
 kind = "milestone"
 level = 8
+group = "execution"
 
 [[upgrade]]
-id = "m8_grasp"
-name = "Reaper's Grasp"
-desc = "MILESTONE: +3 pierce to every weapon"
-effect = "pierce_add"
-value = 3
-max_stacks = 1
-kind = "milestone"
-level = 8
-
-[[upgrade]]
-id = "m16_crown"
-name = "Crimson Crown"
-desc = "MILESTONE: +8% lifesteal"
-effect = "lifesteal_add"
-value = 8
-max_stacks = 1
-kind = "milestone"
-level = 16
-
-[[upgrade]]
-id = "m16_titan"
-name = "Titan Heart"
-desc = "MILESTONE: +120 max HP and heal 120"
-effect = "max_hp_add"
-value = 120
-max_stacks = 1
-kind = "milestone"
-level = 16
-
-[[upgrade]]
-id = "m16_overload"
-name = "Overload"
-desc = "MILESTONE: +60% damage"
-effect = "damage_mul"
-value = 0.60
-max_stacks = 1
-kind = "milestone"
-level = 16
-
-[[upgrade]]
-id = "m32_void"
-name = "Void Symbiosis"
-desc = "MILESTONE: +90% damage"
-effect = "damage_mul"
-value = 0.90
-max_stacks = 1
-kind = "milestone"
-level = 32
-
-[[upgrade]]
-id = "m32_bulwark"
-name = "Bulwark of Ages"
-desc = "MILESTONE: +120 defense"
-effect = "defense_add"
-value = 120
-max_stacks = 1
-kind = "milestone"
-level = 32
-
-[[upgrade]]
-id = "m32_hail"
-name = "Hailstorm"
-desc = "MILESTONE: +4 projectiles to every weapon"
+id = "m8_tempest"
+name = "Tempest"
+desc = "All weapons fire 2 more projectiles, granted twice over"
 effect = "proj_add"
-value = 4
+value = 2
+grants = 2
 max_stacks = 1
 kind = "milestone"
-level = 32
+level = 8
+group = "execution"
 
+# L16 --- ELEMENT: what your hits leave on them. Four mutually exclusive answers
+# to "how do you want a body to feel", applied from the one place every point of
+# player damage goes through, so they work from every weapon without any weapon
+# knowing. This is the group that needs a four-slot screen.
 [[upgrade]]
-id = "m64_immortal"
-name = "Immortal"
-desc = "MILESTONE: +300 max HP and heal 300"
-effect = "max_hp_add"
-value = 300
+id = "m16_frostbind"
+name = "Frostbind"
+desc = "Every hit chills what it strikes for 2.5s"
+effect = "mark_slow"
+value = 2.5
 max_stacks = 1
 kind = "milestone"
-level = 64
+level = 16
+group = "element"
 
 [[upgrade]]
-id = "m64_perfect"
-name = "Perfection"
-desc = "MILESTONE: +100% fire rate to every weapon"
-effect = "fire_rate"
+id = "m16_emberbrand"
+name = "Emberbrand"
+desc = "Every hit sets it alight: 22 burning damage a second"
+effect = "mark_burn"
+value = 22
+max_stacks = 1
+kind = "milestone"
+level = 16
+group = "element"
+
+[[upgrade]]
+id = "m16_hex"
+name = "Hex"
+desc = "Every hit makes that body take 14% more damage, up to +112%"
+effect = "mark_vuln"
+value = 0.14
+max_stacks = 1
+kind = "milestone"
+level = 16
+group = "element"
+
+[[upgrade]]
+id = "m16_splitarmor"
+name = "Armour Split"
+desc = "Every hit strips 22 of the target's own armour, for good"
+effect = "mark_defstrip"
+value = 22
+max_stacks = 1
+kind = "milestone"
+level = 16
+group = "element"
+
+# L32 --- MOMENTUM: what the kill chain is FOR. The meter is the one part of the
+# run that is not a bought number, so the milestone asks what it is worth rather
+# than adding a fourth flat multiplier to it.
+[[upgrade]]
+id = "m32_bloodthirst"
+name = "Bloodthirst"
+desc = "The kill chain feeds twice as fast, lasts twice as long, and its top end lifesteals"
+effect = "momentum_bloodthirst"
 value = 1.0
 max_stacks = 1
 kind = "milestone"
-level = 64
+level = 32
+group = "momentum"
 
 [[upgrade]]
-id = "m64_vanquish"
-name = "Vanquisher"
-desc = "MILESTONE: +150% damage"
-effect = "damage_mul"
-value = 1.5
-max_stacks = 1
-kind = "milestone"
-level = 64
-
-[[upgrade]]
-id = "m128_ascend"
-name = "Ascendant Skin"
-desc = "MILESTONE: +200 defense"
-effect = "defense_add"
-value = 200
-max_stacks = 1
-kind = "milestone"
-level = 128
-
-[[upgrade]]
-id = "m128_starlight"
-name = "Starlight Ward"
-desc = "MILESTONE: +500 regenerating shield"
-effect = "shield_add"
-value = 500
-max_stacks = 1
-kind = "milestone"
-level = 128
-
-[[upgrade]]
-id = "m128_overdrive"
-name = "Overdrive"
-desc = "MILESTONE: +200% damage"
-effect = "damage_mul"
+id = "m32_haste"
+name = "Momentum"
+desc = "The kill chain grants +2% fire rate per stack, up to +60%"
+effect = "momentum_rate"
 value = 2.0
 max_stacks = 1
 kind = "milestone"
-level = 128
+level = 32
+group = "momentum"
 
-# --- Hoarfrost Wake ------------------------------------------------------------
-# The card's rule is that the AURA stops being a bubble around each shard and
-# becomes the corridor itself: a second, much wider shell of cold that follows the
-# volley at the edge of its own spread. Shards then only need to carry the
-# freezing, and the two together stop being "one shard with a halo" and start
-# being a lane that nothing walks down at full speed.
+[[upgrade]]
+id = "m32_slaughter"
+name = "Slaughter"
+desc = "The kill chain grants +8% damage per stack, up to +240%"
+effect = "momentum_damage"
+value = 8.0
+max_stacks = 1
+kind = "milestone"
+level = 32
+group = "momentum"
+
+# L64 --- BULWARK: what happens when one of them lands on you. Contact is where
+# the game actually kills people, so this group is about the contact itself.
+[[upgrade]]
+id = "m64_mantle"
+name = "Stone Mantle"
+desc = "Armour +120, granted twice over"
+effect = "defense_add"
+value = 120
+grants = 2
+max_stacks = 1
+kind = "milestone"
+level = 64
+group = "bulwark"
+
+[[upgrade]]
+id = "m64_thorns"
+name = "Barbed Skin"
+desc = "Anything that touches you bursts for 40 damage around you"
+effect = "thorns"
+value = 40
+max_stacks = 1
+kind = "milestone"
+level = 64
+group = "bulwark"
+
+[[upgrade]]
+id = "m64_repulse"
+name = "Repulsion"
+desc = "Anything that touches you is thrown 40 units clear, and every knockback you deal is 60% harder"
+effect = "knockback_retaliate"
+value = 40
+max_stacks = 1
+kind = "milestone"
+level = 64
+group = "bulwark"
+
+# L128 --- APOTHEOSIS: the last word, and four ways to spend it. A four-slot screen
+# at the end of the ladder, where the numbers are large enough that the choice is
+# the only thing left that matters.
+[[upgrade]]
+id = "m128_ascend"
+name = "Ascendant Skin"
+desc = "Armour +300 and +200% regeneration"
+effect = "defense_add"
+value = 300
+grants = 2
+max_stacks = 1
+kind = "milestone"
+level = 128
+group = "apotheosis"
+
+[[upgrade]]
+id = "m128_crown"
+name = "Crimson Crown"
+desc = "Lifesteal +40% and +8% regeneration, granted twice over"
+effect = "lifesteal_add"
+value = 40
+grants = 2
+max_stacks = 1
+kind = "milestone"
+level = 128
+group = "apotheosis"
+
+[[upgrade]]
+id = "m128_vanquish"
+name = "Vanquisher"
+desc = "All damage +180%"
+effect = "damage_mul"
+value = 1.8
+max_stacks = 1
+kind = "milestone"
+level = 128
+group = "apotheosis"
+
+[[upgrade]]
+id = "m128_perfect"
+name = "Perfection"
+desc = "Fire rate +120%, so everything you own fires more than twice as often"
+effect = "fire_rate"
+value = 1.2
+max_stacks = 1
+kind = "milestone"
+level = 128
+group = "apotheosis"
+
+
+
 
 [[upgrade]]
 id = "uw_rimewake_deepfreeze"

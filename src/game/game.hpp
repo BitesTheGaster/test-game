@@ -243,6 +243,19 @@ struct PlayerStats {
   int momentumMax = 20;         // chain length that counts
   float momentumWindow = 3.0F;  // seconds of not killing before the chain drops
   float momentumGain = 1.0F;    // stacks per kill
+  // --- On-hit marks ------------------------------------------------------------
+  // Four ways to make a body take longer to reach you or shorter to live, and the
+  // milestone card that buys one of them closes the other three for the rest of
+  // the run. That is the point: they are four answers to the same question, not
+  // four numbers to collect. Every one of them is applied inside
+  // applyEnemyDamage, which is the single funnel every point of player damage
+  // goes through -- so a mark works from every weapon, every projectile and every
+  // area tick without any of them knowing it exists.
+  float markChillTime = 0.0F;  // Frostbind: seconds of chill per hit
+  float markBurnDps = 0.0F;    // Emberbrand: burn damage per second
+  float markVuln = 0.0F;       // Hex: +damage taken added per hit
+  float markVulnMax = 0.0F;    // and the ceiling on it
+  float markDefStrip = 0.0F;   // Armour Split: defence removed per hit
   // --- Active abilities (J / K / L) -------------------------------------------
   // Three buttons that exist in every run from the first second — no unlock, no
   // card, no level. They are what the player reaches for when a build is done
@@ -514,6 +527,13 @@ public:
   // exactly this many today; it can never ship more.
   static constexpr int kMaxSlotCards = kMaxWeapons - kBaseWeapons;
 
+  // How many cards a single milestone screen may hold. A milestone used to be a
+  // flat two no matter what the content had, which is why a four-way question had
+  // to be split across two screens and half of it was never asked. Now the
+  // screen is as wide as the group is, capped here so a runaway group cannot
+  // paint a wall of cards over the game.
+  static constexpr std::size_t kMaxMilestoneSlots = 4;
+
   // --- Fast-enemy pacing ----------------------------------------------------
   //
   // Three numbers, one intent: a quick enemy should be something the run grows
@@ -751,6 +771,24 @@ public:
   }
   // Test helper: current HP of the first Enemy in the registry (-1 if none).
   [[nodiscard]] float testFirstEnemyHp() const;
+  // Test helper: move the player straight to a level and rebuild the offer, so a
+  // test can look at a milestone screen without playing four minutes to reach it.
+  // Level-up is a state machine in the real game; this jumps the counter only.
+  void testSetLevel(int level) {
+    level_ = level;
+    milestoneOffer_ = false;
+    buildChoices();
+  }
+  // Test helper: whether an upgrade card has been closed off by an earlier pick
+  // from its mutually exclusive group.
+  [[nodiscard]] bool testUpgradeBlocked(int index) const {
+    return index < 0 || static_cast<std::size_t>(index) >= blocked_.size() ||
+           blocked_[static_cast<std::size_t>(index)] != 0;
+  }
+  // Test helper: the speed multiplier each body is currently pinned to (its own
+  // slowMul while a chill is running, 1.0 otherwise), and the chill's seconds
+  // left, interleaved.
+  [[nodiscard]] std::vector<float> testEnemySpeedMuls() const;
   // Test helper: damage-aura radius/dps of the first Enemy carrying an aura
   // (0 if none), so the per-tier aura sizes can be asserted.
   [[nodiscard]] float testFirstAuraRadius() const;
@@ -1384,7 +1422,13 @@ private:
   // Recomputes recentTypes_: the 3 highest-unlock_at enemy types, which are
   // exempt from overlord retirement so the spawn pool never runs dry.
   void refreshRecentTypes();
-  void applyEnemyDamage(entt::entity e, float dmg);
+  // `mark` is true for damage the player dealt and false for the burn ticking,
+  // so the burn cannot keep re-applying the mark that lit it. Every other caller
+  // leaves it alone.
+  void applyEnemyDamage(entt::entity e, float dmg, bool mark = true);
+  // The four on-hit marks. Split out so the damage path stays readable and so a
+  // test can call them directly on a known body.
+  void applyMarks(entt::entity e, float towardX, float towardY);
   // Chill/status helper. `mul` < 1 is the speed the enemy is pinned to; the
   // strongest chill in play wins and any chill refreshes the timer.
   void applyChill(entt::entity e, float mul, float time);
@@ -1506,6 +1550,7 @@ private:
   float savedPlayerX_ = 0.0F;
   float savedPlayerY_ = 0.0F;
   PlayerStats savedStats_;
+  std::vector<char> savedBlocked_;
   std::vector<int> savedStacks_;
   std::vector<int> savedBestiaryKills_;
   std::vector<std::uint8_t> savedBestiaryTiers_;
@@ -1716,6 +1761,11 @@ private:
 
   PlayerStats stats_;
   std::vector<int> stacks_;    // per-upgrade stack counts
+  // Per-upgrade "this one is closed off", set when a card from a mutually
+  // exclusive group is taken. Separate from stacks_ on purpose: a blocked card
+  // has zero stacks and is not available at max stacks -- it is a decision the
+  // run already made and cannot take back.
+  std::vector<char> blocked_;
   std::vector<Choice> choices_; // level-up cards
 
   entt::entity player_ = entt::null;

@@ -4,6 +4,7 @@
 
 #include <toml++/toml.hpp>
 
+#include <algorithm>
 #include <stdexcept>
 
 namespace game {
@@ -388,6 +389,8 @@ Content loadContent(const std::filesystem::path& dir) {
       def.kind = (*t)["kind"].value<std::string>().value_or("normal");
       def.weapon = (*t)["weapon"].value<std::string>().value_or("");
       def.level = static_cast<int>((*t)["level"].value_or(0));
+      def.group = (*t)["group"].value_or(std::string());
+      def.grants = std::max(1, (*t)["grants"].value_or(1));
       content.upgrades.push_back(std::move(def));
     }
   }

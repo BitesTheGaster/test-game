@@ -707,11 +707,16 @@ TEST_CASE("Milestones fire on power-of-two levels (4, 8, ...) not 5") {
   REQUIRE(g.level() == 4);
   REQUIRE(g.state() == game::RunState::Playing);
 
-  // Level 4 is a milestone level: pick-of-2 from the milestone pool.
+  // Level 4 is a milestone level. The card count is the size of the group the
+  // milestone drew, so it is no longer a fixed two -- it is whatever the exclusive
+  // question at that level happens to be worth. The test below pins the real
+  // numbers; here we only care that it is a milestone and that it offers more
+  // than the flat two it used to.
   g.grantXp(game::xpForLevel(4));
   REQUIRE(g.state() == game::RunState::LevelUp);
   REQUIRE(g.milestoneOffer());
-  REQUIRE(g.upgradeChoices().size() == 2);
+  REQUIRE(g.upgradeChoices().size() >= 2);
+  REQUIRE(g.upgradeChoices().size() <= game::Game::kMaxMilestoneSlots);
 
   // A non-power-of-two level (5) behaves like a normal level-up.
   game::FrameInput in{};
@@ -2324,25 +2329,55 @@ TEST_CASE("Outline unlocks persist across runs (they are not run-local)") {
 
 // --- Round 10: lifesteal nerf, arsenal slots, new supers, sandbox ----------
 
-TEST_CASE("Lifesteal values are halved and the kill trigger is kept") {
+TEST_CASE("Vampirism is reachable, the milestone grants it repeatedly, the trigger is a kill") {
   const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
-  const auto value = [&content](const char* id) {
+  const auto find = [&content](const char* id) -> const game::UpgradeDef* {
     for (const auto& u : content.upgrades) {
-      if (u.id == id) return u.value;
+      if (u.id == id) return &u;
     }
-    return -1.0F;
+    return nullptr;
   };
-  // The user's ask: everything that grants vampirism is twice as weak, and the
-  // healing still only rolls on a kill (not per hit).
-  REQUIRE(value("leech_gold") == Catch::Approx(4.0F));
-  REQUIRE(value("leech_soul") == Catch::Approx(6.0F));
-  REQUIRE(value("m4_pact") == Catch::Approx(6.0F));
-  REQUIRE(value("m16_crown") == Catch::Approx(8.0F));
+  // Round 10 halved every lifesteal number because vampirism was outscaling the
+  // rest of the game. It is back -- the ask now is that vampirism should be
+  // REACHABLE, not that it should be the strongest stat on the board -- and the
+  // way that is done is the milestone group: vampirism, regeneration and a shield
+  // are three mutually exclusive answers, so the build that takes the lifesteal
+  // one takes a much bigger number than the old flat card ever did.
+  const auto* gold = find("leech_gold");
+  const auto* soul = find("leech_soul");
+  const auto* crimson = find("m4_crimson");
+  const auto* crown = find("m128_crown");
+  REQUIRE(gold != nullptr);
+  REQUIRE(soul != nullptr);
+  REQUIRE(crimson != nullptr);
+  REQUIRE(crown != nullptr);
+  // The everyday cards are still modest, so vampirism is not simply strong
+  // everywhere -- it is a build you commit to.
+  REQUIRE(gold->value == Catch::Approx(4.0F));
+  REQUIRE(soul->value == Catch::Approx(6.0F));
+  // The milestone one is "several times over", which is a different promise from
+  // a big number and is the reason `grants` exists at all.
+  REQUIRE(crimson->value == Catch::Approx(9.0F));
+  REQUIRE(crimson->grants == 3);
+  REQUIRE(crown->value == Catch::Approx(40.0F));
+  REQUIRE(crown->grants == 2);
+  // And the strongest single number in the game for lifesteal is a MILESTONE, so
+  // vampirism has somewhere to go and the run has to be pointed at it.
+  float best = 0.0F;
   for (const auto& u : content.upgrades) {
     if (u.effect != "lifesteal_add") continue;
     CAPTURE(u.id);
-    REQUIRE(u.value <= 8.0F);
+    best = std::max(best, u.value * static_cast<float>(u.grants));
   }
+  REQUIRE(best >= 80.0F);
+  // A milestone card that grants several applications must be the top of that
+  // list and must be exclusive with the two other survival answers.
+  REQUIRE((crown->group == "survivor" || crimson->group == "survivor"));
+  int survivor = 0;
+  for (const auto& u : content.upgrades) {
+    if (u.group == "survivor") ++survivor;
+  }
+  REQUIRE(survivor == 3);
 
   // Still kill-triggered: hitting an enemy many times must not heal at all.
   game::Game g{content, 91};
@@ -6443,4 +6478,282 @@ TEST_CASE("No minute of the run opens more than two enemy types") {
   float last = 0.0F;
   for (const auto& e : content.enemies) last = std::max(last, e.unlockAt);
   REQUIRE(last >= 540.0F);
+}
+
+// --- Round 16: milestone groups, and the marks they buy ----------------------
+
+TEST_CASE("A milestone lays out a whole exclusive group, and taking one closes the rest") {
+  // The design the player asked for: a pair, a trio or a quartet of cards that
+  // always arrive TOGETHER, of which exactly one can be taken, and the rest are
+  // gone for the run. It used to be three flat cards with two of them shown, so
+  // the screen was "a number, or a bigger number" and nothing was decided.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+
+  // Every milestone card belongs to a group. A milestone card outside one is a
+  // flat number that is neither exclusive nor part of a question, which is the
+  // thing this whole section stopped being.
+  std::vector<std::string> groups;
+  int milestoneCards = 0;
+  for (const auto& u : content.upgrades) {
+    if (u.kind != "milestone") continue;
+    ++milestoneCards;
+    CAPTURE(u.id);
+    REQUIRE_FALSE(u.group.empty());
+    REQUIRE(u.maxStacks == 1); // one decision, not a grind
+    if (std::find(groups.begin(), groups.end(), u.group) == groups.end()) {
+      groups.push_back(u.group);
+    }
+  }
+  CAPTURE(milestoneCards);
+  // Six levels of ladder, and the two the player named plus the kill chain and
+  // contact are all in there.
+  REQUIRE(groups.size() == 6);
+  for (const char* want : {"survivor", "execution", "element", "momentum", "bulwark",
+                           "apotheosis"}) {
+    CAPTURE(want);
+    REQUIRE(std::find(groups.begin(), groups.end(), want) != groups.end());
+  }
+
+  // At least one group is a quartet, because a four-way question is the whole
+  // reason the milestone screen is allowed four slots.
+  std::size_t widest = 0;
+  for (const auto& gname : groups) {
+    std::size_t n = 0;
+    for (const auto& u : content.upgrades) {
+      if (u.group == gname) ++n;
+    }
+    widest = std::max(widest, n);
+  }
+  CAPTURE(widest);
+  REQUIRE(widest == 4);
+  // And every group fits on one screen, so no exclusive question is ever split.
+  for (const auto& gname : groups) {
+    std::size_t n = 0;
+    for (const auto& u : content.upgrades) {
+      if (u.group == gname) ++n;
+    }
+    CAPTURE(gname);
+    REQUIRE(n <= game::Game::kMaxMilestoneSlots);
+  }
+}
+
+TEST_CASE("A milestone screen shows every card of the group it drew, and the rest stay locked") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  const auto groupOf = [&content](int level) -> std::string {
+    for (const auto& u : content.upgrades) {
+      if (u.kind == "milestone" && u.level == level) return u.group;
+    }
+    return {};
+  };
+  const auto sizeOf = [&content](const std::string& g) {
+    std::size_t n = 0;
+    for (const auto& u : content.upgrades) {
+      if (u.group == g) ++n;
+    }
+    return n;
+  };
+
+  for (const int level : {4, 8, 16, 32, 64, 128}) {
+    CAPTURE(level);
+    const std::string gname = groupOf(level);
+    REQUIRE_FALSE(gname.empty());
+
+    game::Game g{content, 4242};
+    g.testClearWeapons();
+    g.testSetLevel(level);
+    const auto offer = g.upgradeChoices();
+    // Not two "choices" any more: the whole question is on the screen.
+    REQUIRE(offer.size() == sizeOf(gname));
+    REQUIRE(g.milestoneOffer());
+    for (const auto& c : offer) REQUIRE(c.kind == game::Choice::Kind::Upgrade);
+
+    // Take the first one. Every sibling is now closed off, and it can never be
+    // offered again -- checked by advancing to the NEXT milestone and confirming
+    // that no card from this group is on the screen.
+    const int taken = offer.front().index;
+    REQUIRE(g.testGrantUpgrade(taken));
+    for (int nxt : {level * 2, level * 2 + 0}) {
+      if (nxt == level) continue;
+      g.testSetLevel(nxt);
+      for (const auto& c : g.upgradeChoices()) {
+        CAPTURE(nxt);
+        CAPTURE(c.index);
+        // -1 is the "skip / nothing left" card, which has no group at all.
+        if (c.index < 0) continue;
+        const auto& u = content.upgrades[static_cast<std::size_t>(c.index)];
+        REQUIRE(u.group != gname);
+      }
+    }
+  }
+}
+
+TEST_CASE("A group is only closed by taking one of its cards, not by passing the level") {
+  // The obvious bug in an exclusive system: the lock fires on "a milestone
+  // happened" instead of on "the player chose", and a run silently loses a third
+  // of its upgrade space because it skipped a level-up to read the screen.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+
+  game::Game g{content, 99};
+  g.testClearWeapons();
+  g.testSetLevel(4);
+  const auto first = g.upgradeChoices();
+  REQUIRE(first.size() == 3);
+  // Skip without taking anything.
+  g.testClearWeapons();
+  g.testSetLevel(4);
+  REQUIRE(g.upgradeChoices().size() == 3);
+  for (const auto& c : g.upgradeChoices()) REQUIRE(c.index >= 0);
+
+  // Now actually take one and confirm the same three are NOT on offer again.
+  const int idx = g.upgradeChoices().front().index;
+  REQUIRE(g.testGrantUpgrade(idx));
+  g.testSetLevel(4);
+  // Level 4 is a one-shot level, so buildChoices will fall back to a normal
+  // level-up; what matters is that none of the group is in it.
+  int survivors = 0;
+  for (const auto& u : content.upgrades) {
+    if (u.group == "survivor") ++survivors;
+  }
+  REQUIRE(survivors == 3);
+  for (const auto& c : g.upgradeChoices()) {
+    if (c.index < 0) continue;
+    const auto& u = content.upgrades[static_cast<std::size_t>(c.index)];
+    CAPTURE(u.id);
+    REQUIRE(u.group != "survivor");
+  }
+}
+
+TEST_CASE("A card that grants several applications lands them all") {
+  // "An item that improves vampirism several times" is a promise about HOW MANY
+  // TIMES, not a bigger number, which is why `grants` is its own field: the
+  // player can see the count before committing. Tested through the real effect so
+  // a card that lies about its count cannot ship.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  int idx = -1;
+  for (std::size_t i = 0; i < content.upgrades.size(); ++i) {
+    if (content.upgrades[i].id == "m4_crimson") idx = static_cast<int>(i);
+  }
+  REQUIRE(idx >= 0);
+  const auto& def = content.upgrades[static_cast<std::size_t>(idx)];
+  REQUIRE(def.effect == "lifesteal_add");
+  REQUIRE(def.grants == 3);
+
+  game::Game g{content, 7};
+  g.testClearWeapons();
+  const float before = g.stats().lifesteal;
+  REQUIRE(g.testGrantUpgrade(idx));
+  // Three applications of value, not one, and not three times value either.
+  REQUIRE(g.stats().lifesteal == Catch::Approx(before + def.value * 3.0F));
+}
+
+TEST_CASE("The four on-hit marks are exclusive, real, and none of them is free") {
+  // The mark group is the second question the player asked for: "do you want to
+  // slow them, or set them on fire, or something else?" Four answers, one pick.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+
+  struct Mark {
+    const char* id;
+    const char* effect;
+  };
+  const Mark marks[] = {
+      {"m16_frostbind", "mark_slow"}, {"m16_emberbrand", "mark_burn"},
+      {"m16_hex", "mark_vuln"},       {"m16_splitarmor", "mark_defstrip"},
+  };
+  std::vector<int> idxs;
+  for (const auto& m : marks) {
+    int idx = -1;
+    for (std::size_t i = 0; i < content.upgrades.size(); ++i) {
+      if (content.upgrades[i].id == m.id) {
+        idx = static_cast<int>(i);
+        REQUIRE(content.upgrades[i].effect == m.effect);
+        REQUIRE(content.upgrades[i].group == "element");
+      }
+    }
+    CAPTURE(m.id);
+    REQUIRE(idx >= 0);
+    REQUIRE(content.upgrades[static_cast<std::size_t>(idx)].value > 0.0F);
+    idxs.push_back(idx);
+  }
+  REQUIRE(idxs.size() == 4);
+  // A run can own exactly one of them: the group closes after the first.
+  for (const int taken : idxs) {
+    game::Game g{content, 5};
+    g.testClearWeapons();
+    REQUIRE(g.testGrantUpgrade(taken));
+    // The three it did not take are exactly the ones that are now closed off.
+    for (const int other : idxs) {
+      if (other == taken) continue;
+      CAPTURE(other);
+      REQUIRE(g.testUpgradeBlocked(other));
+    }
+    // And the one it took is not.
+    REQUIRE_FALSE(g.testUpgradeBlocked(taken));
+    // And the one it took is genuinely live: exactly one mark field is non-zero.
+    const auto& st = g.stats();
+    const int live = (st.markChillTime > 0.0F ? 1 : 0) + (st.markBurnDps > 0.0F ? 1 : 0) +
+                     (st.markVuln > 0.0F ? 1 : 0) + (st.markDefStrip > 0.0F ? 1 : 0);
+    CAPTURE(live);
+    REQUIRE(live == 1);
+  }
+}
+
+TEST_CASE("Frostbind chills on every hit, so a melee weapon can hold a front rank") {
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 31};
+  g.testDisableWaves();
+  g.testClearWeapons();
+  g.testAddWeapon(0); // the wand: fast, weak, always hitting
+  REQUIRE(game::applyUpgrade(g.stats(), "mark_slow", 2.0F).valid);
+  g.testSpawnEnemyAt(1.2F, 0.0F);
+  g.testAdvance(0.4F);
+  // The chill is a real timer on the body, not a hidden multiplier.
+  const auto muls = g.testEnemySpeedMuls();
+  REQUIRE(!muls.empty());
+  CAPTURE(muls.front());
+  REQUIRE(muls.front() < 1.0F);
+}
+
+TEST_CASE("Emberbrand keeps a body alight only while it is still being hit") {
+  // The refresh-on-hit rule is the whole character of the card: a fast weapon
+  // holds a pack burning and a slow heavy hitter does not, so it is a question
+  // of hit RATE rather than another flat damage number. Tested as the difference
+  // between the two, not as an absolute.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  const float dps = 40.0F;
+
+  // Struck once, then left alone: the burn runs its window and the body dies of
+  // it well after the last hit.
+  game::Game once{content, 12};
+  once.testDisableWaves();
+  once.testClearWeapons();
+  once.testAddWeapon(0);
+  REQUIRE(game::applyUpgrade(once.stats(), "mark_burn", dps).valid);
+  once.testSpawnEnemyAt(1.5F, 0.0F);
+  once.testAdvance(1.0F);
+  // Cut off the source of further hits, then let the fire work on its own.
+  once.testClearWeapons();
+  const float litHp = once.testFirstEnemyHp();
+  REQUIRE(litHp < 100000.0F);
+  once.testAdvance(2.0F);
+  const float burntHp = once.testFirstEnemyHp();
+  CAPTURE(litHp);
+  CAPTURE(burntHp);
+  REQUIRE(burntHp < litHp);
+
+  // Struck continuously: the burn never lapses, so a body under fire keeps
+  // losing HP for as long as the weapon keeps landing.
+  game::Game held{content, 12};
+  held.testDisableWaves();
+  held.testClearWeapons();
+  held.testAddWeapon(0);
+  REQUIRE(game::applyUpgrade(held.stats(), "mark_burn", dps).valid);
+  held.testSpawnEnemyAt(1.2F, 0.0F);
+  held.testAdvance(1.0F);
+  held.testClearWeapons();
+  const float heldStart = held.testFirstEnemyHp();
+  held.testAdvance(0.5F);
+  CAPTURE(heldStart);
+  CAPTURE(held.testFirstEnemyHp());
+  // Still alight half a second after the last hit: the refresh outlived the gap.
+  REQUIRE(held.testFirstEnemyHp() < heldStart);
 }

@@ -45,6 +45,13 @@ struct Enemy {
   // constant so a stronger source can overwrite a weaker one instead of the
   // stronger one having to know what the weaker one did.
   float slowMul = 0.45F;
+  // Burning: damage over time. Separate from the chill above because the two
+  // are bought from the same mutually exclusive milestone group and a build can
+  // never have both, so they do not have to share a timer or a tint. `burnT` is
+  // the seconds left; `burnDps` is refreshed on every hit, so a fast weapon
+  // keeps a target alight indefinitely and a slow one lets it go out.
+  float burnT = 0.0F;
+  float burnDps = 0.0F;
   int def = -1;       // content enemy index for the bestiary (-1 = unknown)
   // Decaying knockback velocity, added on top of the AI seek each tick so
   // explosions, sweeps and the Repulsion Field unique actually shove enemies.
@@ -77,6 +84,11 @@ struct EnemyTraits {
   // Defense uses the same flat+percent curve as the player (mitigateDamage)
   // and grows with run time, so late enemies shrug off a slice of every hit.
   float defense = 0.0F;
+  // Hexed: this body takes more damage than it should, and every player hit
+  // makes it worse. A multiplier rather than a flat bonus, so it rewards a fast
+  // weapon without also being a reason to only ever field one. Capped by the
+  // card that applies it; nothing else writes here.
+  float vuln = 0.0F;
   float lifestealRes = 0.0F; // 0..1: scales the player's lifesteal proc chance
   float knockbackRes = 0.0F; // 0..1: scales incoming knockback
   float shootCooldown = 0.0F; // >0 => ranged attacker (TraitArcher)

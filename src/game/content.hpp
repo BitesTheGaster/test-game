@@ -309,6 +309,16 @@ struct UpgradeDef {
   std::string kind = "normal";
   std::string weapon;
   int level = 0;
+  // Which mutually exclusive set this card belongs to. Empty means the card
+  // stands alone. Every card in a non-empty group is offered TOGETHER and taking
+  // any one of them locks the rest out for the rest of the run, so a group is a
+  // promise: "you may have this axis, or that one, and the run remembers."
+  std::string group;
+  // How many times the effect is applied when the card is taken. A card that
+  // grants 3 reads as "lifesteal, three times over" -- which is a different kind
+  // of promise from one card with a large number on it, because the player can
+  // see how many times it lands.
+  int grants = 1;
 };
 
 // One screen of the in-game manual (assets/data/manual.toml).
