@@ -256,6 +256,11 @@ struct PlayerStats {
   float markVuln = 0.0F;       // Hex: +damage taken added per hit
   float markVulnMax = 0.0F;    // and the ceiling on it
   float markDefStrip = 0.0F;   // Armour Split: defence removed per hit
+  // One more weapon improved per chest. The base is one for an elite, three for a
+  // champion and five for an overlord, so this is the only way to make an elite's
+  // box worth as much as a champion's -- and it stacks, because the whole point
+  // of the card is that the count is the reward.
+  int chestBonus = 0;
   // --- Active abilities (J / K / L) -------------------------------------------
   // Three buttons that exist in every run from the first second — no unlock, no
   // card, no level. They are what the player reaches for when a build is done
@@ -729,6 +734,18 @@ public:
   void testClearWeapons();
   // Test helper: place a stationary, high-HP enemy at a world position.
   void testSpawnEnemyAt(float x, float y);
+  // Test helper: the same body, but carrying an elite tier, so a test can check
+  // that a box drops from the right kind of corpse. Tier 0 leaves the component
+  // absent, exactly as a normal spawn does.
+  void testSpawnEliteAt(float x, float y, int tier);
+  // Test helper: kill exactly the body the last test spawn created. "The first
+  // enemy" is not good enough once a test has more than one on the floor, and
+  // registry view order is not something a test should depend on.
+  void testKillLastSpawned();
+  // Test helper: put a chest on the floor and report what it would spend.
+  int testSpawnChest(float x, float y, int tier, int grants);
+  // Test helper: how many chest bodies are on the floor right now.
+  [[nodiscard]] int testChestCount() const;
   // Test helper: remove every live enemy outright. There is no way to reach an
   // empty arena through the damage path -- a body at zero HP is only reaped by
   // the hit that killed it -- and "what does a projectile do when there is
@@ -747,6 +764,19 @@ public:
   [[nodiscard]] std::vector<int> testEnemyTraitCounts() const;
   // Test hook: freeze wave spawning so tests control the enemy pool exactly.
   void testDisableWaves() { wavesEnabled_ = false; }
+  void testEnableWaves() { wavesEnabled_ = true; }
+  // Test helper: content index of the weapon with this id (-1 if unknown), so a
+  // test can add a NAMED weapon instead of trusting a row order.
+  [[nodiscard]] int testWeaponContentIndex(std::string_view id) const;
+  // Test helper: spend a chest exactly as walking into it would, and report how
+  // many cards it actually gave.
+  int testOpenChestFor(int grants) { return openChest(grants); }
+  [[nodiscard]] std::vector<int> testLegalWeaponCards(int slot) const {
+    return legalWeaponCards(slot);
+  }
+  // Test helper: open the first chest on the floor and remove it, which is what
+  // the pickup does.
+  void testOpenFirstChest();
   // Test hook: jump the run clock, so time-gated systems (spawn tiers, scaling
   // curves) can be tested without simulating minutes of real time.
   void testSetSimTime(float seconds) { simTime_ = seconds; }
@@ -771,6 +801,13 @@ public:
   }
   // Test helper: current HP of the first Enemy in the registry (-1 if none).
   [[nodiscard]] float testFirstEnemyHp() const;
+  // Test helper: how many cards the most recently opened chest actually granted,
+  // and which content card the last of them was. -1 / 0 before any box is opened.
+  [[nodiscard]] int testLastChestGrants() const { return lastChestGrants_; }
+  [[nodiscard]] int testLastChestCard() const { return lastChestCard_; }
+  // Test helper: elites-and-above currently alive. The spawner consults it so
+  // the screen cannot fill with elites, and so a test can pin that cap.
+  [[nodiscard]] int testLiveTierCount() const;
   // Test helper: move the player straight to a level and rebuild the offer, so a
   // test can look at a milestone screen without playing four minutes to reach it.
   // Level-up is a state machine in the real game; this jumps the counter only.
@@ -1356,6 +1393,17 @@ private:
   // One nova ring. Every ring in the game is spawned here, which is what keeps
   // the expanding Shock Core and the contracting Void Nova from drifting apart.
   void spawnNovaRing(float x, float y, const WeaponSlot& w, int pierce);
+  // Drops a chest for a dead elite-and-above. Returns the entity, or null if this
+  // death rolled no box.
+  entt::entity spawnChest(float x, float y, int tier);
+  // Spends a chest on the player's weapons: `grants` random cards, each legal for
+  // one of the weapons the player actually holds, preferring a weapon that has no
+  // card yet so a box opens new lines instead of stacking a fourth copy of one.
+  // Returns how many cards were actually granted.
+  int openChest(int grants);
+  // Every weapon-targeted card in the content that is legal for the weapon in
+  // `weaponSlot` and not yet maxed.
+  [[nodiscard]] std::vector<int> legalWeaponCards(int weaponSlot) const;
   // Spawns one chain bolt. `depth` > 0 means a fork thrown off a parent.
   void spawnChainBolt(float x, float y, const WeaponSlot& w,
                       std::uint32_t fromTarget);
@@ -1429,6 +1477,7 @@ private:
   // The four on-hit marks. Split out so the damage path stays readable and so a
   // test can call them directly on a known body.
   void applyMarks(entt::entity e, float towardX, float towardY);
+  void updateChestToast(float dt);
   // Chill/status helper. `mul` < 1 is the speed the enemy is pinned to; the
   // strongest chill in play wins and any chill refreshes the timer.
   void applyChill(entt::entity e, float mul, float time);
@@ -1551,6 +1600,9 @@ private:
   float savedPlayerY_ = 0.0F;
   PlayerStats savedStats_;
   std::vector<char> savedBlocked_;
+  // The body the last test spawn created. Not saved with the sandbox: it points
+  // at a test-only entity and is meaningless outside a test.
+  entt::entity lastTestSpawn_ = entt::null;
   std::vector<int> savedStacks_;
   std::vector<int> savedBestiaryKills_;
   std::vector<std::uint8_t> savedBestiaryTiers_;
@@ -1657,6 +1709,14 @@ private:
   static constexpr float kChampionPressure = 7.0F;
   // Champion kills needed inside the window to call champions routine.
   static constexpr float kOverlordPressure = 6.0F;
+  // How many elite-and-above bodies may be alive at once. The ask was not "make
+  // elites weaker" -- they are supposed to be the spike -- but "make them rarer,
+  // so there are one or two on screen and meeting one is an event". A live cap
+  // is the only version of that which is actually guaranteed: per-member spawn
+  // chances are independent, so a pack of three can roll three elites and three
+  // packs can roll nine, and no amount of tuning the percentage promises the
+  // player a quiet screen. Rolling the tier happens only when there is room.
+  static constexpr int kLiveTierCap = 2;
   // Even a great player waits this long: the first minute is for the build.
   static constexpr float kChampionMinTime = 90.0F;
   static constexpr float kOverlordMinTime = 240.0F;
@@ -1670,6 +1730,7 @@ private:
   // channel is enough: the newest message replaces the old one.
   std::string tierBanner_;
   float tierBannerT_ = 0.0F;
+  [[nodiscard]] int liveTierCount() const;
   void showBanner(std::string text, float seconds) {
     tierBanner_ = std::move(text);
     tierBannerT_ = seconds;
@@ -1691,6 +1752,15 @@ private:
   float momentumDamageMul_ = 1.0F;
   float momentumRate_ = 0.0F;
   float momentumSpeedMul_ = 1.0F;
+
+  // The last chest the player opened: which card came out of it, how many it
+  // actually gave, and how long the toast stays up. The toast is a courtesy --
+  // a box spends itself whether or not anybody reads it -- but a reward the
+  // player cannot identify is a reward that feels like nothing happened.
+  int lastChestCard_ = -1;
+  int lastChestGrants_ = 0;
+  float lastChestTimer_ = 0.0F;
+  static constexpr float kChestToastTime = 2.6F;
 
   // Active ability state (see the Ability enum above).
   float abilityCd_[kAbilityCount] = {0.0F, 0.0F, 0.0F};

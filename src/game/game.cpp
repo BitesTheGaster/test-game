@@ -290,6 +290,14 @@ UpgradeEffectResult applyUpgrade(PlayerStats& stats, std::string_view effect, fl
     stats.markDefStrip += value;
     return {true, 0.0F, 0.0F};
   }
+  if (effect == "chest_bonus") {
+    // One more weapon per box. It is on a card rather than baked into the tier
+    // numbers because the count IS the reward: making the elite's box bigger is
+    // the whole point of making elites rarer, and this is the lever that lets a
+    // player push the elite's box up to a champion's without a champion existing.
+    stats.chestBonus += static_cast<int>(value);
+    return {true, 0.0F, 0.0F};
+  }
   if (effect == "thorns") {
     stats.thornsDmg += value;
     return {true, 0.0F, 0.0F};
@@ -1102,6 +1110,8 @@ void Game::fixedStep() {
   updateNovaRing();
   updateEnemyShots();
   updatePickups();
+  // Fixed step, like every other timer in here.
+  updateChestToast(1.0F / 60.0F);
 
   // Regen.
   if (stats_.regen > 0.0F && player_ != entt::null && registry_.valid(player_)) {
@@ -2565,6 +2575,20 @@ void Game::killEnemy(entt::entity e) {
   s.circle = true;
   registry_.emplace<Sprite>(orb, s);
   registry_.emplace<Xp>(orb, xpValue);
+  // An elite-and-above leaves a box behind. It is not guaranteed on every elite
+  // death -- a run that farms elites should not be showered -- but the roll is
+  // generous enough that an elite is normally worth walking over, because the
+  // box is the only reason an elite is a reward rather than just a tax.
+  if (const auto* tr = registry_.try_get<EnemyTraits>(e); tr != nullptr &&
+      tr->tier > 0) {
+    // Guaranteed, not rolled. Elites are capped at two on screen now, so a box
+    // per elite is a steady trickle rather than a flood, and a player who kills
+    // an elite and watches nothing come out of it concludes the reward is
+    // unreliable -- which is worse than a slightly too generous one.
+    spawnChest(t.x, t.y, static_cast<int>(tr->tier));
+    lastChestTimer_ = std::max(lastChestTimer_, 1.4F);
+    lastChestGrants_ = 0;
+  }
   destroyQueue_.push_back(e);
   ++kills_;
   // Momentum: every kill feeds the chain, so farming the same weak enemy still
@@ -4439,17 +4463,110 @@ void Game::updateNovaRing() {
   }
 }
 
+// --- Elite chests -------------------------------------------------------------
+// The tier's gift. An elite opens one box, a champion three, an overlord five,
+// plus whatever the Deep Cache card adds, and the box spends itself on the
+// player's OWN weapons -- one legal card each, preferring a weapon that has none
+// yet. So the run gets rarer elites precisely so that meeting one is worth
+// something, and the size of the box is the visible difference between a tier and
+// the one below it.
+std::vector<int> Game::legalWeaponCards(int weaponSlot) const {
+  std::vector<int> out;
+  if (weaponSlot < 0 || weaponSlot >= weaponCount_) return out;
+  const std::string& id = content_.weapons[static_cast<std::size_t>(weapons_[weaponSlot].def)].id;
+  for (std::size_t i = 0; i < content_.upgrades.size(); ++i) {
+    const auto& u = content_.upgrades[i];
+    if (u.weapon != id) continue;
+    if (blocked_[i]) continue;
+    if (stacks_[i] >= u.maxStacks) continue;
+    out.push_back(static_cast<int>(i));
+  }
+  return out;
+}
+
+int Game::openChest(int grants) {
+  if (grants <= 0) return 0;
+  int given = 0;
+  for (int n = 0; n < grants; ++n) {
+    // Weapons that still have a card left. A weapon with nothing left is skipped
+    // rather than counted, so a seven-weapon arsenal does not waste a third of a
+    // champion's gift on nothing.
+    std::vector<int> slots;
+    for (int s = 0; s < weaponCount_; ++s) {
+      if (!legalWeaponCards(s).empty()) slots.push_back(s);
+    }
+    if (slots.empty()) break;
+    // Prefer a weapon this box has not touched yet. Without that, a chest picks
+    // uniformly and stacks the first weapon's damage card four times, which is
+    // the same thing a level-up card would have done and much less interesting.
+    std::vector<int> fresh;
+    for (const int s : slots) {
+      if (legalWeaponCards(s).size() > 1 || given == 0) fresh.push_back(s);
+    }
+    if (!fresh.empty()) slots = fresh;
+    const int slot = slots[static_cast<std::size_t>(rng_() % slots.size())];
+    const auto cards = legalWeaponCards(slot);
+    if (cards.empty()) continue;
+    const int card = cards[static_cast<std::size_t>(rng_() % cards.size())];
+    if (applyUpgradeAt(card)) {
+      ++given;
+      // The HUD wants to say what came out of the box.
+      lastChestCard_ = card;
+    }
+  }
+  return given;
+}
+
+entt::entity Game::spawnChest(float x, float y, int tier) {
+  // How many weapons this tier's box improves. The numbers are the reward: an
+  // elite is one card, a champion is a whole hand, an overlord is most of the
+  // arsenal in one pickup.
+  int base = 1;
+  if (tier == 2) base = 3;
+  if (tier >= 3) base = 5;
+  // NOT clamped to the arsenal size. A box is N CARDS, and openChest spends them
+  // across the weapons the player holds, spreading before repeating. Clamping
+  // here instead would quietly downgrade a champion's gift to an elite's for
+  // every early run -- and the early run is exactly when a champion is hardest
+  // to kill and the box is most worth having.
+  const int grants = base + stats_.chestBonus;
+  if (grants <= 0) return entt::null;
+
+  const auto box = registry_.create();
+  registry_.emplace<Transform>(box, x, y, x, y);
+  registry_.emplace<Velocity>(box);
+  registry_.emplace<Radius>(box, 0.30F);
+  Sprite s{};
+  s.color = tier >= 3 ? core::render::Color{1.00F, 0.80F, 0.25F, 1.0F}
+         : tier == 2 ? core::render::Color{0.75F, 0.50F, 1.00F, 1.0F}
+                      : core::render::Color{0.45F, 0.85F, 1.00F, 1.0F};
+  s.circle = true;
+  registry_.emplace<Sprite>(box, s);
+  Chest c{};
+  c.grants = grants;
+  c.tier = tier;
+  registry_.emplace<Chest>(box, c);
+  return box;
+}
+
 void Game::updatePickups() {
   if (player_ == entt::null || !registry_.valid(player_)) return;
   auto& pt = registry_.get<Transform>(player_);
   const float magnet = 2.0F * stats_.pickupMul;
 
-  auto view = registry_.view<Transform, Velocity, Xp, Radius>();
+  // The view cannot ask for "Xp OR Chest", so it asks for what they share and
+  // the predicate below filters. That is not a stylistic choice: widening this
+  // view to every moving body once made the magnet drag ENEMY PROJECTILES into
+  // the player and delete them, which quietly gutted sixteen weapons' worth of
+  // tests. A pickup is an orb or a box, and nothing else moves toward the player
+  // because it is closer to the player.
+  auto view = registry_.view<Transform, Velocity, Radius>();
   for (const auto e : view) {
     // Living enemies also carry an Xp component (awarded on death) but are
     // never pickups: without this guard every enemy that gets within magnet
     // range was vacuumed into the player and destroyed without dying.
     if (registry_.all_of<Enemy>(e)) continue;
+    if (!registry_.all_of<Xp>(e) && !registry_.all_of<Chest>(e)) continue;
     auto& t = view.get<Transform>(e);
     auto& v = view.get<Velocity>(e);
 
@@ -4472,12 +4589,36 @@ void Game::updatePickups() {
     t.y += v.y / 60.0F;
 
     if (dist < kPickupDist) {
+      // A chest spends itself here, on the player's own weapons, and then gets
+      // out of the way. It is a pickup like any other so the player never has to
+      // press a key for a reward.
+      if (const auto* c = registry_.try_get<Chest>(e); c != nullptr) {
+        const int given = openChest(c->grants);
+        // A box with nothing left to give still opens, and says so, rather than
+        // sitting on the floor forever waiting for a weapon to have a card again.
+        spawnParticles(t.x, t.y, {1.0F, 0.85F, 0.35F, 1.0F}, 12, 5.0F);
+        if (given > 0) {
+          lastChestGrants_ = given;
+          lastChestTimer_ = kChestToastTime;
+        }
+        destroyQueue_.push_back(e);
+        continue;
+      }
       // XP is routed through grantXp() so the sandbox's "no experience" rule
-      // is enforced in exactly one place.
-      grantXp(registry_.get<Xp>(e).value * stats_.xpMul);
-      destroyQueue_.push_back(e);
+      // is enforced in exactly one place. A body that is neither an orb nor a
+      // chest is nothing the player collects, so it is simply left alone.
+      if (const auto* x = registry_.try_get<Xp>(e); x != nullptr) {
+        grantXp(x->value * stats_.xpMul);
+        destroyQueue_.push_back(e);
+      }
     }
   }
+}
+
+// The chest toast is a timer like every other transient HUD message, so it is
+// ticked in the same place the banner is.
+void Game::updateChestToast(float dt) {
+  if (lastChestTimer_ > 0.0F) lastChestTimer_ = std::max(0.0F, lastChestTimer_ - dt);
 }
 
 void Game::updateShield() {
@@ -4963,17 +5104,34 @@ void Game::spawnWave() {
     //
     // Their POWER is deliberately unchanged — an overlord is meant to be the
     // difficulty spike, not a soft one. Only the timing follows the player.
+    // The screen's elite budget for this spawn. Counted ONCE per pack rather
+    // than per member, so a pack of three cannot spend three slots, and the
+    // budget is handed out in tier order: an overlord is worth more than a
+    // champion, which is worth more than an elite, so when there is only room
+    // for one the roll keeps the expensive one.
+    int tierBudget = kLiveTierCap - liveTierCount();
+    if (tierBudget < 0) tierBudget = 0;
     const float eliteChance = tierSpawnChance(1);
     const float champChance = tierSpawnChance(2);
     const float overlordChance = tierSpawnChance(3);
-    bool memberElite = unit(rng_) < eliteChance;
-    bool memberChampion = unit(rng_) < champChance;
-    const bool memberOverlord = unit(rng_) < overlordChance;
-    if (memberChampion) memberElite = true;
-    if (memberOverlord) {
-      memberElite = true;
-      memberChampion = true;
+    const bool memberOverlord = tierBudget > 0 && unit(rng_) < overlordChance;
+    if (memberOverlord) --tierBudget;
+    const bool memberChampion =
+        tierBudget > 0 && !memberOverlord && unit(rng_) < champChance;
+    if (memberChampion) --tierBudget;
+    // An elite is the common tier, so it is the one that fills any leftover room
+    // -- including all of it, when a pack is big. That is the point: the trash
+    // becomes elite instead of the elites becoming trash.
+    bool memberElite = false;
+    if (!memberOverlord && !memberChampion && tierBudget > 0) {
+      const int room = std::min(tierBudget, 3);
+      // A pack may take more than one slot when the screen is empty, which is
+      // the only way an early pack of three can be the "one or two on screen"
+      // moment rather than three separate minutes of one elite.
+      memberElite = room > 0 && unit(rng_) < std::max(eliteChance, 0.34F);
+      if (memberElite) --tierBudget;
     }
+    if (memberChampion || memberOverlord) memberElite = true;
 
     float mHpMul = hpScale;
     float mTouchMul = touchScale;
@@ -5187,6 +5345,17 @@ bool Game::tierUnlocked(int tier) const {
     default: return false;
   }
 }
+
+int Game::liveTierCount() const {
+  int n = 0;
+  auto view = registry_.view<Enemy, EnemyTraits>();
+  for (const auto e : view) {
+    if (view.get<EnemyTraits>(e).tier > 0) ++n;
+  }
+  return n;
+}
+
+int Game::testLiveTierCount() const { return liveTierCount(); }
 
 float Game::tierSpawnChance(int tier) const {
   if (!tierUnlocked(tier)) return 0.0F;
@@ -7223,8 +7392,63 @@ void Game::renderTestShop(core::render::Batcher& b, float px, float py) {
   }
 }
 
+void Game::testSpawnEliteAt(float x, float y, int tier) {
+  testSpawnEnemyAt(x, y);
+  const entt::entity e = lastTestSpawn_;
+  registry_.emplace_or_replace<EnemyTraits>(e, EnemyTraits{});
+  registry_.get<EnemyTraits>(e).tier = static_cast<std::uint8_t>(std::max(1, tier));
+}
+
+void Game::testKillLastSpawned() {
+  if (lastTestSpawn_ == entt::null || !registry_.valid(lastTestSpawn_)) return;
+  killEnemy(lastTestSpawn_);
+  lastTestSpawn_ = entt::null;
+}
+
+int Game::testSpawnChest(float x, float y, int tier, int grants) {
+  const auto box = spawnChest(x, y, tier);
+  if (box == entt::null) return 0;
+  // `grants` < 0 means "whatever the tier promised", which is the interesting
+  // case; a non-negative one overrides it so a test can set up a box of a known
+  // size without needing an arsenal that can absorb it.
+  if (grants >= 0) registry_.get<Chest>(box).grants = grants;
+  return registry_.get<Chest>(box).grants;
+}
+
+int Game::testWeaponContentIndex(std::string_view id) const {
+  for (std::size_t i = 0; i < content_.weapons.size(); ++i) {
+    if (content_.weapons[i].id == id) return static_cast<int>(i);
+  }
+  return -1;
+}
+
+void Game::testOpenFirstChest() {
+  auto view = registry_.view<Chest>();
+  if (view.empty()) return;
+  const entt::entity e = *view.begin();
+  const auto& t = registry_.get<Transform>(e);
+  const int given = openChest(registry_.get<Chest>(e).grants);
+  if (given > 0) {
+    lastChestGrants_ = given;
+    lastChestTimer_ = kChestToastTime;
+  }
+  spawnParticles(t.x, t.y, {1.0F, 0.85F, 0.35F, 1.0F}, 12, 5.0F);
+  registry_.destroy(e);
+}
+
+int Game::testChestCount() const {
+  int n = 0;
+  auto view = registry_.view<Chest>();
+  for (const auto e : view) {
+    (void)e;
+    ++n;
+  }
+  return n;
+}
+
 void Game::testSpawnEnemyAt(float x, float y) {
   const auto e = registry_.create();
+  lastTestSpawn_ = e;
   registry_.emplace<Transform>(e, x, y, x, y);
   registry_.emplace<Velocity>(e);
   registry_.emplace<Radius>(e, 0.3F);
@@ -9069,6 +9293,45 @@ void Game::render(core::render::Batcher& b, float alpha) {
     }
   }
 
+  // Chests. A plain dot would be mistaken for a fat XP orb, so the box is drawn
+  // as one: a dark square lid, a lighter body, and a ring of the tier's colour
+  // whose TICKS equal the number of weapons it will improve. A champion's box is
+  // literally bigger than an elite's, so the size of the reward is readable from
+  // across the screen before the player has to reach it.
+  {
+    auto view = registry_.view<Transform, Sprite, Chest, Radius>();
+    for (const auto e : view) {
+      const auto& t = view.get<Transform>(e);
+      const auto& s = view.get<Sprite>(e);
+      const auto& c = view.get<Chest>(e);
+      const auto& r = view.get<Radius>(e);
+      const float x = t.px + (t.x - t.px) * lerp;
+      const float y = t.py + (t.y - t.py) * lerp;
+      const float bob = 0.05F * std::sin(simTime_ * 4.0F);
+      // Halo on the ground, so a box on the far side of a pack still reads as
+      // something to walk toward.
+      Color glow = s.color;
+      glow.a = 0.14F + 0.06F * std::sin(simTime_ * 4.0F);
+      b.circle(x, y, r.r * 2.4F, glow);
+      const float w = r.r * 2.0F;
+      Color lid{0.14F, 0.13F, 0.20F, 1.0F};
+      b.rect(x - w * 0.5F, y - w * 0.9F + bob, w, w * 0.45F, lid);
+      b.rect(x - w * 0.42F, y - w * 0.42F + bob, w * 0.84F, w * 0.84F, s.color);
+      Color band{0.16F, 0.15F, 0.22F, 1.0F};
+      b.rect(x - w * 0.10F, y - w * 0.42F + bob, w * 0.20F, w * 0.84F, band);
+      // One tick per weapon this box will improve.
+      const int ticks = std::clamp(c.grants, 1, 5);
+      for (int k = 0; k < ticks; ++k) {
+        const float a = (static_cast<float>(k) / static_cast<float>(ticks)) * 2.0F * kPi +
+                        simTime_ * 0.9F;
+        Color tick = s.color;
+        tick.a = 0.9F;
+        b.circle(x + std::cos(a) * r.r * 1.5F, y + std::sin(a) * r.r * 1.5F, 0.055F,
+                 tick);
+      }
+    }
+  }
+
   // Enemies (with tiny HP bar when damaged or when elite).
   {
     auto view = registry_.view<Transform, Sprite, Enemy, Radius, Health>();
@@ -10037,6 +10300,21 @@ void Game::render(core::render::Batcher& b, float alpha) {
     fade.a = a;
     b.text(px * 0.5F - b.textWidth(2.6F, tierBanner_) * 0.5F, py * 0.5F - 150.0F, 2.6F,
            fade, tierBanner_);
+  }
+
+  // Chest toast. A box spends itself the instant it is touched, so without this
+  // the player sees their weapon quietly improve and has no way of telling which
+  // one, or how many. The number is the whole reward, so it is what is written.
+  if (lastChestTimer_ > 0.0F && lastChestGrants_ > 0 && lastChestCard_ >= 0) {
+    const auto& card = content_.upgrades[static_cast<std::size_t>(lastChestCard_)];
+    const std::string what = card.name;
+    const std::string line =
+        "CHEST: " + std::to_string(lastChestGrants_) +
+        (lastChestGrants_ == 1 ? " WEAPON UPGRADED" : " WEAPONS UPGRADED") + " - " + what;
+    const float a = std::min(1.0F, lastChestTimer_ / 0.6F);
+    Color fade{1.0F, 0.85F, 0.35F, a};
+    b.text(px * 0.5F - b.textWidth(2.2F, line) * 0.5F, py * 0.5F - 176.0F, 2.2F, fade,
+           line);
   }
 
   // Off-screen spawn warnings: a small dot at the screen edge marks where an

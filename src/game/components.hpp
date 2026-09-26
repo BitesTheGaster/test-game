@@ -534,6 +534,20 @@ struct Xp {
   float value = 1.0F;
 };
 
+// A dropped chest. Elites and above leave one behind, and walking into it
+// improves that many of the player's OWN weapons -- a random card that is legal
+// for each one. It is a reward for elites rather than a tax: the run gets
+// rarer elites precisely so that meeting one is worth something, and the size of
+// the gift is what tells the player which tier just died.
+struct Chest {
+  // How many of the player's weapons this chest will improve when it is opened.
+  int grants = 1;
+  // The tier it came from, which drives the colour and the ring. Kept so the
+  // render does not have to guess and so a test can tell a champion's box from
+  // an elite's.
+  int tier = 1;
+};
+
 // Persistent rotating beam (halo evolution): a spoke of light anchored to the
 // player that sweeps around and damages everything along its length.
 struct HaloBeam {

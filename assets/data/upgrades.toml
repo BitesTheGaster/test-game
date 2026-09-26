@@ -828,6 +828,14 @@ effect = "weapon_slot_add"
 value = 1
 max_stacks = 3
 [[upgrade]]
+id = "u_deep_cache"
+name = "Deep Cache"
+desc = "Every chest improves one more of your weapons"
+effect = "chest_bonus"
+value = 1
+max_stacks = 3
+
+[[upgrade]]
 id = "u_adrenaline"
 name = "Adrenaline"
 desc = "Below 30% HP: +60% speed and a 1s invulnerability every 20s"

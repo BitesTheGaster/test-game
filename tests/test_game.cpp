@@ -6757,3 +6757,147 @@ TEST_CASE("Emberbrand keeps a body alight only while it is still being hit") {
   // Still alight half a second after the last hit: the refresh outlived the gap.
   REQUIRE(held.testFirstEnemyHp() < heldStart);
 }
+
+// --- Round 16: elite chests, and a quieter screen ---------------------------
+
+TEST_CASE("An elite leaves a chest, a champion three, an overlord five") {
+  // The ask: elites should not be slowed down, they should be rarer, and they
+  // should be worth meeting. The box is the "worth meeting" half, and the size
+  // of the box is the visible difference between a tier and the one below it.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+
+  game::Game g{content, 1234};
+  g.testDisableWaves();
+  g.testClearWeapons();
+  g.testAddWeapon(0);
+
+  struct Want {
+    int tier;
+    int grants;
+  };
+  // tier 0 is trash and must never drop one.
+  g.testSpawnEnemyAt(4.0F, 4.0F);
+  g.testKillLastSpawned();
+  REQUIRE(g.testChestCount() == 0);
+
+  for (const auto& w : std::vector<Want>{{1, 1}, {2, 3}, {3, 5}}) {
+    CAPTURE(w.tier);
+    // A fresh run per tier. A box can never invent cards, so reusing one
+    // exhausted arsenal would measure the wand's card count instead of the
+    // tier's promise -- and would quietly turn a content bug into a pass.
+    game::Game t{content, 1234};
+    t.testDisableWaves();
+    t.testClearWeapons();
+    for (const char* id : {"wand", "dagger", "crossbow", "flame", "hammer"}) {
+      t.testAddWeapon(t.testWeaponContentIndex(id));
+    }
+    t.testSpawnEliteAt(4.0F, 4.0F, w.tier);
+    t.testKillLastSpawned();
+    REQUIRE(t.testChestCount() == 1);
+    t.testOpenFirstChest();
+    CAPTURE(t.testLastChestGrants());
+    REQUIRE(t.testLastChestGrants() == w.grants);
+    // Opening it consumed it: no box may linger to be opened twice.
+    REQUIRE(t.testChestCount() == 0);
+  }
+}
+
+TEST_CASE("A chest spends itself on the player's own weapons, and only legal cards") {
+  // "A random improvement of one of the player's items." The important half is
+  // the last three words: a box must never hand out a card for a weapon the
+  // player does not hold, because that card then sits in the pool waiting for a
+  // weapon that never comes.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+
+  game::Game g{content, 88};
+  g.testDisableWaves();
+  g.testClearWeapons();
+  const int wand = g.testWeaponContentIndex("wand");
+  g.testAddWeapon(wand);
+
+  const int given = g.testOpenChestFor(1);
+  CAPTURE(given);
+  REQUIRE(given == 1);
+  // Whatever it gave, it went to the wand.
+  REQUIRE(g.upgradeStacks(static_cast<std::size_t>(g.testLastChestCard())) == 1);
+  REQUIRE(g.testLastChestCard() >= 0);
+  REQUIRE(content.upgrades[static_cast<std::size_t>(g.testLastChestCard())].weapon ==
+          "wand");
+}
+
+TEST_CASE("A box with nothing left to give still opens") {
+  // The failure this guards is a soft lock: a box that refuses to open because
+  // every weapon is maxed sits on the floor forever, and a player who is waiting
+  // to walk over it is waiting for nothing. It opens, spends nothing, and leaves.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 3};
+  g.testDisableWaves();
+  g.enterTestMode();
+  g.testClearWeapons();
+  g.testAddWeapon(g.testWeaponContentIndex("wand"));
+  g.testMaxAllItems();
+  // Confirm the premise rather than assuming it: the wand really is out of cards.
+  REQUIRE(g.testLegalWeaponCards(0).empty());
+  REQUIRE(g.testChestCount() == 0);
+  // maxAllItems also took the Deep Cache card, so the box is bigger than a bare
+  // elite's -- which does not matter, because a bigger box with nothing to spend
+  // on is still the same dead end this test is about.
+  REQUIRE(g.stats().chestBonus == 3);
+  REQUIRE(g.testSpawnChest(1.0F, 0.0F, 1, -1) == 4);
+  g.testOpenFirstChest();
+  REQUIRE(g.testLastChestGrants() == 0);
+  REQUIRE(g.testChestCount() == 0);
+}
+
+TEST_CASE("Deep Cache makes every chest one weapon bigger") {
+  // The only lever that lets an elite's box reach a champion's without a
+  // champion existing, which is what makes "make elites rarer" survivable.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  int idx = -1;
+  for (std::size_t i = 0; i < content.upgrades.size(); ++i) {
+    if (content.upgrades[i].id == "u_deep_cache") idx = static_cast<int>(i);
+  }
+  REQUIRE(idx >= 0);
+  REQUIRE(content.upgrades[static_cast<std::size_t>(idx)].effect == "chest_bonus");
+  game::PlayerStats probe{};
+  REQUIRE(game::applyUpgrade(probe, "chest_bonus", 1.0F).valid);
+  REQUIRE(probe.chestBonus == 1);
+
+  game::Game g{content, 44};
+  g.testDisableWaves();
+  g.testClearWeapons();
+  for (const char* id : {"wand", "dagger", "crossbow"}) {
+    g.testAddWeapon(g.testWeaponContentIndex(id));
+  }
+  REQUIRE(g.testSpawnChest(1.0F, 0.0F, 1, -1) == 1);
+  g.testOpenFirstChest();
+  const int oneCard = g.testLastChestGrants();
+  CAPTURE(oneCard);
+  REQUIRE(oneCard == 1);
+
+  g.testGrantUpgrade(idx);
+  REQUIRE(g.stats().chestBonus == 1);
+  REQUIRE(g.testSpawnChest(1.0F, 0.0F, 1, -1) == 2);
+}
+
+TEST_CASE("The screen never holds more than two elites at a time") {
+  // "Do not make elites weaker, make them rarer, so there are one or two on
+  // screen." A per-spawn percentage cannot promise that -- packs and waves roll
+  // members independently -- so the cap is a live count, and this pins it.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 6};
+  g.testDisableWaves();
+  g.testClearWeapons();
+  g.testAddWeapon(0);
+  // A handful of elites already on the floor, so the budget is spent.
+  g.testSpawnEliteAt(3.0F, 0.0F, 1);
+  g.testSpawnEliteAt(3.0F, 1.0F, 1);
+  REQUIRE(g.testLiveTierCount() == 2);
+  // Waves are disabled, so the only way the number could grow is the spawner
+  // ignoring the cap, and the only way to test that is to let it run.
+  g.testEnableWaves();
+  g.testAdvance(6.0F);
+  // Generous ceiling: the cap is two ELITE-AND-ABOVE slots, and the cap may be
+  // under-spent on a quiet roll, but it may never be over-spent.
+  REQUIRE(g.testLiveTierCount() <= 2);
+}
