@@ -10,83 +10,189 @@ Regenerate with:
 python3 tools/gendocs.py
 ```
 
-**Totals:** 33 weapons (18 base +
+**Totals:** 32 weapons (18 base +
 11 evolutions +
-4 super evolutions),
-18 enemies, 11 in-game manual pages.
+3 super evolutions),
+18 enemies, 17 in-game manual pages.
 
 ### Base weapons
 
-| Name | ID | Attack | Damage | Cooldown (s) | Projectiles | Proj. speed | Pierce | Spread (rad) | Starter | Traits | Description |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| Arcane Wand | wand | projectile | 9 | 0.34 | 1 | 20 | 0 | 0.1 | yes |  | Quick magic bolts. The baseline done properly: fast, flat, always hits. |
-| Throwing Dagger | dagger | orbit | 5 | 0.4 | 3 | 0 | 0 | 0 | yes |  | Orbiting knives that carve up anything close. |
-| Heavy Crossbow | crossbow | projectile | 20 | 2.2 | 1 | 22 | 4 | 0.18 | yes | homing | Slow, homing piercing bolt that punches through crowds. |
-| Ember Sprayer | flame | cone | 4 | 0.35 | 1 | 0 | 0 | 0 |  |  | Cone of fire - instant damage in a wide arc. |
-| Runic Hammer | hammer | bomb | 45 | 1.8 | 1 | 8 | 0 | 0.3 |  |  | Arcing bomb with massive explosion and knockback. |
-| Storm Shuriken | shuriken | boomerang | 8 | 0.6 | 2 | 16 | 1 | 0.2 |  |  | Boomerang blades - hit going out AND coming back. |
-| Void Orb | orb | bounce | 35 | 1.5 | 1 | 7 | 5 | 0 |  | eternal | One eternal orb that hunts forever. Projectiles grow it, not multiply. |
-| Soul Scythe | scythe | sweep | 55 | 1.3 | 1 | 0 | 0 | 0 |  |  | Reaps a full circle of death around its nearest prey. |
-| Solar Lance | beam | beam | 130 | 1.6 | 1 | 0 | 0 | 0 |  |  | Instant hitscan beam. Slow to swing, but it deletes a whole line at once. |
-| Rail Rifle | railgun | projectile | 78 | 1.8 | 1 | 40 | 6 | 0 |  |  | One hypervelocity slug. Slow to load, punches through an entire rank. |
-| Frost Shards | shard | projectile | 12 | 0.45 | 4 | 20 | 0 | 0.34 |  |  | A tight volley of fast shards that shreds and chills whatever walks into it. |
-| Siege Mortar | mortar | bomb | 62 | 2.4 | 1 | 9 | 0 | 0.22 |  | fused | Fires over the crowd. The shell sails past the front rank on purpose and cooks whatever is behind it. |
-| Pinball Puck | pinball | bounce | 20 | 1.6 | 1 | 13 | 2 | 0 |  |  | A white-hot puck that keeps ricocheting between bodies until it burns out. |
-| Grave Bell | lure | lure | 0 | 2.6 | 1 | 0 | 0 | 0 |  | taunt | Plants a bell that hauls the horde into its core. It fights from where it stands, not from where you stand. |
-| Jackhammer Drill | drill | cone | 7 | 0.55 | 1 | 0 | 0 | 0 |  |  | Bites one target and chews through it. The deeper it stays buried, the harder it bites - useless on a swarm, lethal on a heavy. |
-| Shock Core | shockcore | nova | 20 | 2.2 | 1 | 0 | 0 | 0 |  |  | A ring of pressure that blows itself outward from where you are standing. |
-| Barbed Whip | whip | sweep | 26 | 0.7 | 1 | 0 | 0 | 0 |  | lead-lash | Lashes the arc in front of you, whether or not anything is standing in it. |
-| Tesla Coil | tesla | chain | 11 | 0.65 | 1 | 0 | 0 | 0 |  |  | Lightning that keeps jumping. One target is never enough. |
+| Name | ID | Attack | Damage | Cooldown (s) | Projectiles | Pierce | Starter | Rule | Description |
+|---|---|---|---|---|---|---|---|---|---|
+| Arcane Wand | `wand` | projectile | 9 | 0.34 | 1 | 0 | yes |  | Quick magic bolts. The baseline done properly: fast, flat, always hits. |
+| Throwing Dagger | `dagger` | orbit | 5 | 0.4 | 3 | 0 | yes | orbit_count 3, orbit_radius 1.3, orbit_speed 3 | Orbiting knives that carve up anything close. |
+| Heavy Crossbow | `crossbow` | projectile | 20 | 2.2 | 1 | 4 | yes | homing | Slow, homing piercing bolt that punches through crowds. |
+| Ember Sprayer | `flame` | cone | 4 | 0.35 | 1 | 0 |  | cone_angle 1, cone_range 2.8, cone_tick_rate 0.08 | Cone of fire - instant damage in a wide arc. |
+| Runic Hammer | `hammer` | bomb | 45 | 1.8 | 1 | 0 |  | bomb_arc_height 2.5, bomb_explode_radius 2, bomb_knockback 5, lands on target | Arcing bomb with massive explosion and knockback. |
+| Storm Shuriken | `shuriken` | boomerang | 8 | 0.6 | 2 | 1 |  | boomerang_range 4.5, boomerang_return_speed 1.8 | Boomerang blades - hit going out AND coming back. |
+| Void Orb | `orb` | bounce | 35 | 1.5 | 1 | 5 |  | bounce_count 4, bounce_damage_mul 1, eternal, bounce_range 3 | One eternal orb that hunts forever. Projectiles grow it, not multiply. |
+| Soul Scythe | `scythe` | sweep | 55 | 1.3 | 1 | 0 |  | sweep_angle 6.2832, sweep_knockback 3, sweep_radius 4.6 | Reaps a full circle of death around its nearest prey. |
+| Solar Lance | `beam` | beam | 130 | 1.6 | 1 | 0 |  | beam_duration 0.25, beam_range 12, beam_width 0.6 | Instant hitscan beam. Slow to swing, but it deletes a whole line at once. |
+| Rail Rifle | `railgun` | projectile | 78 | 1.8 | 1 | 6 |  |  | One hypervelocity slug. Slow to load, punches through an entire rank. |
+| Frost Shards | `shard` | projectile | 12 | 0.45 | 4 | 0 |  | chill_mul 0.7, chill_time 1.2 | A tight volley of fast shards that shreds and chills whatever walks into it. |
+| Siege Mortar | `mortar` | bomb | 62 | 2.4 | 1 | 0 |  | bomb_ahead 4.5, bomb_arc_height 3.2, bomb_explode_radius 2.6, bomb_fuse 0.35, bomb_knockback 6 | Fires over the crowd. The shell sails past the front rank on purpose and cooks whatever is behind it. |
+| Pinball Puck | `pinball` | bounce | 20 | 1.6 | 1 | 2 |  | bounce_count 6, bounce_damage_mul 0.85, bounce_range 3.5 | A white-hot puck that keeps ricocheting between bodies until it burns out. |
+| Grave Bell | `lure` | lure | 0 | 2.6 | 1 | 0 |  | lure_dps 18, lure_duration 5, lure_max_beacons 2, lure_pull 5.5, lure_radius 1.5, lure_reach 4.2, lure_tick_rate 0.15 | Plants a bell that hauls the horde into its core. It fights from where it stands, not from where you stand. |
+| Jackhammer Drill | `drill` | cone | 7 | 0.55 | 1 | 0 |  | cone_angle 0.45, cone_bite 0.28, cone_bite_max 3, cone_range 3.4, cone_tick_rate 0.05 | Bites one target and chews through it. The deeper it stays buried, the harder it bites - useless on a swarm, lethal on a heavy. |
+| Shock Core | `shockcore` | nova | 20 | 2.2 | 1 | 0 |  | nova_damage_per_tick 14, nova_expand_speed 6, nova_max_radius 3.6, nova_tick_rate 0.1 | A ring of pressure that blows itself outward from where you are standing. |
+| Barbed Whip | `whip` | sweep | 26 | 0.7 | 1 | 0 |  | sweep_angle 1.9, sweep_knockback 3, sweep_lead 1.8, sweep_radius 2.8 | Lashes the arc in front of you, whether or not anything is standing in it. |
+| Tesla Coil | `tesla` | chain | 11 | 0.65 | 1 | 0 |  | chain_damage_mul 0.6, chain_jump_range 2.8, chain_max_jumps 3 | Lightning that keeps jumping. One target is never enough. |
 
 ### Evolutions (A + B = C)
 
-| Name | ID | Attack | Requires | Damage | Cooldown (s) | Projectiles | Pierce | Area | Traits | Description |
-|---|---|---|---|---|---|---|---|---|---|---|
-| Storm Caller | storm | projectile | wand + crossbow | 15 | 0.6 | 1 | 4 | 0 |  | Wand + Crossbow. The wand's bolt keeps the crossbow's punch: it drives into a body and bends onto the next one, so it never leaves the pack. |
-| Void Nova | nova | nova | orb + hammer | 40 | 1.8 | 1 | 0 | 0 |  | Orb + Hammer. A ring cast wide that rushes back in, dragging the horde to a knot, then detonates on top of them. |
-| Inferno | inferno | inferno | flame + scythe | 60 | 1.6 | 1 | 0 | 0 |  | Sprayer + Scythe. Reaps a circle and leaves burning ground. |
-| Pulsar | pulsar | pulsar | beam + shuriken | 12 | 0.9 | 1 | 5 | 0 |  | Shuriken + Lance. A light-chakram that burns the WHOLE LINE it flies, out and back, not just the blade tip - it carves corridors. |
-| Radiant Halo | halo | halo | dagger + beam | 40 | 1 | 2 | 4 | 0 |  | Dagger + Lance. Blades of light orbit you, reaping all they touch. |
-| Blizzard Rail | blizzard | chain | railgun + shard | 22 | 0.5 | 1 | 0 | 0 |  | Rail Rifle + Frost Shards. The slug shatters on contact into a fan of shards, each one hopping on its own. |
-| Ashfall | siege | inferno | mortar + lure | 72 | 1.8 | 1 | 0 | 0 |  | Siege Mortar + Grave Bell. The barrage falls on the BELL, so the horde it gathered is the horde it cooks. |
-| Chaos Sphere | chaos | bounce | pinball + orb | 30 | 1.6 | 1 | 8 | 0 |  | Pinball + Void Orb. It comes apart: each impact throws fragments, and each fragment breaks again. |
-| Sundering Core | sunder | wave | shockcore + scythe | 55 | 1.6 | 1 | 0 | 0 |  | Shock Core + Soul Scythe. One huge crescent tears out of you and keeps going, shoving the whole front rank downrange. |
-| Tidal Lash | tidewhip | wave | whip + shuriken | 34 | 0.55 | 1 | 0 | 0 | lead-lash | Barbed Whip + Storm Shuriken. Three narrow hooks come around in a fan, each one dragging its catch into the next. |
-| Hoarfrost Wake | rimewake | projectile | shard + orb | 9 | 0.55 | 3 | 3 | 0 |  | Frost Shards + Void Orb. The shards drag a freezing, grinding bubble behind them - everything the volley PASSES walks in slow and comes apart, hit or not. |
+| Name | ID | Attack | Requires | Damage | Cooldown (s) | Projectiles | Pierce | Rule | Description |
+|---|---|---|---|---|---|---|---|---|---|
+| Storm Caller | `storm` | projectile | `wand` + `crossbow` | 15 | 0.6 | 1 | 4 | reaim_range 4.2, reaim_turn 0.22 | Wand + Crossbow. The wand's bolt keeps the crossbow's punch: it drives into a body and bends onto the next one, so it never leaves the pack. |
+| Void Nova | `nova` | nova | `orb` + `hammer` | 40 | 1.8 | 1 | 0 | nova_burst_damage 90, nova_contract, nova_damage_per_tick 35, nova_expand_speed 4, nova_max_radius 5, nova_pull 7, nova_tick_rate 0.12 | Orb + Hammer. A ring cast wide that rushes back in, dragging the horde to a knot, then detonates on top of them. |
+| Inferno | `inferno` | inferno | `flame` + `scythe` | 60 | 1.6 | 1 | 0 | sweep_angle 6.2832, sweep_knockback 4, sweep_radius 4.2, zone_dps 30, zone_duration 2.5, zone_radius 2 | Sprayer + Scythe. Reaps a circle and leaves burning ground. |
+| Pulsar | `pulsar` | pulsar | `beam` + `shuriken` | 12 | 0.9 | 1 | 5 | beam_width 1.3, boomerang_range 6.5, boomerang_return_speed 2.4 | Shuriken + Lance. A light-chakram that burns the WHOLE LINE it flies, out and back, not just the blade tip - it carves corridors. |
+| Radiant Halo | `halo` | halo | `dagger` + `beam` | 40 | 1 | 2 | 4 | beam_range 6, beam_width 0.5, halo_inner 2.2, halo_knockback 2.4, orbit_speed 2.6 | Dagger + Lance. Blades of light walk a slow circle around you - with a ring of safe ground at your feet. They cut what they cross, not what hugs you. |
+| Blizzard Rail | `blizzard` | chain | `railgun` + `shard` | 22 | 0.5 | 1 | 0 | chain_damage_mul 0.65, chain_jump_range 3.4, chain_max_jumps 4, chain_shatter 6 | Rail Rifle + Frost Shards. The slug shatters on contact into a fan of shards, each one hopping on its own. |
+| Ashfall | `siege` | inferno | `mortar` + `lure` | 72 | 1.8 | 1 | 0 | binds to the bell, sweep_angle 6.2832, sweep_knockback 5, sweep_radius 3.8, zone_dps 34, zone_duration 3, falls from above, zone_radius 2.4 | Siege Mortar + Grave Bell. The barrage falls on the BELL, so the horde it gathered is the horde it cooks. |
+| Chaos Sphere | `chaos` | bounce | `pinball` + `orb` | 30 | 1.6 | 1 | 8 | bounce_count 7, bounce_damage_mul 0.9, bounce_range 3.8, bounce_splits 2 | Pinball + Void Orb. It comes apart: each impact throws fragments, and each fragment breaks again. |
+| Sundering Core | `sunder` | wave | `shockcore` + `scythe` | 55 | 1.6 | 1 | 0 | wave_count 1, wave_damage_mul 0.85, wave_knockback 6, wave_range 9, wave_speed 7.5, wave_spread 1.25, wave_width 3.4 | Shock Core + Soul Scythe. One huge crescent tears out of you and keeps going, shoving the whole front rank downrange. |
+| Tidal Lash | `tidewhip` | wave | `whip` + `shuriken` | 34 | 0.55 | 1 | 0 | sweep_lead 2.2, wave_arc_step 1.1, wave_count 3, wave_damage_mul 0.7, wave_hook_pull 0.85, wave_knockback 5, wave_range 5.5, wave_speed 9, wave_spread 0.55, wave_width 2.6 | Barbed Whip + Storm Shuriken. Three narrow hooks come around in a fan, each one dragging its catch into the next. |
+| Hoarfrost Wake | `rimewake` | projectile | `shard` + `orb` | 9 | 0.55 | 3 | 3 | aura_chill_mul 0.62, aura_chill_time 0.9, aura_dps 26, aura_radius 1.5, aura_tick 0.1, chill_mul 0.55, chill_time 1.4 | Frost Shards + Void Orb. The shards drag a freezing, grinding bubble behind them - everything the volley PASSES walks in slow and comes apart, hit or not. |
 
 ### Super evolutions (A + B + C)
 
-| Name | ID | Attack | Requires | Damage | Cooldown (s) | Projectiles | Pierce | Area | Traits | Description |
-|---|---|---|---|---|---|---|---|---|---|---|
-| Void Gyre | vortex | vortex | dagger + scythe + orb | 40 | 1 | 3 | 4 | 0 |  | Dagger + Scythe + Void Orb. Suction zones circle you and drag prey into their cores. More projectiles = more AND bigger zones (up to a cap). |
-| Prism Array | prism | prism | flame + beam + crossbow | 42 | 1.05 | 4 | 2 | 0 | ricochet | Sprayer + Lance + Crossbow. One locked beam per projectile, each on a different enemy - a crowd gets shredded from several angles at once. |
-| Seraph Array | seraph | halo | drill + crossbow + whip | 60 | 0.9 | 3 | 6 | 0 |  | Drill + Crossbow + Barbed Whip. Heavy wings of light walk a slow circle around you - with a hole at your feet. They cut what they cross, not what hugs you. |
-| Event Horizon | eventhorizon | vortex | railgun + shockcore + flame | 48 | 1 | 4 | 6 | 0 |  | Rail Rifle + Shock Core + Ember Sprayer. Four wells circle you swallowing the horde, then COLLAPSE - each implosion is a blast and the well reopens somewhere else. |
+| Name | ID | Attack | Requires | Damage | Cooldown (s) | Projectiles | Pierce | Rule | Description |
+|---|---|---|---|---|---|---|---|---|---|
+| Void Gyre | `vortex` | vortex | `dagger` + `scythe` + `orb` | 26 | 1 | 3 | 6 | vortex_crowd 0.75, vortex_orbit 1.6, vortex_orbit_speed 1.7, vortex_pull 8, vortex_radius 2.4, vortex_reach 3.4, vortex_tick_rate 0.1 | Dagger + Scythe + Void Orb. Suction wells hold what they catch, and their damage is a function of HOW MANY they hold - feeble alone, enormous in a knot. More projectiles means more wells. |
+| Prism Array | `prism` | prism | `flame` + `beam` + `crossbow` | 42 | 1.05 | 4 | 2 | beam_duration 0.18, prism_max_targets 5, prism_range 11, prism_ricochet 4.5, prism_width 0.5 | Sprayer + Lance + Crossbow. One locked beam per projectile, each on a different enemy - a crowd gets shredded from several angles at once. |
+| Event Horizon | `eventhorizon` | vortex | `railgun` + `shockcore` + `flame` | 48 | 1 | 4 | 6 | vortex_burst_damage 110, vortex_burst_radius 3.4, vortex_collapse_at 3, vortex_orbit 3, vortex_orbit_speed 1.9, vortex_pull 4, vortex_radius 1.5, vortex_reach 3.2, vortex_tick_rate 0.1 | Rail Rifle + Shock Core + Ember Sprayer. Four wells circle you, swallow the horde, then COLLAPSE - each implosion is a blast and the well reopens across the orbit. A flat tick, on a clock. |
 
 ---
 
 ## Enemies
 
-| Name | ID | HP | Speed | Touch dmg | Radius | XP | Unlocks at (s) | Weight | Shape |
-|---|---|---|---|---|---|---|---|---|---|
-| Bat | bat | 8 | 2.4 | 5 | 0.3 | 1 | 0 | 6 | circle |
-| Slime | slime | 16 | 1.5 | 6 | 0.4 | 1 | 8 | 5 | circle |
-| Spider | spider | 10 | 2.9 | 6 | 0.28 | 2 | 240 | 4 | rect |
-| Zombie | zombie | 34 | 2.1 | 11 | 0.38 | 2 | 25 | 4 | rect |
-| Imp | imp | 14 | 3.4 | 8 | 0.26 | 2 | 240 | 4 | circle |
-| Skeleton | skeleton | 28 | 3.4 | 9 | 0.34 | 3 | 45 | 4 | rect |
-| Chest Mimic | mimic | 70 | 3 | 14 | 0.42 | 5 | 60 | 3 | rect |
-| Wraith | wraith | 18 | 3.2 | 9 | 0.3 | 3 | 240 | 3 | circle |
-| Ghost | ghost | 45 | 3 | 12 | 0.36 | 4 | 85 | 3 | circle |
-| Harpy | harpy | 55 | 2.9 | 14 | 0.34 | 5 | 300 | 3 | circle |
-| Charger | charger | 60 | 3.6 | 16 | 0.44 | 5 | 300 | 3 | rect |
-| Brute | brute | 140 | 1.6 | 22 | 0.62 | 8 | 120 | 2 | circle |
-| Stalker | stalker | 90 | 2.8 | 15 | 0.4 | 7 | 300 | 3 | circle |
-| Abomination | abomination | 200 | 2.6 | 20 | 0.55 | 10 | 150 | 2 | circle |
-| Golem | golem | 320 | 1.2 | 30 | 0.75 | 14 | 160 | 2 | rect |
-| Juggernaut | juggernaut | 420 | 1.8 | 34 | 0.8 | 18 | 175 | 2 | rect |
-| Oracle | oracle | 160 | 2.6 | 24 | 0.46 | 14 | 300 | 2 | circle |
-| Reaper | reaper | 240 | 3.1 | 26 | 0.5 | 16 | 300 | 2 | circle |
+| Name | ID | HP | Speed | Speed ramp | Fast | Touch dmg | Radius | XP | Unlocks at | Weight | Shape |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| Bat | `bat` | 8 | 2.4 | 0.75 |  | 5 | 0.3 | 1 | 0s | 6 | circle |
+| Slime | `slime` | 16 | 1.5 | 0 |  | 6 | 0.4 | 1 | 8s | 5 | circle |
+| Spider | `spider` | 10 | 2.9 | 0.72 | yes | 6 | 0.28 | 2 | 4:00 | 4 | rect |
+| Zombie | `zombie` | 34 | 2.1 | 0 |  | 11 | 0.38 | 2 | 25s | 4 | rect |
+| Imp | `imp` | 14 | 3.4 | 0.71 | yes | 8 | 0.26 | 2 | 4:00 | 4 | circle |
+| Skeleton | `skeleton` | 28 | 3.4 | 0 |  | 9 | 0.34 | 3 | 45s | 4 | rect |
+| Chest Mimic | `mimic` | 70 | 3 | 0 |  | 14 | 0.42 | 5 | 1:00 | 3 | rect |
+| Wraith | `wraith` | 18 | 3.2 | 0.75 | yes | 9 | 0.3 | 3 | 4:00 | 3 | circle |
+| Ghost | `ghost` | 45 | 3 | 0 |  | 12 | 0.36 | 4 | 1:25 | 3 | circle |
+| Harpy | `harpy` | 55 | 2.9 | 0.72 | yes | 14 | 0.34 | 5 | 4:00 | 3 | circle |
+| Charger | `charger` | 60 | 3.6 | 0.72 | yes | 16 | 0.44 | 5 | 4:00 | 3 | rect |
+| Brute | `brute` | 140 | 1.6 | 0 |  | 22 | 0.62 | 8 | 3:00 | 2 | circle |
+| Stalker | `stalker` | 90 | 2.8 | 0.71 | yes | 15 | 0.4 | 7 | 4:30 | 3 | circle |
+| Abomination | `abomination` | 200 | 2.6 | 0 |  | 20 | 0.55 | 10 | 5:00 | 2 | circle |
+| Golem | `golem` | 320 | 1.2 | 0 |  | 30 | 0.75 | 14 | 7:00 | 2 | rect |
+| Juggernaut | `juggernaut` | 420 | 1.8 | 0 |  | 34 | 0.8 | 18 | 9:30 | 2 | rect |
+| Oracle | `oracle` | 160 | 2.6 | 0.69 | yes | 24 | 0.46 | 14 | 6:30 | 2 | circle |
+| Reaper | `reaper` | 240 | 3.1 | 0.74 | yes | 26 | 0.5 | 16 | 8:00 | 2 | circle |
+
+---
+
+## Difficulty ramp
+
+Three things rise over a run: how often a pack arrives, how big the
+enemies are, and how hard they hit. The first is a three-leg curve, the
+other two are a shallow leg that steepens at a knee.
+
+### Pack interval
+
+```text
+t < 0:30  : interval = 1.2 - t*0.005
+0:30-2:30 : interval = max(0.58, 1.05 - (t-0:30)*0.0039)
+t >= 2:30 : interval = max(0.3, 0.58 - (t-2:30)*0.0021)
+```
+
+The floor is 0.3s -- about 3 packs a second, and a
+pack is several bodies by the time the run gets there. At 0.12s the game
+threw around thirty enemies a second at the player, which no build can
+answer and which just ends the run early.
+
+The third leg used to start at 1:30 and bottom out at 0.20s, so the run
+went from one pack a second to five inside the two minutes where the heavy
+enemies were also arriving. Moving the leg later AND raising the floor is
+the same fix from both ends: the screen fills later, and the things in it
+can be killed when it does.
+
+### Enemy stats
+
+| Stat | Shallow leg | After the knee | Cap |
+|------|-------------|----------------|-----|
+| HP | `1 + t/145` | `+ (t-480)/62` | x20 |
+| Speed | `1 + t/780` | `+ (t-480)/380` | x2.05 |
+| Contact | `1 + t/2000` | -- | uncapped |
+
+The knee is at 8:00. Every number here is lower than it was and the
+knee is a minute later, for the same reason the XP curve is: **the HP ramp
+is the one piece of difficulty the player has no answer to.** A build three
+picks behind cannot outshoot a doubled enemy, so the ramp has to stop
+outrunning the build.
+
+The shape is intact -- a rising ramp that steepens -- it just stops being
+the whole difficulty. The heavies are now spread across the run (see
+`enemies.toml`), so the early leg does not have to carry all of it: at 2:30
+an ordinary enemy is barely doubled and the threat is whatever has actually
+walked in.
+
+---
+
+## The elite ladder
+
+An elite and above is a trash mob with a body count problem. Its stats are
+a multiplier on whatever trash archetype it rolled, so a champion is always
+the same fight wearing a different body. HP is a range, rolled per spawn.
+
+| Tier | HP x trash | Touch | Speed | XP | Opens at | Gate | Rare at best |
+|------|-----------|-------|-------|----|----------|------|--------------|
+| Elite | 5-8 | x1.25 | x1.08 | x3 | 1:30 | the elite rate rises with the clock | 10% of spawns |
+| Champion | 28-46 | x1.9 | x1.18 | x5 | 1:30 | tier-1 pressure 14 | 2.5% of spawns |
+| Overlord | 100-150 | x2.8 | x1.3 | x10 | 4:00 | tier-2 pressure 9 | 1.2% of spawns |
+
+At most **2** of a tier are alive at once, and a promotion
+is followed by 20s of grace, so a fresh champion never lands
+on top of the one that just died.
+
+**The frequency is the balance here, not the HP.** A champion is meant to
+be an event. Its chance of any given spawn is
+`min(2.5%, (pressure - 14) * 0.0022)`,
+so a player who has only just earned one gets a trickle, and a build far
+past the gate still tops out at one in forty. An overlord is the run's boss:
+`min(1.2%, (pressure - 9) * 0.0012)`,
+a couple in a ten-minute run, each one a fight the player had to make room
+for.
+
+A floor matters as much as a ceiling: capping a boss at
+2.5% only means something if the garbage below it is more
+common than that, which is what the elite rate is for.
+
+The XP multiplier is deliberately NOT scaled down with the HP. An elite is a
+reward before it is a threat, and if killing one is worse value than killing
+three pieces of trash then the player is right to ignore it -- which is
+exactly how a promotion stops being a promotion.
+
+---
+
+## Chests
+
+A tiered enemy drops a chest where it died. Walk over it: a chest is a
+pickup, never a button. What is inside is cards that improve the weapons
+you already own and the build around them -- never a new weapon, and never
+a level-up, because a corpse must not be able to ask you a question you
+have to answer. The box leans on whichever weapon it has touched least, so
+a hand never lands four times on the same gun.
+
+| Dropped by | Cards | What it is |
+|------------|-------|------------|
+| Elite | 1 | One card. The small change. |
+| Champion | 3 | A whole hand. |
+| Overlord | 5 | Most of the arsenal in one pickup. |
+
+`Deep Cache` adds one more card to every box in the game. The count is
+deliberately NOT clamped to the size of the arsenal: clamping here would
+quietly downgrade a champion's gift to an elite's for every early run, and
+the early run is exactly when a champion is hardest to kill and the box is
+most worth having.
+
 
 ---
 
@@ -94,226 +200,253 @@ python3 tools/gendocs.py
 
 ### Normal pool
 
-| Name | ID | Effect | Value | Max stacks | Weapon | Level | Description |
-|---|---|---|---|---|---|---|---|
-| Sharpened Bolts | damage | damage_mul | 0.15 | 6 |  |  | +15% damage |
-| Battle Haste | haste | fire_rate | 0.09 | 5 |  |  | +9% fire rate |
-| Split Shot | multi | proj_add | 1 | 4 |  |  | +1 projectile |
-| Impact | impact | knockback_mul | 0.45 | 3 |  |  | +45% knockback from all your attacks and bursts |
-| Swift Boots | boots | speed_mul | 0.12 | 2 |  |  | +12% move speed |
-| Vigor | vigor | max_hp_add | 20 | 4 |  |  | +20 max HP and heal 20 |
-| Soul Magnet | magnet | pickup_mul | 0.6 | 2 |  |  | +60% pickup range |
-| Scholar | scholar | xp_mul | 0.12 | 3 |  |  | +12% experience gained |
-| Lorekeeper | lorekeeper | xp_mul | 0.3 | 2 |  |  | +30% experience gained |
-| Piercing Shots | pierce | pierce_add | 1 | 3 |  |  | +1 pierce |
-| Blood Surge | surge_chain | momentum_damage | 1 | 2 |  |  | Kill chain: +1% damage per stack |
-| Rampage | rampage | momentum_speed | 4 | 1 |  |  | Kill chain: +4% move speed per stack |
-| Deep Reserves | deep_reserves | momentum_window | 2 | 1 |  |  | Kill chain: 2 more seconds before it goes cold |
-| Kill Tempo | kill_tempo | momentum_rate | 0.5 | 3 |  |  | Kill chain: +0.5% fire rate per stack |
-| Long Tail | long_tail | momentum_chain | 6 | 2 |  |  | Kill chain: 6 more stacks count toward the multipliers |
-| Cull | cull | momentum_gain | 0.5 | 2 |  |  | Kill chain: +0.5 stacks per kill |
-| Regeneration | regen | regen_add | 1 | 4 |  |  | +1 HP per second |
-| Might | might | damage_mul | 0.25 | 4 |  |  | +25% damage |
-| Quickdraw | quickdraw | fire_rate | 0.13 | 3 |  |  | +13% fire rate |
-| Twin Cast | twin_shot | proj_add | 1 | 2 |  |  | +1 projectile |
-| Windrunner | windrunner | speed_mul | 0.08 | 3 |  |  | +8% move speed |
-| Iron Constitution | constitution | max_hp_add | 35 | 3 |  |  | +35 max HP and heal 35 |
-| Bulwark | bulwark | max_hp_add | 50 | 2 |  |  | +50 max HP and heal 50 |
-| Vitality | vitality | regen_add | 2 | 2 |  |  | +2 HP per second |
-| Treasure Sense | treasure | pickup_mul | 1 | 1 |  |  | +100% pickup range |
-| Harvester | harvester | pickup_mul | 0.8 | 1 |  |  | +80% pickup range |
-| Garrote Bolts | garrote | pierce_add | 2 | 1 |  |  | +2 pierce |
-| Battle Echoes | echoes | fire_rate | 0.19 | 2 |  |  | +19% fire rate |
-| Barrage | barrage | proj_add | 2 | 1 |  |  | +2 projectiles |
-| Fervor | fervor | damage_mul | 0.35 | 2 |  |  | +35% damage |
-| Gale Steps | gale | speed_mul | 0.15 | 1 |  |  | +15% move speed |
-| Heartwood | heartwood | max_hp_add | 70 | 1 |  |  | +70 max HP and heal 70 |
-| Surge | surge | fire_rate | 0.25 | 1 |  |  | +25% fire rate |
-| Stony Pledge | pledge | defense_add | 10 | 4 |  |  | +10 defense |
-| Iron Conviction | conviction | defense_add | 25 | 2 |  |  | +25 defense |
-| Minor Ward | ward_small | shield_add | 15 | 3 |  |  | +15 regenerating shield |
-| Runic Ward | ward_great | shield_add | 30 | 2 |  |  | +30 regenerating shield |
-| Aegis Flow | aegis_flow | shield_regen | 0.6 | 3 |  |  | Shield refills 60% faster, and refills right now |
-| Quickdraw | quickdraw_ward | shield_delay | 1 | 2 |  |  | Shield starts refilling 1s sooner after you take a hit |
-| Field Kit | field_kit | heal_pct | 0.4 | 2 |  |  | Patch yourself up: heal 40% of your maximum HP |
-| Gilded Fangs | leech_gold | lifesteal_add | 4 | 3 |  |  | +4% lifesteal |
-| Soulfeed | leech_soul | lifesteal_add | 6 | 2 |  |  | +6% lifesteal |
-| Sunder Edge | sunder | armor_pierce_add | 15 | 4 |  |  | +15 armor pierce |
-| Keen Sunder | sunder_great | armor_pierce_add | 40 | 2 |  |  | +40 armor pierce |
-| Armor-Cracker | armor_cracker | armor_pierce_add | 80 | 1 |  |  | +80 armor pierce |
-| Wand Focus | w_wand_power | w_damage_add | 8 | 3 | wand |  | Arcane Wand: +8 damage |
-| Wand Channeling | w_wand_speed | w_fire_rate | 0.16 | 2 | wand |  | Arcane Wand: +16% fire rate |
-| Dagger Honing | w_dagger_power | w_damage_add | 5 | 3 | dagger |  | Throwing Dagger: +5 damage each |
-| Dagger Volley | w_dagger_volley | w_proj_add | 1 | 2 | dagger |  | Throwing Dagger: +1 projectile |
-| Crossbow Wit | w_crossbow_power | w_damage_add | 12 | 2 | crossbow |  | Heavy Crossbow: +12 damage |
-| Crossbow Drill | w_crossbow_pierce | w_pierce_add | 2 | 2 | crossbow |  | Heavy Crossbow: +2 pierce |
-| Ember Intensity | w_flame_power | w_damage_add | 3 | 3 | flame |  | Ember Sprayer: +3 damage |
-| Ember Horde | w_flame_volley | w_proj_add | 2 | 2 | flame |  | Ember Sprayer: +2 projectiles |
-| Hammer Rune | w_hammer_power | w_damage_add | 20 | 2 | hammer |  | Runic Hammer: +20 damage |
-| Hammer Wrath | w_hammer_pierce | w_pierce_add | 3 | 2 | hammer |  | Runic Hammer: +3 pierce |
-| Shuriken Storm | w_shuriken_power | w_damage_add | 5 | 3 | shuriken |  | Storm Shuriken: +5 damage |
-| Shuriken Cyclone | w_shuriken_speed | w_fire_rate | 0.19 | 2 | shuriken |  | Storm Shuriken: +19% fire rate |
-| Rail Tuning | w_railgun_power | w_damage_add | 30 | 2 | railgun |  | Rail Rifle: +30 damage |
-| Overcharged Rail | w_railgun_pierce | w_pierce_add | 2 | 2 | railgun |  | Rail Rifle: +2 pierce |
-| Shard Whetstone | w_shard_power | w_damage_add | 5 | 3 | shard |  | Frost Shards: +5 damage |
-| Shard Barrage | w_shard_volley | w_proj_add | 2 | 2 | shard |  | Frost Shards: +2 projectiles |
-| Mortar Charge | w_mortar_power | w_damage_add | 25 | 2 | mortar |  | Siege Mortar: +25 damage |
-| Barrage | w_mortar_volley | w_proj_add | 1 | 2 | mortar |  | Siege Mortar: +1 shell per shot |
-| Puck Polish | w_pinball_power | w_damage_add | 10 | 3 | pinball |  | Pinball Puck: +10 damage |
-| Hot Wheels | w_pinball_speed | w_fire_rate | 0.2 | 2 | pinball |  | Pinball Puck: +20% fire rate |
-| Deeper Toll | w_lure_power | w_lure_power | 8 | 3 | lure |  | Grave Bell: +8 damage per second |
-| Quick Chime | w_lure_rate | w_fire_rate | 0.18 | 2 | lure |  | Grave Bell: +18% fire rate |
-| Drill Bit | w_drill_power | w_damage_add | 3 | 3 | drill |  | Jackhammer Drill: +3 damage per tick |
-| Redline | w_drill_rate | w_fire_rate | 0.25 | 2 | drill |  | Jackhammer Drill: +25% fire rate |
-| Deeper Charge | w_shockcore_power | w_nova_power | 10 | 3 | shockcore |  | Shock Core: +10 damage per tick |
-| Quicken | w_shockcore_rate | w_fire_rate | 0.2 | 2 | shockcore |  | Shock Core: +20% fire rate |
-| Barb Wire | w_whip_power | w_damage_add | 12 | 3 | whip |  | Barbed Whip: +12 damage |
-| Long Lash | w_whip_wide | w_proj_add | 1 | 2 | whip |  | Barbed Whip: a 15% wider lash per stack |
-| Coil Tuning | w_tesla_power | w_damage_add | 5 | 3 | tesla |  | Tesla Coil: +5 damage per jump |
-| Arc Cascade | w_tesla_rate | w_fire_rate | 0.22 | 2 | tesla |  | Tesla Coil: +22% fire rate |
-| Deep Cold | w_blizzard_power | w_damage_add | 8 | 2 | blizzard |  | Blizzard Rail: +8 damage per jump |
-| Whiteout | w_blizzard_rate | w_fire_rate | 0.2 | 2 | blizzard |  | Blizzard Rail: +20% fire rate |
-| Thermite | w_siege_power | w_damage_add | 30 | 2 | siege |  | Ashfall: +30 damage to the reap |
-| Bombardment | w_siege_rate | w_fire_rate | 0.25 | 2 | siege |  | Ashfall: +25% fire rate |
-| Unstable Core | w_chaos_power | w_damage_add | 15 | 2 | chaos |  | Chaos Sphere: +15 damage |
-| Ricochet Tuning | w_chaos_rate | w_fire_rate | 0.2 | 2 | chaos |  | Chaos Sphere: +20% fire rate |
-| Sunder Charge | w_sunder_power | w_nova_power | 20 | 2 | sunder |  | Sundering Core: +20 damage per tick |
-| Faster Ring | w_sunder_rate | w_fire_rate | 0.2 | 2 | sunder |  | Sundering Core: +20% fire rate |
-| Deep Current | w_tidewhip_power | w_damage_add | 16 | 2 | tidewhip |  | Tidal Lash: +16 damage |
-| Spring Tide | w_tidewhip_rate | w_fire_rate | 0.22 | 2 | tidewhip |  | Tidal Lash: +22% fire rate |
-| Wing Polish | w_seraph_power | w_damage_add | 25 | 2 | seraph |  | Seraph Array: +25 damage |
-| Winged Host | w_seraph_wings | w_proj_add | 1 | 2 | seraph |  | Seraph Array: +1 wing |
-| Singularity Tuning | w_horizon_power | w_damage_add | 20 | 2 | eventhorizon |  | Event Horizon: +20 damage |
-| Deeper Well | w_horizon_wells | w_proj_add | 1 | 2 | eventhorizon |  | Event Horizon: +1 gravity well |
-| Arsenal Core | u_arsenal_core | weapon_slot_add | 1 | 3 |  |  | +1 weapon slot (3 stacks max) |
-| Eventide Hunger | w_orb_hunger | w_orb_grow | 1 | 2 | orb |  | Void Orb: finds the next victim 30% faster and loses far less per bounce |
-| Long Arm | w_scythe_longarm | w_scythe_reach | 1 | 3 | scythe |  | Soul Scythe: +6% reap radius |
-| Focused Burn | w_beam_focus | w_beam_lance | 1 | 3 | beam |  | Solar Lance: +6% range and +4% width |
-| Arc Cascade | w_storm_cascade | w_chain_arc | 1 | 3 | storm |  | Storm Caller: +6% jump range and +5% damage per link |
-| Rupture | w_nova_rupture | w_nova_wide | 1 | 3 | nova |  | Void Nova: +6% ring radius and +4% expansion speed |
-| Pyre Spread | w_inferno_pyre | w_reap_wide | 1 | 3 | inferno |  | Inferno: +6% reap radius, burning ground lasts 0.5s longer |
-| Long Cast | w_pulsar_longcast | w_boomerang_reach | 1 | 3 | pulsar |  | Pulsar: +7% flight range and +6% return speed |
-| Pooled Ash | w_flame_pools | w_zone_pools | 1 | 2 | flame |  | Ember Sprayer: one more burning pool on the ground at a time |
-| Ashfall Spread | w_inferno_pools | w_zone_pools | 1 | 2 | inferno |  | Inferno: one more burning pool on the ground at a time |
-| Concussion Charge | w_hammer_concussion | w_bomb_blast | 1 | 3 | hammer |  | Runic Hammer: +8% blast radius and +6% knockback |
-| Wide Shell | w_mortar_concussion | w_bomb_blast | 1 | 3 | mortar |  | Siege Mortar: +8% blast radius and +6% knockback |
-| Echo Anchor | w_lure_anchor | w_lure_anchor | 1 | 2 | lure |  | Grave Bell: the beacon lasts 0.8s longer, and one more may be planted |
-| Siege Chime | w_lure_anchor_siege | w_lure_anchor | 1 | 2 | siege |  | Ashfall: the beacon lasts 0.8s longer, and one more may be planted |
-| Beam Lattice | w_prism_lattice | w_prism_lattice | 1 | 2 | prism |  | Prism Array: one more independent beam, +5% range |
-| Long Wings | w_halo_wings | w_halo_wings | 1 | 3 | halo |  | Radiant Halo: +8% beam reach and 1.5 more shove per beam |
-| Denser Gyre | w_vortex_core | w_vortex_core | 1 | 3 | vortex |  | Void Gyre: fatter core, wider orbit, 12% faster spin |
-| Phase Mirror | phase_mirror | ability_dash | 0.8 | 3 |  |  | Phase Dash: +0.8 distance, +0.06s of invulnerability on arrival |
-| Concussion Core | concussion_core | ability_burst | 0.8 | 3 |  |  | Overload: +0.8 radius, +30 damage, +1 knockback |
-| Cryostasis | cryostasis | ability_slow | 1 | 3 |  |  | Stasis: +1s of duration, and the slowed world drops another 0.08x |
+| Name | ID | Effect | Value | Max stacks | Weapon | Level | Group | Description |
+|---|---|---|---|---|---|---|---|---|
+| Sharpened Bolts | `damage` | damage_mul | 0.15 | 6 |  |  |  | +15% damage |
+| Battle Haste | `haste` | fire_rate | 0.09 | 5 |  |  |  | +9% fire rate |
+| Split Shot | `multi` | proj_add | 1 | 4 |  |  |  | +1 projectile |
+| Impact | `impact` | knockback_mul | 0.45 | 3 |  |  |  | +45% knockback from all your attacks and bursts |
+| Swift Boots | `boots` | speed_mul | 0.12 | 2 |  |  |  | +12% move speed |
+| Vigor | `vigor` | max_hp_add | 20 | 4 |  |  |  | +20 max HP and heal 20 |
+| Soul Magnet | `magnet` | pickup_mul | 0.6 | 2 |  |  |  | +60% pickup range |
+| Scholar | `scholar` | xp_mul | 0.12 | 3 |  |  |  | +12% experience gained |
+| Lorekeeper | `lorekeeper` | xp_mul | 0.3 | 2 |  |  |  | +30% experience gained |
+| Piercing Shots | `pierce` | pierce_add | 1 | 3 |  |  |  | +1 pierce |
+| Blood Surge | `surge_chain` | momentum_damage | 1 | 2 |  |  |  | Kill chain: +1% damage per stack |
+| Rampage | `rampage` | momentum_speed | 4 | 1 |  |  |  | Kill chain: +4% move speed per stack |
+| Deep Reserves | `deep_reserves` | momentum_window | 2 | 1 |  |  |  | Kill chain: 2 more seconds before it goes cold |
+| Kill Tempo | `kill_tempo` | momentum_rate | 0.5 | 3 |  |  |  | Kill chain: +0.5% fire rate per stack |
+| Long Tail | `long_tail` | momentum_chain | 6 | 2 |  |  |  | Kill chain: 6 more stacks count toward the multipliers |
+| Cull | `cull` | momentum_gain | 0.5 | 2 |  |  |  | Kill chain: +0.5 stacks per kill |
+| Regeneration | `regen` | regen_add | 1 | 4 |  |  |  | +1 HP per second |
+| Might | `might` | damage_mul | 0.25 | 4 |  |  |  | +25% damage |
+| Quickdraw | `quickdraw` | fire_rate | 0.13 | 3 |  |  |  | +13% fire rate |
+| Twin Cast | `twin_shot` | proj_add | 1 | 2 |  |  |  | +1 projectile |
+| Windrunner | `windrunner` | speed_mul | 0.08 | 3 |  |  |  | +8% move speed |
+| Iron Constitution | `constitution` | max_hp_add | 35 | 3 |  |  |  | +35 max HP and heal 35 |
+| Bulwark | `bulwark` | max_hp_add | 50 | 2 |  |  |  | +50 max HP and heal 50 |
+| Vitality | `vitality` | regen_add | 2 | 2 |  |  |  | +2 HP per second |
+| Treasure Sense | `treasure` | pickup_mul | 1 | 1 |  |  |  | +100% pickup range |
+| Harvester | `harvester` | pickup_mul | 0.8 | 1 |  |  |  | +80% pickup range |
+| Garrote Bolts | `garrote` | pierce_add | 2 | 1 |  |  |  | +2 pierce |
+| Battle Echoes | `echoes` | fire_rate | 0.19 | 2 |  |  |  | +19% fire rate |
+| Barrage | `barrage` | proj_add | 2 | 1 |  |  |  | +2 projectiles |
+| Fervor | `fervor` | damage_mul | 0.35 | 2 |  |  |  | +35% damage |
+| Gale Steps | `gale` | speed_mul | 0.15 | 1 |  |  |  | +15% move speed |
+| Heartwood | `heartwood` | max_hp_add | 70 | 1 |  |  |  | +70 max HP and heal 70 |
+| Surge | `surge` | fire_rate | 0.25 | 1 |  |  |  | +25% fire rate |
+| Stony Pledge | `pledge` | defense_add | 10 | 4 |  |  |  | +10 defense |
+| Iron Conviction | `conviction` | defense_add | 25 | 2 |  |  |  | +25 defense |
+| Minor Ward | `ward_small` | shield_add | 15 | 3 |  |  |  | +15 regenerating shield |
+| Runic Ward | `ward_great` | shield_add | 30 | 2 |  |  |  | +30 regenerating shield |
+| Aegis Flow | `aegis_flow` | shield_regen | 0.6 | 3 |  |  |  | Shield refills 60% faster, and refills right now |
+| Quickdraw | `quickdraw_ward` | shield_delay | 1 | 2 |  |  |  | Shield starts refilling 1s sooner after you take a hit |
+| Field Kit | `field_kit` | heal_pct | 0.4 | 2 |  |  |  | Patch yourself up: heal 40% of your maximum HP |
+| Gilded Fangs | `leech_gold` | lifesteal_add | 4 | 3 |  |  |  | +4% lifesteal |
+| Soulfeed | `leech_soul` | lifesteal_add | 6 | 2 |  |  |  | +6% lifesteal |
+| Sunder Edge | `sunder` | armor_pierce_add | 15 | 4 |  |  |  | +15 armor pierce |
+| Keen Sunder | `sunder_great` | armor_pierce_add | 40 | 2 |  |  |  | +40 armor pierce |
+| Armor-Cracker | `armor_cracker` | armor_pierce_add | 80 | 1 |  |  |  | +80 armor pierce |
+| Wand Focus | `w_wand_power` | w_damage_add | 8 | 3 | wand |  |  | Arcane Wand: +8 damage |
+| Wand Channeling | `w_wand_speed` | w_fire_rate | 0.16 | 2 | wand |  |  | Arcane Wand: +16% fire rate |
+| Dagger Honing | `w_dagger_power` | w_damage_add | 5 | 3 | dagger |  |  | Throwing Dagger: +5 damage each |
+| Dagger Volley | `w_dagger_volley` | w_proj_add | 1 | 2 | dagger |  |  | Throwing Dagger: +1 projectile |
+| Crossbow Wit | `w_crossbow_power` | w_damage_add | 12 | 2 | crossbow |  |  | Heavy Crossbow: +12 damage |
+| Crossbow Drill | `w_crossbow_pierce` | w_pierce_add | 2 | 2 | crossbow |  |  | Heavy Crossbow: +2 pierce |
+| Ember Intensity | `w_flame_power` | w_damage_add | 3 | 3 | flame |  |  | Ember Sprayer: +3 damage |
+| Ember Horde | `w_flame_volley` | w_proj_add | 2 | 2 | flame |  |  | Ember Sprayer: +2 projectiles |
+| Hammer Rune | `w_hammer_power` | w_damage_add | 20 | 2 | hammer |  |  | Runic Hammer: +20 damage |
+| Hammer Wrath | `w_hammer_pierce` | w_pierce_add | 3 | 2 | hammer |  |  | Runic Hammer: +3 pierce |
+| Shuriken Storm | `w_shuriken_power` | w_damage_add | 5 | 3 | shuriken |  |  | Storm Shuriken: +5 damage |
+| Shuriken Cyclone | `w_shuriken_speed` | w_fire_rate | 0.19 | 2 | shuriken |  |  | Storm Shuriken: +19% fire rate |
+| Rail Tuning | `w_railgun_power` | w_damage_add | 30 | 2 | railgun |  |  | Rail Rifle: +30 damage |
+| Overcharged Rail | `w_railgun_pierce` | w_pierce_add | 2 | 2 | railgun |  |  | Rail Rifle: +2 pierce |
+| Shard Whetstone | `w_shard_power` | w_damage_add | 5 | 3 | shard |  |  | Frost Shards: +5 damage |
+| Shard Barrage | `w_shard_volley` | w_proj_add | 2 | 2 | shard |  |  | Frost Shards: +2 projectiles |
+| Mortar Charge | `w_mortar_power` | w_damage_add | 25 | 2 | mortar |  |  | Siege Mortar: +25 damage |
+| Barrage | `w_mortar_volley` | w_proj_add | 1 | 2 | mortar |  |  | Siege Mortar: +1 shell per shot |
+| Puck Polish | `w_pinball_power` | w_damage_add | 10 | 3 | pinball |  |  | Pinball Puck: +10 damage |
+| Hot Wheels | `w_pinball_speed` | w_fire_rate | 0.2 | 2 | pinball |  |  | Pinball Puck: +20% fire rate |
+| Deeper Toll | `w_lure_power` | w_lure_power | 8 | 3 | lure |  |  | Grave Bell: +8 damage per second |
+| Quick Chime | `w_lure_rate` | w_fire_rate | 0.18 | 2 | lure |  |  | Grave Bell: +18% fire rate |
+| Drill Bit | `w_drill_power` | w_damage_add | 3 | 3 | drill |  |  | Jackhammer Drill: +3 damage per tick |
+| Redline | `w_drill_rate` | w_fire_rate | 0.25 | 2 | drill |  |  | Jackhammer Drill: +25% fire rate |
+| Deeper Charge | `w_shockcore_power` | w_nova_power | 10 | 3 | shockcore |  |  | Shock Core: +10 damage per tick |
+| Quicken | `w_shockcore_rate` | w_fire_rate | 0.2 | 2 | shockcore |  |  | Shock Core: +20% fire rate |
+| Barb Wire | `w_whip_power` | w_damage_add | 12 | 3 | whip |  |  | Barbed Whip: +12 damage |
+| Long Lash | `w_whip_wide` | w_proj_add | 1 | 2 | whip |  |  | Barbed Whip: a 15% wider lash per stack |
+| Coil Tuning | `w_tesla_power` | w_damage_add | 5 | 3 | tesla |  |  | Tesla Coil: +5 damage per jump |
+| Arc Cascade | `w_tesla_rate` | w_fire_rate | 0.22 | 2 | tesla |  |  | Tesla Coil: +22% fire rate |
+| Deep Cold | `w_blizzard_power` | w_damage_add | 8 | 2 | blizzard |  |  | Blizzard Rail: +8 damage per jump |
+| Whiteout | `w_blizzard_rate` | w_fire_rate | 0.2 | 2 | blizzard |  |  | Blizzard Rail: +20% fire rate |
+| Thermite | `w_siege_power` | w_damage_add | 30 | 2 | siege |  |  | Ashfall: +30 damage to the reap |
+| Bombardment | `w_siege_rate` | w_fire_rate | 0.25 | 2 | siege |  |  | Ashfall: +25% fire rate |
+| Unstable Core | `w_chaos_power` | w_damage_add | 15 | 2 | chaos |  |  | Chaos Sphere: +15 damage |
+| Ricochet Tuning | `w_chaos_rate` | w_fire_rate | 0.2 | 2 | chaos |  |  | Chaos Sphere: +20% fire rate |
+| Sunder Charge | `w_sunder_power` | w_nova_power | 20 | 2 | sunder |  |  | Sundering Core: +20 damage per tick |
+| Faster Ring | `w_sunder_rate` | w_fire_rate | 0.2 | 2 | sunder |  |  | Sundering Core: +20% fire rate |
+| Deep Current | `w_tidewhip_power` | w_damage_add | 16 | 2 | tidewhip |  |  | Tidal Lash: +16 damage |
+| Spring Tide | `w_tidewhip_rate` | w_fire_rate | 0.22 | 2 | tidewhip |  |  | Tidal Lash: +22% fire rate |
+| Singularity Tuning | `w_horizon_power` | w_damage_add | 20 | 2 | eventhorizon |  |  | Event Horizon: +20 damage |
+| Deeper Well | `w_horizon_wells` | w_proj_add | 1 | 2 | eventhorizon |  |  | Event Horizon: +1 gravity well |
+| Arsenal Core | `u_arsenal_core` | weapon_slot_add | 1 | 3 |  |  |  | +1 weapon slot |
+| Whetstone | `u_whetstone` | w_all_damage | 0.08 | 6 |  |  |  | Every weapon you own hits 8% harder |
+| Oiled Gears | `u_oiled_gear` | w_all_rate | 0.07 | 6 |  |  |  | Every weapon you own fires 7% faster |
+| Long Barrel | `u_long_barrel` | w_all_reach | 0.1 | 5 |  |  |  | Every weapon you own reaches 10% further and its shots live 10% longer |
+| Heavy Stock | `u_heavy_stock` | w_all_knockback | 0.2 | 4 |  |  |  | Everything all your weapons hit is thrown 20% further |
+| Deep Cache | `u_deep_cache` | chest_bonus | 1 | 3 |  |  |  | Every chest opens one more time |
+| Eventide Hunger | `w_orb_hunger` | w_orb_grow | 1 | 2 | orb |  |  | Void Orb: finds the next victim 30% faster and loses far less per bounce |
+| Long Arm | `w_scythe_longarm` | w_scythe_reach | 1 | 3 | scythe |  |  | Soul Scythe: +6% reap radius |
+| Focused Burn | `w_beam_focus` | w_beam_lance | 1 | 3 | beam |  |  | Solar Lance: +6% range and +4% width |
+| Arc Cascade | `w_storm_cascade` | w_chain_arc | 1 | 3 | storm |  |  | Storm Caller: +6% jump range and +5% damage per link |
+| Rupture | `w_nova_rupture` | w_nova_wide | 1 | 3 | nova |  |  | Void Nova: +6% ring radius and +4% expansion speed |
+| Pyre Spread | `w_inferno_pyre` | w_reap_wide | 1 | 3 | inferno |  |  | Inferno: +6% reap radius, burning ground lasts 0.5s longer |
+| Long Cast | `w_pulsar_longcast` | w_boomerang_reach | 1 | 3 | pulsar |  |  | Pulsar: +7% flight range and +6% return speed |
+| Pooled Ash | `w_flame_pools` | w_zone_pools | 1 | 2 | flame |  |  | Ember Sprayer: one more burning pool on the ground at a time |
+| Ashfall Spread | `w_inferno_pools` | w_zone_pools | 1 | 2 | inferno |  |  | Inferno: one more burning pool on the ground at a time |
+| Concussion Charge | `w_hammer_concussion` | w_bomb_blast | 1 | 3 | hammer |  |  | Runic Hammer: +8% blast radius and +6% knockback |
+| Wide Shell | `w_mortar_concussion` | w_bomb_blast | 1 | 3 | mortar |  |  | Siege Mortar: +8% blast radius and +6% knockback |
+| Echo Anchor | `w_lure_anchor` | w_lure_anchor | 1 | 2 | lure |  |  | Grave Bell: the beacon lasts 0.8s longer, and one more may be planted |
+| Siege Chime | `w_lure_anchor_siege` | w_lure_anchor | 1 | 2 | siege |  |  | Ashfall: the beacon lasts 0.8s longer, and one more may be planted |
+| Beam Lattice | `w_prism_lattice` | w_prism_lattice | 1 | 2 | prism |  |  | Prism Array: one more independent beam, +5% range |
+| Long Wings | `w_halo_wings` | w_halo_wings | 1 | 3 | halo |  |  | Radiant Halo: +8% beam reach and 1.5 more shove per beam |
+| Denser Gyre | `w_vortex_core` | w_vortex_core | 1 | 3 | vortex |  |  | Void Gyre: fatter core, wider orbit, 12% faster spin |
+| Phase Mirror | `phase_mirror` | ability_dash | 0.8 | 3 |  |  |  | Phase Dash: +0.8 distance, +0.06s of invulnerability on arrival |
+| Concussion Core | `concussion_core` | ability_burst | 0.8 | 3 |  |  |  | Overload: +0.8 radius, +30 damage, +1 knockback |
+| Cryostasis | `cryostasis` | ability_slow | 1 | 3 |  |  |  | Stasis: +1s of duration, and the slowed world drops another 0.08x |
 
 ### Unique items (one-time, rule-changing)
 
-| Name | ID | Effect | Value | Max stacks | Weapon | Level | Description |
-|---|---|---|---|---|---|---|---|
-| Spreadshot | u_spreadshot | fan | 1 | 1 |  |  | Double volley spread and fire rate, but shots spray +/- 30 degrees |
-| Ignited Carapace | u_thorns | thorns | 3 | 1 |  |  | Getting hit detonates a burst dealing 3x incoming damage |
-| Gambler's Eye | u_extra_choice | extra_choice | 1 | 1 |  |  | +1 card in every future level-up choice |
-| Second Chance | u_reroll | reroll_add | 1 | 1 |  |  | +1 free reroll per level-up (total two) |
-| Adrenaline | u_adrenaline | adrenaline | 1 | 1 |  |  | Below 30% HP: +60% speed and a 1s invulnerability every 20s |
-| Singularity | u_black_hole | black_hole | 1 | 1 |  |  | Every 12s, violently yanks nearby enemies toward you |
-| Storm Bolt | u_chain | chain | 1 | 1 |  |  | Every 3rd projectile hit chains lightning to 3 nearby enemies |
-| Blood Price | u_blood_price | blood_price | 1 | 1 |  |  | Every 20 kills detonates a burst around you |
-| Cold Blood | u_ice_blood | ice_blood | 1 | 1 |  |  | Enemies that hit you are slowed for 2s |
-| Last Stand | u_last_stand | last_stand | 1 | 1 |  |  | Taking a hit below 20% HP grants 1s of invulnerability (20s cooldown) |
-| Repulsion Field | u_repulsion | knockback_retaliate | 6 | 1 |  |  | Enemies that strike you are violently knocked away |
-| Vampiric Heart | u_vampiric_heart | lifesteal_heal | 2 | 1 |  |  | Lifesteal heals 2 HP per proc instead of 1 |
-| Seeking Missiles | uw_wand_seeking | w_unique_homing | 1 | 1 | wand |  | Arcane Wand: bolts home onto the nearest enemy |
-| Blade Vortex | uw_dagger_vortex | w_unique_vortex | 1 | 1 | dagger |  | Throwing Dagger: blades spin 2x faster in a 25% wider orbit |
-| Fragmenting Bolt | uw_crossbow_fragment | w_unique_area | 1.2 | 1 | crossbow |  | Heavy Crossbow: bolts explode on impact for area damage |
-| Hearthfire | uw_flame_hearthfire | w_unique_hearthfire | 1 | 1 | flame |  | Ember Sprayer: cone is 50% wider and 40% longer |
-| Cataclysm | uw_hammer_cataclysm | w_unique_cataclysm | 1 | 1 | hammer |  | Runic Hammer: explosions 60% larger with heavier knockback |
-| Return Tempest | uw_shuriken_tempest | w_unique_area | 2.5 | 1 | shuriken |  | Storm Shuriken: returning blades detonate a 2.5-area burst |
-| Echo Detonation | uw_orb_echo | w_unique_area | 1.5 | 1 | orb |  | Void Orb: every bounce splashes half damage around the hit |
-| Reaper's Harvest | uw_scythe_harvest | w_unique_harvest | 3 | 1 | scythe |  | Soul Scythe: sweeps restore 3 HP per kill |
-| Bloodthirst | uw_bloodthirst | momentum_bloodthirst | 1 | 1 |  |  | Kill chain: twice the stacks, twice the length, 3s longer before it goes cold |
-| Prism Lance | uw_beam_prism | w_unique_prism | 3 | 1 | beam |  | Solar Lance: three beams at once - forward, left and right |
-| Thunderlord | uw_storm_thunderlord | w_unique_reaim | 4 | 1 | storm |  | Storm Caller: bolts pierce 2 further, see further for the next body, and corner harder |
-| Supernova | uw_nova_supernova | w_unique_supernova | 1 | 1 | nova |  | Void Nova: ring expands faster, wider, and hits harder |
-| Everflame | uw_inferno_everflame | w_unique_everflame | 1 | 1 | inferno |  | Inferno: wider reap, burning ground lasts longer and burns harder |
-| Arc Saw | uw_pulsar_arcsaw | w_unique_arcsaw | 1 | 1 | pulsar |  | Pulsar: the laser trail is 80% wider and deals 35% more damage |
-| Magnetic Slug | uw_railgun_slug | w_unique_homing | 1 | 1 | railgun |  | Rail Rifle: the slug homes onto the nearest enemy |
-| Deep Toll | uw_lure_bell | w_unique_bell | 1 | 1 | lure |  | Grave Bell: 35% harder pull, 20% wider core and reach, and one more bell at a time |
-| Gravitic Field | uw_tesla_gravitic | w_unique_gravitic | 1 | 1 | tesla |  | Tesla Coil: jumps reach 50% further and stop decaying so hard |
-| White Squall | uw_blizzard_storm | w_unique_thunderlord | 4 | 1 | blizzard |  | Blizzard Rail: +4 jumps and no damage decay |
-| Molten Crater | uw_siege_molten | w_unique_molten | 1 | 1 | siege |  | Ashfall: the burning ground is 80% hotter, 25% wider and lasts much longer |
-| Detonation Chain | uw_chaos_echo | w_unique_area | 1.6 | 1 | chaos |  | Chaos Sphere: every bounce splashes area damage around the hit |
-| Fault Line | uw_sunder_faultline | w_unique_faultline | 1 | 1 | sunder |  | Sundering Core: the crescent widens into a wall, reaches further, and hits harder |
-| Undertow | uw_tidewhip_lash | w_unique_lash | 1 | 1 | tidewhip |  | Tidal Lash: a fourth arc, thrown wider, herding its catch harder into the next |
-| Corona Mantle | uw_halo_corona | w_unique_corona | 1 | 1 | halo |  | Radiant Halo: beams shove for 6, 40% wider, 15% longer, +20% damage |
-| Black Gyre | uw_vortex_gyre | w_unique_gyre | 1 | 1 | vortex |  | Void Gyre: 45% harder pull, 30% further reach, fatter core, ticks faster |
-| Total Internal Reflection | uw_prism_refract | w_unique_refract | 1 | 1 | prism |  | Prism Array: one more independent beam, 40% longer ricochet, +15% range |
-| Rime Lances | uw_shard_rime | w_unique_rime | 1 | 1 | shard |  | Frost Shards: lances freeze what they pass through, +4 pierce, 40% longer flight |
-| Siege Doctrine | uw_mortar_doctrine | w_unique_siege_doctrine | 1 | 1 | mortar |  | Siege Mortar: a 3-shell salvo on a double fuse, 35% wider blasts, 20% slower |
-| Silver Skewer | uw_pinball_skewer | w_unique_skewer | 1 | 1 | pinball |  | Pinball Puck: +10 bounces, no damage decay, 30% longer reach per hop |
-| Overdrive Bore | uw_drill_bore | w_unique_bore | 1 | 1 | drill |  | Jackhammer Drill: 60% wider bite, 40% longer reach, strikes far faster |
-| Standing Discharge | uw_shockcore_discharge | w_unique_discharge | 1 | 1 | shockcore |  | Shock Core: the ring lingers, expands faster and re-strikes twice as fast |
-| Barbed Chain | uw_whip_chainlash | w_unique_chainlash | 1 | 1 | whip |  | Barbed Whip: the lash goes all the way around, 30% further, 50% harder shove |
-| Wingbeat | uw_seraph_wingbeat | w_unique_wingbeat | 1 | 1 | seraph |  | Seraph Array: the wings spin 60% faster, shove for 5 and burn 30% wider |
-| Singularity | uw_horizon_singularity | w_unique_singularity | 1 | 1 | eventhorizon |  | Event Horizon: 50% harder pull, fatter core, further reach, denser ticks |
-| Hollow Chamber | hollow_chamber | weapon_slot_add | 1 | 1 |  |  | ONE more weapon slot. Your arsenal holds eight |
-| Combat Reflexes | u_ability_haste | ability_haste | 0.25 | 3 |  |  | All abilities recharge 25% faster |
-| Heavy Hands | u_ability_might | ability_might | 1 | 2 |  |  | Overload: a wider blast that hits 30 harder and shoves 3 further |
-| Phase Memory | u_ability_phase | ability_phase | 1 | 2 |  |  | Phase Dash: +1.2 distance and +0.2s of invulnerability on arrival |
-| Deep Freeze | u_ability_stasis | ability_stasis | 1 | 2 |  |  | Stasis: +1s of duration, and the slowed world drops another 0.08x |
-| Cascade | u_ability_echo | ability_echo | 0.4 | 1 |  |  | Every ability also fires a 40% Overload at the same spot |
-| Deep Freeze | uw_rimewake_deepfreeze | w_unique_deepfreeze | 1 | 1 | rimewake |  | Hoarfrost Wake: a wider second corona sweeps the lane, chill on hit deepens, 20% more shards |
+| Name | ID | Effect | Value | Max stacks | Weapon | Level | Group | Description |
+|---|---|---|---|---|---|---|---|---|
+| Spreadshot | `u_spreadshot` | fan | 1 | 1 |  |  |  | Double volley spread and fire rate, but shots spray +/- 30 degrees |
+| Ignited Carapace | `u_thorns` | thorns | 3 | 1 |  |  |  | Getting hit detonates a burst dealing 3x incoming damage |
+| Gambler's Eye | `u_extra_choice` | extra_choice | 1 | 1 |  |  |  | +1 card in every future level-up choice |
+| Second Chance | `u_reroll` | reroll_add | 1 | 1 |  |  |  | +1 free reroll at every level-up |
+| Adrenaline | `u_adrenaline` | adrenaline | 1 | 1 |  |  |  | Below 30% HP: +60% speed and a 1s invulnerability every 20s |
+| Singularity | `u_black_hole` | black_hole | 1 | 1 |  |  |  | Every 12s, violently yanks nearby enemies toward you |
+| Storm Bolt | `u_chain` | chain | 1 | 1 |  |  |  | Every 3rd projectile hit chains lightning to 3 nearby enemies |
+| Blood Price | `u_blood_price` | blood_price | 1 | 1 |  |  |  | Every 20 kills detonates a burst around you |
+| Cold Blood | `u_ice_blood` | ice_blood | 1 | 1 |  |  |  | Enemies that hit you are slowed for 2s |
+| Last Stand | `u_last_stand` | last_stand | 1 | 1 |  |  |  | Dropping below 20% HP grants a second of invulnerability |
+| Repulsion Field | `u_repulsion` | knockback_retaliate | 6 | 1 |  |  |  | Enemies that strike you are violently knocked away |
+| Vampiric Heart | `u_vampiric_heart` | lifesteal_heal | 2 | 1 |  |  |  | Lifesteal heals 2 HP per proc instead of 1 |
+| Seeking Missiles | `uw_wand_seeking` | w_unique_homing | 1 | 1 | wand |  |  | Arcane Wand: bolts home onto the nearest enemy |
+| Blade Vortex | `uw_dagger_vortex` | w_unique_vortex | 1 | 1 | dagger |  |  | Throwing Dagger: blades spin 2x faster in a 25% wider orbit |
+| Fragmenting Bolt | `uw_crossbow_fragment` | w_unique_area | 1.2 | 1 | crossbow |  |  | Heavy Crossbow: bolts explode on impact for area damage |
+| Hearthfire | `uw_flame_hearthfire` | w_unique_hearthfire | 1 | 1 | flame |  |  | Ember Sprayer: cone is 50% wider and 40% longer |
+| Cataclysm | `uw_hammer_cataclysm` | w_unique_cataclysm | 1 | 1 | hammer |  |  | Runic Hammer: explosions 60% larger with heavier knockback |
+| Return Tempest | `uw_shuriken_tempest` | w_unique_area | 2.5 | 1 | shuriken |  |  | Storm Shuriken: returning blades detonate a 2.5-area burst |
+| Echo Detonation | `uw_orb_echo` | w_unique_area | 1.5 | 1 | orb |  |  | Void Orb: every bounce splashes half damage around the hit |
+| Reaper's Harvest | `uw_scythe_harvest` | w_unique_harvest | 3 | 1 | scythe |  |  | Soul Scythe: sweeps restore 3 HP per kill |
+| Bloodthirst | `uw_bloodthirst` | momentum_bloodthirst | 1 | 1 |  |  |  | Kill chain: twice the stacks, twice the length, 3s longer before it goes cold |
+| Prism Lance | `uw_beam_prism` | w_unique_prism | 3 | 1 | beam |  |  | Solar Lance: three beams at once - forward, left and right |
+| Thunderlord | `uw_storm_thunderlord` | w_unique_reaim | 4 | 1 | storm |  |  | Storm Caller: bolts pierce 2 further, see further for the next body, and corner harder |
+| Supernova | `uw_nova_supernova` | w_unique_supernova | 1 | 1 | nova |  |  | Void Nova: ring expands faster, wider, and hits harder |
+| Everflame | `uw_inferno_everflame` | w_unique_everflame | 1 | 1 | inferno |  |  | Inferno: wider reap, burning ground lasts longer and burns harder |
+| Arc Saw | `uw_pulsar_arcsaw` | w_unique_arcsaw | 1 | 1 | pulsar |  |  | Pulsar: the laser trail is 80% wider and deals 35% more damage |
+| Magnetic Slug | `uw_railgun_slug` | w_unique_homing | 1 | 1 | railgun |  |  | Rail Rifle: the slug homes onto the nearest enemy |
+| Deep Toll | `uw_lure_bell` | w_unique_bell | 1 | 1 | lure |  |  | Grave Bell: 35% harder pull, 20% wider core and reach, and one more bell at a time |
+| Gravitic Field | `uw_tesla_gravitic` | w_unique_gravitic | 1 | 1 | tesla |  |  | Tesla Coil: jumps reach 50% further and stop decaying so hard |
+| White Squall | `uw_blizzard_storm` | w_unique_thunderlord | 4 | 1 | blizzard |  |  | Blizzard Rail: +4 jumps and no damage decay |
+| Molten Crater | `uw_siege_molten` | w_unique_molten | 1 | 1 | siege |  |  | Ashfall: the burning ground is 80% hotter, 25% wider and lasts much longer |
+| Detonation Chain | `uw_chaos_echo` | w_unique_area | 1.6 | 1 | chaos |  |  | Chaos Sphere: every bounce splashes area damage around the hit |
+| Fault Line | `uw_sunder_faultline` | w_unique_faultline | 1 | 1 | sunder |  |  | Sundering Core: the crescent widens into a wall, reaches further, and hits harder |
+| Undertow | `uw_tidewhip_lash` | w_unique_lash | 1 | 1 | tidewhip |  |  | Tidal Lash: a fourth arc, thrown wider, herding its catch harder into the next |
+| Wingbeat | `uw_halo_wingbeat` | w_unique_wingbeat | 1 | 1 | halo |  |  | Radiant Halo: the spokes spin 60% faster, shove harder, and the safe ring at your feet closes in |
+| Corona Mantle | `uw_halo_corona` | w_unique_corona | 1 | 1 | halo |  |  | Radiant Halo: beams shove for 6, 40% wider, 15% longer, +20% damage |
+| Black Gyre | `uw_vortex_gyre` | w_unique_gyre | 1 | 1 | vortex |  |  | Void Gyre: 45% harder pull, 30% further reach, fatter core, ticks faster |
+| Total Internal Reflection | `uw_prism_refract` | w_unique_refract | 1 | 1 | prism |  |  | Prism Array: one more independent beam, 40% longer ricochet, +15% range |
+| Rime Lances | `uw_shard_rime` | w_unique_rime | 1 | 1 | shard |  |  | Frost Shards: lances freeze what they pass through, +4 pierce, 40% longer flight |
+| Siege Doctrine | `uw_mortar_doctrine` | w_unique_siege_doctrine | 1 | 1 | mortar |  |  | Siege Mortar: a 3-shell salvo on a double fuse, 35% wider blasts, 20% slower |
+| Silver Skewer | `uw_pinball_skewer` | w_unique_skewer | 1 | 1 | pinball |  |  | Pinball Puck: +10 bounces, no damage decay, 30% longer reach per hop |
+| Overdrive Bore | `uw_drill_bore` | w_unique_bore | 1 | 1 | drill |  |  | Jackhammer Drill: 60% wider bite, 40% longer reach, strikes far faster |
+| Standing Discharge | `uw_shockcore_discharge` | w_unique_discharge | 1 | 1 | shockcore |  |  | Shock Core: the ring lingers, expands faster and re-strikes twice as fast |
+| Barbed Chain | `uw_whip_chainlash` | w_unique_chainlash | 1 | 1 | whip |  |  | Barbed Whip: the lash goes all the way around, 30% further, 50% harder shove |
+| Singularity | `uw_horizon_singularity` | w_unique_singularity | 1 | 1 | eventhorizon |  |  | Event Horizon: 50% harder pull, fatter core, further reach, denser ticks |
+| Combat Reflexes | `u_ability_haste` | ability_haste | 0.25 | 3 |  |  |  | All abilities recharge 25% faster |
+| Heavy Hands | `u_ability_might` | ability_might | 1 | 2 |  |  |  | Overload: a wider blast that hits 30 harder and shoves 3 further |
+| Phase Memory | `u_ability_phase` | ability_phase | 1 | 2 |  |  |  | Phase Dash: +1.2 distance and +0.2s of invulnerability on arrival |
+| Deep Freeze | `u_ability_stasis` | ability_stasis | 1 | 2 |  |  |  | Stasis: +1s of duration, and the slowed world drops another 0.08x |
+| Cascade | `u_ability_echo` | ability_echo | 0.4 | 1 |  |  |  | Every ability also fires a 40% Overload at the same spot |
+| Deep Freeze | `uw_rimewake_deepfreeze` | w_unique_deepfreeze | 1 | 1 | rimewake |  |  | Hoarfrost Wake: a wider second corona sweeps the lane, chill on hit deepens, 20% more shards |
+| Rimefang | `uw_rimewake_rimefang` | w_unique_rimefang | 1 | 1 | rimewake |  |  | Hoarfrost Wake: the volley narrows into piercing lances and the corona shrinks, so the lane cuts what it touches instead of slowing it |
 
 ### Milestones (every power-of-two level from 4 on)
 
-| Name | ID | Effect | Value | Max stacks | Weapon | Level | Description |
-|---|---|---|---|---|---|---|---|
-| Aegis | m4_aegis | shield_add | 45 | 1 |  | 4 | MILESTONE: +45 regenerating shield |
-| Blood Pact | m4_pact | lifesteal_add | 6 | 1 |  | 4 | MILESTONE: +6% lifesteal |
-| Tempest | m4_tempest | proj_add | 2 | 1 |  | 4 | MILESTONE: +2 projectiles to every weapon |
-| Stone Mantle | m8_mantle | defense_add | 60 | 1 |  | 8 | MILESTONE: +60 defense |
-| Frenzy | m8_frenzy | fire_rate | 0.5 | 1 |  | 8 | MILESTONE: +50% fire rate to every weapon |
-| Reaper's Grasp | m8_grasp | pierce_add | 3 | 1 |  | 8 | MILESTONE: +3 pierce to every weapon |
-| Crimson Crown | m16_crown | lifesteal_add | 8 | 1 |  | 16 | MILESTONE: +8% lifesteal |
-| Titan Heart | m16_titan | max_hp_add | 120 | 1 |  | 16 | MILESTONE: +120 max HP and heal 120 |
-| Overload | m16_overload | damage_mul | 0.6 | 1 |  | 16 | MILESTONE: +60% damage |
-| Void Symbiosis | m32_void | damage_mul | 0.9 | 1 |  | 32 | MILESTONE: +90% damage |
-| Bulwark of Ages | m32_bulwark | defense_add | 120 | 1 |  | 32 | MILESTONE: +120 defense |
-| Hailstorm | m32_hail | proj_add | 4 | 1 |  | 32 | MILESTONE: +4 projectiles to every weapon |
-| Immortal | m64_immortal | max_hp_add | 300 | 1 |  | 64 | MILESTONE: +300 max HP and heal 300 |
-| Perfection | m64_perfect | fire_rate | 1 | 1 |  | 64 | MILESTONE: +100% fire rate to every weapon |
-| Vanquisher | m64_vanquish | damage_mul | 1.5 | 1 |  | 64 | MILESTONE: +150% damage |
-| Ascendant Skin | m128_ascend | defense_add | 200 | 1 |  | 128 | MILESTONE: +200 defense |
-| Starlight Ward | m128_starlight | shield_add | 500 | 1 |  | 128 | MILESTONE: +500 regenerating shield |
-| Overdrive | m128_overdrive | damage_mul | 2 | 1 |  | 128 | MILESTONE: +200% damage |
+| Name | ID | Effect | Value | Max stacks | Weapon | Level | Group | Description |
+|---|---|---|---|---|---|---|---|---|
+| Crimson Pact | `m4_crimson` | lifesteal_add | 9 | 3 |  | 4 | survivor | Lifesteal +9% |
+| Verdant Renewal | `m4_renewal` | regen_add | 3 | 3 |  | 4 | survivor | Regeneration +3 HP/s |
+| Aegis | `m4_aegis` | shield_add | 50 | 2 |  | 4 | survivor | Shield +50, filled to the brim at once |
+| Overload | `m8_overload` | damage_mul | 0.55 | 2 |  | 8 | execution | All damage +55% |
+| Frenzy | `m8_frenzy` | fire_rate | 0.4 | 2 |  | 8 | execution | Fire rate +40% |
+| Tempest | `m8_tempest` | proj_add | 3 | 2 |  | 8 | execution | Every weapon fires 3 more projectiles |
+| Frostbind | `m16_frostbind` | mark_slow | 2.5 | 3 |  | 16 | element | Every hit chills what it strikes for 2.5s |
+| Emberbrand | `m16_emberbrand` | mark_burn | 22 | 3 |  | 16 | element | Every hit sets it alight: 22 burning damage a second |
+| Hex | `m16_hex` | mark_vuln | 0.14 | 3 |  | 16 | element | Every hit makes that body take 14% more damage, up to +84% |
+| Armour Split | `m16_splitarmor` | mark_defstrip | 22 | 3 |  | 16 | element | Every hit strips 22 of the target's own armour, for good |
+| Bloodthirst | `m32_bloodthirst` | momentum_bloodthirst | 2 | 2 |  | 32 | momentum | The kill chain feeds twice as fast, lasts twice as long, and its top end lifesteals |
+| Momentum | `m32_haste` | momentum_rate | 2 | 2 |  | 32 | momentum | The kill chain grants +2% fire rate per stack, up to +60% |
+| Slaughter | `m32_slaughter` | momentum_damage | 8 | 2 |  | 32 | momentum | The kill chain grants +8% damage per stack, up to +240% |
+| Stone Mantle | `m64_mantle` | defense_add | 120 | 2 |  | 64 | bulwark | Armour +120 |
+| Barbed Skin | `m64_thorns` | thorns | 40 | 2 |  | 64 | bulwark | Anything that touches you bursts for 40 damage around you |
+| Repulsion | `m64_repulse` | knockback_retaliate | 40 | 2 |  | 64 | bulwark | Anything that touches you is thrown 40 units clear, and every knockback you deal is 60% harder |
+| Ascendant Skin | `m128_ascend` | defense_add | 300 | 2 |  | 128 | apotheosis | Armour +300 |
+| Crimson Crown | `m128_crown` | lifesteal_add | 40 | 2 |  | 128 | apotheosis | Lifesteal +40% and regeneration +8 HP/s |
+| Vanquisher | `m128_vanquish` | damage_mul | 1.8 | 2 |  | 128 | apotheosis | All damage +180% |
+| Perfection | `m128_perfect` | fire_rate | 1.2 | 2 |  | 128 | apotheosis | Fire rate +120%, so everything you own fires more than twice as often |
 
-**Totals:** 179 upgrades (109 normal, 52 unique, 18 milestones).
+### Milestone groups (mutually exclusive for the run)
+
+| Group | Members | N |
+|---|---|---|
+| apotheosis | Ascendant Skin, Crimson Crown, Perfection, Vanquisher | 4 |
+| bulwark | Barbed Skin, Repulsion, Stone Mantle | 3 |
+| element | Armour Split, Emberbrand, Frostbind, Hex | 4 |
+| execution | Frenzy, Overload, Tempest | 3 |
+| momentum | Bloodthirst, Momentum, Slaughter | 3 |
+| survivor | Aegis, Crimson Pact, Verdant Renewal | 3 |
+
+**Totals:** 184 upgrades (112 normal, 52 unique, 20 milestones).
 
 
 ---
 
 ### Upgrade kinds
 
-| Kind       | When it is offered                                        |
-|------------|-----------------------------------------------------------|
-| normal     | Any level-up, subject to `max_stacks`                     |
-| unique     | ~45% chance per level-up, one-time, violet card           |
-| milestone  | Only on power-of-two levels (4, 8, 16, ...); separate 3-card pick of 2  |
-| weapon     | Only while the named weapon is owned; buffs that slot     |
+| Kind       | When it is offered                                                     |
+|------------|-----------------------------------------------------------------------|
+| normal     | Any level-up, subject to `max_stacks`                                  |
+| unique     | One-time, violet card. Either global, or scoped to one weapon          |
+| milestone  | Only on power-of-two levels (4, 8, 16, ...); replaces the whole choice |
+
+There is no separate weapon kind. A weapon card is a card with a `Weapon` set: it
+is only drawn while that weapon is equipped, and it edits that slot alone. Every
+weapon in the game has at least two of them, so no weapon is a dead slot -- see
+`No weapon in the game is a dead slot` in `tests/test_game.cpp`, which fails the
+build if a weapon is added with fewer.
 
 ---
 
 ## In-game manual
 
-Shown in the game with **F1** (main menu, live run, or the pause screen). **11 pages:**
+Shown in the game with **F1** (main menu, live run, or the pause screen). **17 pages:**
 
 - `controls` — CONTROLS (16 lines)
-- `run` — THE RUN (17 lines)
+- `run` — THE RUN (18 lines)
 - `levels` — LEVEL-UPS (21 lines)
-- `weapons` — WEAPONS (16 lines)
+- `weapons` — WEAPONS (19 lines)
+- `every weapon` — EVERY WEAPON (22 lines)
+- `every evolution` — EVERY EVOLUTION (33 lines)
+- `every super` — EVERY SUPER (18 lines)
+- `chests` — CHESTS (19 lines)
+- `the unique rules` — THE UNIQUE RULES (23 lines)
+- `the four marks` — THE FOUR MARKS (19 lines)
 - `evolutions` — EVOLUTIONS (21 lines)
-- `abilities` — ABILITIES  J / K / L (23 lines)
-- `stats` — YOUR STATS (30 lines)
-- `cards` — CARDS (21 lines)
+- `abilities` — ABILITIES JKL (23 lines)
+- `stats` — YOUR STATS (32 lines)
+- `cards` — CARDS (27 lines)
 - `enemies` — ENEMIES (18 lines)
 - `sandbox` — TEST SANDBOX (19 lines)
 - `profile` — PROFILE (17 lines)
@@ -357,8 +490,9 @@ Shown in the game with **F1** (main menu, live run, or the pause screen). **11 p
     EACH LEVEL-UP OFFERS CARDS - SEE THE
     CARDS PAGE.
 
-    SURVIVE. THE SPAWN RATE ACCELERATES
-    AFTER SIX MINUTES AND NEVER STOPS.
+    SURVIVE. PACKS COME FASTER AFTER HALF
+    A MINUTE, AGAIN AFTER TWO AND A HALF,
+    AND NEVER STOP.
 ```
 
 ### LEVEL-UPS
@@ -398,14 +532,181 @@ Shown in the game with **F1** (main menu, live run, or the pause screen). **11 p
     INSTANT CONE      EMBER SPRAYER, DRILL
     AREA BOMB         RUNIC HAMMER, MORTAR
     HITSCAN BEAM      SOLAR LANCE
-    ORBITING BLADES   VOID GYRE, SERAPH
+    ORBITING BLADES   VOID GYRE, HALO
     EXPANDING RING    VOID NOVA, SUNDER
     TAUNTING BEACON   GRAVE BELL
-    GROUND ZONE       EMBER, ASHFALL
+    GROUND ZONE       INFERNO, ASHFALL
 
     ORBITING BLADES ALSO GRIND THE
     INSIDE OF THEIR RING, SO NOTHING
     HUGS YOU FOR FREE.
+
+    THE NEXT THREE PAGES NAME ALL 32 AND
+    GIVE THE ONE RULE EACH ONE PLAYS BY.
+```
+
+### EVERY WEAPON
+
+```
+    # THE 18 BASE WEAPONS
+    EACH LINE IS THE ONE RULE THAT MAKES IT DIFFERENT. THE NUMBERS GO UP;
+    THE RULE NEVER DOES.
+
+    ARCANE WAND       FAST FLAT BOLTS AT THE NEAREST ENEMY. THE BASELINE, DONE RIGHT.
+    THROWING DAGGER   ORBITING KNIVES THAT ALSO GRIND THE INSIDE OF THEIR OWN RING.
+    HEAVY CROSSBOW    SLOW HOMING BOLT THAT PIERCES FOUR AND KEEPS GOING.
+    EMBER SPRAYER     INSTANT CONE OF FIRE. NO PROJECTILE, SO NOTHING TO MISS.
+    RUNIC HAMMER      ARCING BOMB. BIG BLAST, BIG KNOCKBACK, SLOW TO REARM.
+    STORM SHURIKEN    BOOMERANG. HITS GOING OUT AND COMING BACK.
+    VOID ORB          ONE ETERNAL ORB THAT HUNTS. PROJECTILES GROW IT, NOT COUNT.
+    SOUL SCYTHE       REAPS A FULL CIRCLE AROUND ITS NEAREST PREY.
+    SOLAR LANCE       HITSCAN BEAM. SLOW TO SWING, DELETES A WHOLE LINE AT ONCE.
+    RAIL RIFLE        ONE HYPERVELOCITY SLUG. PUNCHES THROUGH AN ENTIRE RANK.
+    FROST SHARDS      A TIGHT VOLLEY OF FAST SHARDS. SHREDS, AND CHILLS.
+    SIEGE MORTAR      FIRES OVER THE CROWD ON PURPOSE AND COOKS WHAT IS BEHIND IT.
+    PINBALL PUCK      A WHITE-HOT PUCK THAT RICOCHETS BETWEEN BODIES UNTIL IT BURNS OUT.
+    GRAVE BELL        PLANTS A BELL THAT HAULS THE HORDE IN, AND FIGHTS WHERE IT STANDS.
+    JACKHAMMER DRILL  BITES ONE TARGET AND CHEWS. THE DEEPER IT STAYS BURIED, THE HARDER IT BITES.
+    SHOCK CORE        A RING OF PRESSURE THAT BLOWS OUTWARD FROM WHERE YOU ARE STANDING.
+    BARBED WHIP       LASHES THE ARC IN FRONT OF YOU, WHETHER OR NOT ANYTHING IS IN IT.
+    TESLA COIL        LIGHTNING THAT KEEPS JUMPING. ONE TARGET IS NEVER ENOUGH.
+```
+
+### EVERY EVOLUTION
+
+```
+    # THE 10 TWO-INGREDIENT EVOLUTIONS
+    OWN BOTH INGREDIENTS AND THE RESULT BECOMES THE NEXT WEAPON OFFER. IT REPLACES
+    THE RANDOM WEAPON GRANT RATHER THAN JOINING IT.
+
+    STORM CALLER      WAND + CROSSBOW
+                      THE BOLT KEEPS THE PUNCH-THROUGH BUT SPENDS IT ON STEERING. IT DRIVES
+                      INTO A BODY AND BENDS ONTO THE NEXT ONE, SO IT NEVER LEAVES THE PACK.
+    VOID NOVA         ORB + HAMMER
+                      A RING CAST WIDE THAT RUSHES BACK IN, DRAGGING THE HORDE TO A KNOT,
+                      THEN DETONATES ON TOP OF THEM.
+    INFERNO           FLAME + SCYTHE
+                      REAPS A CIRCLE AND LEAVES BURNING GROUND BEHIND IT.
+    PULSAR            BEAM + SHURIKEN
+                      A LIGHT CHAKRAM THAT BURNS THE WHOLE LINE IT FLIES, OUT AND BACK, NOT
+                      JUST THE BLADE TIP. IT CARVES CORRIDORS.
+    RADIANT HALO      DAGGER + BEAM
+                      BLADES OF LIGHT WALK A SLOW CIRCLE AROUND YOU, WITH A RING OF SAFE
+                      GROUND AT YOUR FEET. THEY CUT WHAT THEY CROSS, NOT WHAT HUGS YOU.
+    BLIZZARD RAIL     RAIL RIFLE + FROST SHARDS
+                      THE SLUG SHATTERS ON CONTACT INTO A FAN OF SHARDS, AND EACH SHARD
+                      THEN HOPS ON ITS OWN.
+    ASHFALL           MORTAR + GRAVE BELL
+                      THE BARRAGE FALLS ON THE BELL, SO THE HORDE IT GATHERED IS THE
+                      HORDE IT COOKS.
+    CHAOS SPHERE      PINBALL + VOID ORB
+                      IT COMES APART. EACH IMPACT THROWS FRAGMENTS, AND EACH FRAGMENT
+                      BREAKS AGAIN.
+    SUNDERING CORE    SHOCK CORE + SOUL SCYTHE
+                      ONE HUGE CRESCENT TEARS OUT OF YOU AND KEEPS GOING, SHOVING THE
+                      WHOLE FRONT RANK DOWNRANGE.
+    TIDAL LASH        WHIP + SHURIKEN
+                      THREE NARROW HOOKS COME AROUND IN A FAN, EACH ONE DRAGGING ITS
+                      CATCH INTO THE NEXT.
+```
+
+### EVERY SUPER
+
+```
+    # THE 4 SUPER EVOLUTIONS
+    THREE INGREDIENTS INSTEAD OF TWO. A SUPER IS NOT A LARGER EVOLUTION: EACH ONE IS A
+    THIRD THING THAT NEITHER OF ITS PARENTS COULD DO ALONE.
+
+    VOID GYRE         DAGGER + SCYTHE + VOID ORB
+                      SUCTION WELLS HOLD WHAT THEY CATCH, AND THEIR DAMAGE IS A FUNCTION
+                      OF HOW MANY THEY HOLD. FEEBLE ALONE, ENORMOUS IN A KNOT. MORE
+                      PROJECTILES MEANS MORE WELLS.
+    PRISM ARRAY       FLAME + LANCE + CROSSBOW
+                      ONE LOCKED BEAM PER PROJECTILE, EACH ON A DIFFERENT ENEMY. A CROWD
+                      GETS SHREDDED FROM SEVERAL ANGLES AT ONCE.
+    EVENT HORIZON     RAIL RIFLE + SHOCK CORE + EMBER SPRAYER
+                      FOUR WELLS CIRCLE YOU, SWALLOW THE HORDE, THEN COLLAPSE. EACH
+                      IMPLOSION IS A BLAST AND THE WELL REOPENS ACROSS THE ORBIT.
+    HOARFROST WAKE    FROST SHARDS + VOID ORB
+                      THE SHARDS DRAG A FREEZING, GRINDING BUBBLE BEHIND THEM.
+                      EVERYTHING THE VOLLEY PASSES WALKS IN SLOW AND COMES APART, HIT
+                      OR NOT.
+```
+
+### CHESTS
+
+```
+    EVERY ELITE, CHAMPION AND OVERLORD DROPS ONE. WALK OVER IT - A CHEST IS A
+    PICKUP, NEVER A BUTTON.
+
+    # WHAT IS INSIDE
+    CARDS THAT IMPROVE THE WEAPONS YOU OWN AND THE BUILD AROUND THEM. NOT LEVEL-UPS
+    AND NOT NEW WEAPONS: A CORPSE MUST NOT BE ABLE TO ASK YOU A QUESTION.
+    THE BOX LEANS ON THE WEAPON IT HAS TOUCHED LEAST, SO A HAND NEVER LANDS ON ONE
+    GUN FOUR TIMES.
+
+    # HOW MANY
+    > ELITE      1 CARD.    THE SMALL CHANGE.
+    > CHAMPION   3 CARDS.   A WHOLE HAND.
+    > OVERLORD   5 CARDS.   MOST OF THE ARSENAL AT ONCE.
+    DEEP CACHE ADDS ONE MORE CARD TO EVERY BOX IN THE GAME.
+
+    # READING IT
+    OPENING A BOX PUTS A PANEL ON SCREEN NAMING EVERY CARD IT GAVE, IN THE COLOUR
+    OF THE TIER THAT DROPPED IT. IT HOLDS A FEW SECONDS AND THEN FADES. THE CARDS
+    ARE ALREADY YOURS; THE PANEL IS ONLY SO YOU CAN SEE WHAT WENT WHERE.
+```
+
+### THE UNIQUE RULES
+
+```
+    THESE ARE NOT BIGGER NUMBERS. EACH ONE CHANGES HOW SOMETHING WORKS, AND YOU GET
+    IT EXACTLY ONCE.
+
+    IGNITED CARAPACE  GETTING HIT DETONATES A BURST FOR 3X THE DAMAGE YOU TOOK.
+    SPREADSHOT        DOUBLE VOLLEY SPREAD AND FIRE RATE, BUT SHOTS SPRAY WIDE.
+    GAMBLERS EYE      +1 CARD IN EVERY FUTURE LEVEL-UP CHOICE.
+    SECOND CHANCE     +1 FREE REROLL AT EVERY LEVEL-UP.
+    ARSENAL CORE      +1 WEAPON SLOT.
+    DEEP CACHE        EVERY CHEST OPENS ONE MORE TIME.
+    SINGULARITY       EVERY 12S, VIOLENTLY YANKS NEARBY ENEMIES TOWARD YOU.
+    STORM BOLT        EVERY 3RD PROJECTILE HIT CHAINS LIGHTNING TO 3 NEARBY ENEMIES.
+    BLOOD PRICE       EVERY 20 KILLS DETONATES A BURST AROUND YOU.
+    COLD BLOOD        ENEMIES THAT HIT YOU ARE SLOWED FOR 2S.
+    LAST STAND        DROPPING BELOW 20% HP GRANTS A SECOND OF INVULNERABILITY.
+    ADRENALINE        BELOW 30% HP: +60% SPEED, AND 1S INVULNERABLE EVERY 20S.
+    REPULSION FIELD   ENEMIES THAT STRIKE YOU ARE VIOLENTLY KNOCKED AWAY.
+    VAMPIRIC HEART    LIFESTEAL HEALS 2 HP PER PROC INSTEAD OF 1.
+
+    # THE FOUR THAT TOUCH EVERY WEAPON YOU OWN
+    WHETSTONE         ALL OF THEM HIT 8% HARDER.
+    OILED GEARS        ALL OF THEM FIRE 7% FASTER.
+    LONG BARREL       ALL OF THEM REACH 10% FURTHER, AND THEIR SHOTS LIVE 10% LONGER.
+    HEAVY STOCK       EVERYTHING ALL OF THEM HIT IS THROWN 20% FURTHER.
+```
+
+### THE FOUR MARKS
+
+```
+    EVERY HIT YOU LAND CARRIES ALL FOUR. THEY STACK ON A BODY, SO SOMETHING YOU KEEP
+    BEATING FALLS APART INSTEAD OF FIGHTING BACK AT FULL STRENGTH.
+
+      FROSTBIND     EVERY HIT CHILLS WHAT IT STRIKES FOR 2.5S.
+      EMBERBRAND    EVERY HIT SETS IT ALIGHT FOR 22 BURNING DAMAGE A SECOND.
+      HEX           EVERY HIT MAKES THAT BODY TAKE 14% MORE DAMAGE, UP TO +84%.
+      ARMOUR SPLIT  EVERY HIT STRIPS 22 OF ITS OWN ARMOUR, AND IT STAYS STRIPPED.
+
+    # WHERE THEY COME FROM
+    THEY ARE A MILESTONE GROUP, WHICH MEANS
+    ALL FOUR APPEAR ON THE SAME SCREEN AND
+    TAKING ONE CLOSES THE OTHER THREE FOR
+    THE REST OF THE RUN. THE ONE YOU TOOK
+    KEEPS STACKING; THE OTHERS KEEP DROPPING.
+
+    A MILESTONE SCREEN REPLACES THE WHOLE
+    CHOICE AT EVERY POWER-OF-TWO LEVEL FROM 4
+    ON, AND CAN CARRY TWO GROUPS AT ONCE - SO
+    YOU PICK BOTH THE SUBJECT AND THE CARD.
 ```
 
 ### EVOLUTIONS
@@ -430,11 +731,11 @@ Shown in the game with **F1** (main menu, live run, or the pause screen). **11 p
     # THREE INGREDIENTS = SUPER EVOLUTION
     VOID GYRE        DAGGER + SCYTHE + ORB
     PRISM ARRAY      FLAME + LANCE + CROSSBOW
-    SERAPH ARRAY     DRILL + CROSSBOW + WHIP
     EVENT HORIZON    RAIL RIFLE + SHOCK + FLAME
+    HOARFROST WAKE   FROST SHARDS + ORB
 ```
 
-### ABILITIES  J / K / L
+### ABILITIES JKL
 
 ```
     THREE BUTTONS, LIVE FROM THE FIRST
@@ -470,7 +771,9 @@ Shown in the game with **F1** (main menu, live run, or the pause screen). **11 p
                BY THE SAME AMOUNT.
     REGEN      FLAT HP EVERY SECOND.
     DEFENSE    ONE NUMBER THAT MITIGATES
-               ALL DAMAGE. FLAT, THEN %.
+               DAMAGE. FLAT, THEN %. ARMOUR
+               PIERCE CARDS STRIP IT OFF A
+               BODY FOR GOOD, PERMANENTLY.
     SHIELD     ABSORBS BEFORE HP AND
                REGENERATES OUT OF COMBAT.
                A POOL AND A CLOCK: CARDS
@@ -488,7 +791,7 @@ Shown in the game with **F1** (main menu, live run, or the pause screen). **11 p
     PROJECTILES  ONE CARD SERVES EVERY
                WEAPON AT ONCE.
 
-    # THE MOMENTUM CHAIN
+    # THE KILL CHAIN
     KEEP KILLING AND A METER FILLS. STOP
     OR GET HIT AND IT COLLAPSES. EACH STACK
     ADDS DAMAGE AND FIRE RATE. CARDS CAN
@@ -515,7 +818,13 @@ Shown in the game with **F1** (main menu, live run, or the pause screen). **11 p
     # VIOLET MILESTONES
     EVERY POWER-OF-TWO LEVEL FROM 4 ON
     REPLACES THE WHOLE CHOICE WITH A
-    SPECIAL SCREEN. PICK 2 OF 3.
+    SPECIAL SCREEN. THE CARDS ARRIVE IN
+    GROUPS, AND EVERY MEMBER OF A GROUP IS
+    ON SCREEN AT ONCE. TAKE ONE AND THE
+    REST OF THAT GROUP IS CLOSED FOR THE
+    REST OF THE RUN - SO IT IS A DECISION,
+    NOT A ROLL. THE CARD YOU TOOK KEEPS
+    STACKING ON ITS OWN.
 
     # THE POOL NEVER DRIES UP
     AN EXHAUSTED OR FULLY MAXED POOL FALLS
@@ -531,7 +840,7 @@ Shown in the game with **F1** (main menu, live run, or the pause screen). **11 p
     MORE HP, FASTER, AND HARDER HITS.
 
     # ELITES AND ABOVE
-    ELITE    FROM 45S. ONE RANDOM TRAIT.
+    ELITE    FROM 1:30. ONE RANDOM TRAIT.
     CHAMPION OPENS WHEN ELITES STOP BEING
              A PROBLEM. SEVERAL TRAITS.
     OVERLORD OPENS WHEN CHAMPIONS DO.

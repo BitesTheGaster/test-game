@@ -17,6 +17,7 @@
 #include <fstream>
 #include <map>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -7748,5 +7749,128 @@ TEST_CASE("The manual's page jump reaches as far as the hint bar promises") {
     g.advance(1.0F / 60.0F, in);
     CAPTURE(key);
     REQUIRE(g.manualPageIndex() == static_cast<std::size_t>(key - 1));
+  }
+}
+
+// The generated document, as one string. `docs/content.md` is written by
+// tools/gendocs.py and is the only place the tier ladder, the chest rewards and
+// the difficulty ramps are written down as numbers rather than as code.
+static std::string readGeneratedDoc() {
+  std::ifstream f(std::string(GAME_ASSETS_DIR) + "/../docs/content.md");
+  REQUIRE(f.good());
+  return std::string{std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>()};
+}
+
+// The document's own number format, so a check written here formats the way
+// tools/gendocs.py does and a reformat of the document shows up as a test
+// failure rather than as a check that quietly stopped matching.
+static std::string docNum(float v) {
+  std::ostringstream os;
+  os << v;
+  std::string s = os.str();
+  // %g, not the C++ default: 28.0 prints "28" and 1.90 prints "1.9", because the
+  // generator uses ':g' and a check that does not would demand "| Champion |
+  // 28-46 | x1.9 |" while the document says "| Champion | 28-46 | x1.9 |" -- on
+  // this row by luck, and on the next one by accident.
+  if (s.find('.') != std::string::npos && s.find('e') == std::string::npos) {
+    while (!s.empty() && s.back() == '0') s.pop_back();
+    if (!s.empty() && s.back() == '.') s.pop_back();
+  }
+  return s;
+}
+
+TEST_CASE("The generated content doc lists every weapon, enemy and upgrade") {
+  // The most common way for docs/content.md to go stale is not a number moving
+  // -- that is what the generator is for -- it is a THING being added and the
+  // generator not being run. A weapon, an enemy or a card that exists in the
+  // game and not in the document reads, to the next person, as a thing that
+  // does not exist.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  const std::string doc = readGeneratedDoc();
+
+  for (const auto& w : content.weapons) {
+    CAPTURE(w.id);
+    REQUIRE(doc.find("`" + w.id + "`") != std::string::npos);
+  }
+  for (const auto& e : content.enemies) {
+    CAPTURE(e.id);
+    REQUIRE(doc.find("`" + e.id + "`") != std::string::npos);
+  }
+  for (const auto& u : content.upgrades) {
+    CAPTURE(u.id);
+    REQUIRE(doc.find("`" + u.id + "`") != std::string::npos);
+  }
+}
+
+TEST_CASE("The generated content doc is not behind the tier ladder it documents") {
+  // The ladder is the most balance-sensitive thing in the game and it lives in
+  // C++, not in data. A balance pass turns two of its numbers and nothing marks
+  // the document, so a run can end with one ladder in the code and a different
+  // one in the docs -- and the docs are what gets read before the next pass,
+  // which is exactly how a stale number becomes the number somebody tunes
+  // against next.
+  //
+  // So the publicly readable half is checked against the source: the HP bands,
+  // the spawn caps and the gates, which are all reachable through the same
+  // accessors a balance test would use. The HP/speed ramp and the chest counts
+  // are generated too, and for those the generator is the guard -- it exits with
+  // an error rather than printing a cell it could not read, so a moved constant
+  // breaks `python3 tools/gendocs.py` instead of quietly changing the document.
+  const std::string doc = readGeneratedDoc();
+
+  // A row is matched cell by cell, not as a string. A substring check on a
+  // whole row is a check that passes on the wrong row: looking for
+  // "2% of spawns" in a document that says "1.2% of spawns" succeeds, and an
+  // overlord cap doubled from 1.2% to 2% therefore reads as the document being
+  // correct. It is the same trap as a word search finding "chest" inside "every
+  // chest opens one more time" on a different page.
+  const auto cellsFor = [&doc](const char* tier) -> std::vector<std::string> {
+    const std::string want = std::string("| ") + tier + " |";
+    const auto at = doc.find(want);
+    if (at == std::string::npos) return {};
+    const auto eol = doc.find('\n', at);
+    std::vector<std::string> cells;
+    for (std::size_t i = at + want.size(); i < eol;) {
+      const auto bar = doc.find('|', i);
+      if (bar == std::string::npos || bar > eol) break;
+      // Markdown cells carry the padding that makes a table readable, and a
+      // check that compares a padded cell to a bare string fails on the padding
+      // rather than on the number.
+      const auto cell = doc.substr(i, bar - i);
+      const auto first = cell.find_first_not_of(' ');
+      cells.push_back(first == std::string::npos
+                          ? cell
+                          : cell.substr(first, cell.find_last_not_of(' ') - first + 1));
+      i = bar + 1;
+    }
+    return cells;
+  };
+  const auto hasCell = [](const std::vector<std::string>& cells,
+                          const std::string& want) {
+    return std::find(cells.begin(), cells.end(), want) != cells.end();
+  };
+
+  const char* names[3] = {"Elite", "Champion", "Overlord"};
+  for (int tier = 1; tier <= 3; ++tier) {
+    CAPTURE(tier);
+    const auto cells = cellsFor(names[tier - 1]);
+    REQUIRE_FALSE(cells.empty());
+    const auto band = game::tierHpBand(tier);
+    const std::string counts = docNum(band.first) + "-" + docNum(band.second);
+    const std::string share = docNum(game::tierSpawnCap(tier) * 100.0F) +
+                              "% of spawns";
+    INFO("row: | " << names[tier - 1] << " |" << [&cells] {
+      std::string all;
+      for (const auto& c : cells) all += " " + c + " |";
+      return all;
+    }());
+    REQUIRE(hasCell(cells, counts));
+    REQUIRE(hasCell(cells, share));
+    // The gate is what stops the next tier from being an accident, and it is
+    // the number a pass reaches for first.
+    if (tier > 1) {
+      REQUIRE(hasCell(cells, "tier-" + std::to_string(tier - 1) + " pressure " +
+                                docNum(game::Game::tierGate(tier))));
+    }
   }
 }

@@ -21,3 +21,4 @@ Thumbs.db
 # It lives next to the content so a copied build carries its progress, which
 # means it must never be committed.
 player.profile
+__pycache__/

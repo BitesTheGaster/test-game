@@ -714,12 +714,16 @@ relative `weight`, and `color`/`shape`.
   pointing at the spawn for off-screen spawns.
 - Enemy type is picked by **weighted roll among unlocked types** (`simTime >=
   unlockAt`), so the roster rotates in over time.
-- From ~45 s enemies arrive in **clusters** instead of one-at-a-time
-  trickles, and packs grow over the run (up to ~8 enemies per pack).
-- Every ~40–50 s a **horde burst** spawns a full ring of 10–24 enemies from
-  every side at once, with telegraphs ringing the whole screen. The ring is
-  called out with a `HORDE INCOMING` banner 2 s before it lands, so the player
-  gets to decide whether to hold the line or disengage.
+- Enemies arrive in **packs**, never one at a time, and the packs grow over the
+  run: the first minute averages two members, and by the end of a long run a pack
+  can be nine. There is no threshold at which clustering switches on — it is the
+  spawn system's normal shape from the first pack.
+- Every ~40–50 s a **horde burst** spawns a full ring of 10 to 24 enemies from
+  every side at once, with telegraphs ringing the whole screen. The first one is
+  at 2:00 rather than on the timer, so the player has a screen of ordinary packs
+  to read the run by first. Each is called out with a `HORDE INCOMING` banner 2 s
+  before it lands, so the player gets to decide whether to hold the line or
+  disengage.
 
 ### Enemy separation
 
@@ -732,39 +736,29 @@ relative `weight`, and `color`/`shape`.
 
 ### Difficulty ramp
 
-Three phases on the spawn interval, tuned so the first half-minute is a
-warm-up and difficulty bites hard from ~90 s:
+**The numbers are generated, not written here.** `docs/content.md` has a
+[Difficulty ramp](content.md#difficulty-ramp) section that reads the pack
+interval, the HP/speed/contact legs, the knee and the caps straight out of
+`Game::spawnWave` and `Game::currentScales`, and `tools/gendocs.py` exits with an
+error rather than printing a cell it could not read.
 
-```text
-t < 30 s :  interval = 1.2 − t·0.005         (1.20 s → 1.05 s)
-30–90 s  :  interval = max(0.50, 1.05 − (t−30)·0.0092)  (→ 0.50 s)
-t ≥ 90 s :  interval = max(0.20, 0.50 − (t−90)·0.003)   (→ min 0.20 s)
-```
+That is not ceremony. This section used to restate the same three legs by hand
+and every number in it was stale: a 7-minute knee that is at 8, a `/95` HP leg
+that is `/145`, a 420s knee that is 480, a cap of 22 that is 20. A prose document
+restating a formula has no way to notice the formula moved. Regenerate with
+`python3 tools/gendocs.py`.
 
-The 0.20 s floor is deliberate: at 0.12 s the game threw around thirty enemies
-a second at the player, which no build can answer and which just ends the run
-early. Five packs a second keeps the screen full while still being something
-you can fight your way out of.
+The reason the HP ramp exists in the shape it does is worth keeping in prose,
+because it is a design rule and not a number: **the HP ramp is the one piece of
+difficulty the player has no answer to.** A build three picks behind cannot
+outshoot a doubled enemy, so a steep ramp is not a harder game, it is a run where
+the player's choices stop mattering. The shape is intact — still rising, still
+steepening after the knee — it just no longer outruns the build. The heavies are
+now spread across the run instead, so the early leg does not have to carry all of
+the difficulty on its own.
 
-- Enemy HP also scales globally. Up to the 7-minute mark it is multiplied by
-  `1 + t/95`; **after 7 minutes the ramp steepens** (`+ (t−420)/60`), so the
-  late game escalates faster. Capped at ×22.
-- Enemy **move speed** drifts up over the run (`1 + t/720` → `×1.58` at 7 min),
-  and **after 7 minutes it too accelerates** (`+ (t−420)/360`, capped at
-  ×2.15) so late waves stay threatening even for a leveled arsenal.
-- Enemy **contact damage** creeps up as `1 + t/2000`, so late hits land harder.
-
-Every one of these three is lower than it was, and the knee moved a minute
-later. The reason is the same as the XP curve: **the HP ramp is the one piece of
-difficulty the player has no answer to.** A build that is three picks behind
-cannot outshoot a ×12 enemy, so a steep ramp is not a harder game, it is a run
-where the player's choices stop mattering. The shape is intact — still rising,
-still steepening after the knee — it just no longer outruns the build. At ten
-minutes the old curve put ordinary bats on ×11.5 HP; it is now ×8.4.
-- Enemy **defense** grows over time (see below) so late enemies shrug off a
-  slice of every hit.
-- Up to **8000 enemies** can be alive at once; the cap protects the frame
-  rate rather than throttling spawns.
+- Up to **8000 enemies** can be alive at once; the cap protects the frame rate
+  rather than throttling spawns.
 
 ### Elites, champions & overlords
 
@@ -774,13 +768,21 @@ top of the traits they roll:
 
 | Roll | Becomes | Gate | HP | Touch | Speed | XP |
 |------|---------|------|----|-------|-------|----|
-| t ≥ 90 s | Elite (tier 1) | on the clock | ×3.5–6.5 | ×1.25 | ×1.08 | ×3 |
-| t ≥ 90 s | Champion (tier 2) | **once elites are routine** | ×15–55 | ×1.9 | ×1.18 | ×5 |
-| t ≥ 240 s | Overlord (tier 3) | **once champions are routine** | ×70–450 | ×2.8 | ×1.3 | ×10 |
+| t ≥ 1:30 | Elite (tier 1) | on the clock | ×5–8 | ×1.25 | ×1.08 | ×3 |
+| t ≥ 1:30 | Champion (tier 2) | 14 elite kills' worth of pressure | ×28–46 | ×1.9 | ×1.18 | ×5 |
+| t ≥ 4:00 | Overlord (tier 3) | 9 champion kills' worth of pressure | ×100–150 | ×2.8 | ×1.3 | ×10 |
 
-Elites open on a timer (2.5% per spawn, creeping to 10%). **Champions and
-overlords are not on a clock at all** — they answer to how well the player is
-doing. See [Adaptive tribunal director](#adaptive-tribunal-director).
+This table is duplicated, also generated from the source, in
+[`content.md`](content.md#the-elite-ladder) — together with the spawn chance
+curve, the live cap and the post-promotion grace period, none of which are
+restated here because every one of them was wrong here at some point.
+
+Elites open on a timer, creeping to 10% of spawns. **Champions and overlords are
+not on a clock at all** — they answer to how well the player is doing, and even
+then only trickle: a champion's chance is `min(2.5%, (pressure − 14) × 0.0022)`
+and an overlord's is `min(1.2%, (pressure − 9) × 0.0012)`. At most two of a tier
+are alive at once. See [Adaptive tribunal director](#adaptive-tribunal-director)
+and [`content.md`](content.md#the-elite-ladder).
 
 HP is a range rolled per spawn, so two elites of the same type are visibly
 different sizes of problem. **XP is deliberately not nerfed with the rest of

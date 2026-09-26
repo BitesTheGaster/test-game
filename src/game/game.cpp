@@ -5534,7 +5534,7 @@ bool Game::tierUnlocked(int tier) const {
     // 1:30 instead of 0:45. The first elite used to arrive before the player
     // had a third pick, which meant the run's first real decision was "do I
     // play around the thing that is about to end me".
-    case 1: return tierOpen_[1] && simTime_ >= 90.0F;
+    case 1: return tierOpen_[1] && simTime_ >= kEliteMinTime;
     case 2: return tierOpen_[2];
     case 3: return tierOpen_[3];
     default: return false;

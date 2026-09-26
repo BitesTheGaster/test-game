@@ -1867,6 +1867,10 @@ private:
   // player a quiet screen. Rolling the tier happens only when there is room.
   static constexpr int kLiveTierCap = 2;
   // Even a great player waits this long: the first minute is for the build.
+  // The elite gate is here rather than in tierUnlocked's switch because it is
+  // one of the three numbers the tier ladder is made of, and a ladder with one
+  // rung spelled as a literal is a ladder the docs cannot read.
+  static constexpr float kEliteMinTime = 90.0F;
   static constexpr float kChampionMinTime = 90.0F;
   static constexpr float kOverlordMinTime = 240.0F;
   // Once earned, a tier stays open for a while so the director does not
