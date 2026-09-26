@@ -2,6 +2,7 @@
 
 #include <glad/glad.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 
@@ -301,7 +302,23 @@ void Batcher::text(float x, float y, float scale, Color c, std::string_view str)
 }
 
 float Batcher::textWidth(float scale, std::string_view str) const {
-  return static_cast<float>(str.size()) * 6.0F * scale;
+  // The width of the LONGEST line, not of the whole string. Every caller uses
+  // this to centre or to decide whether a string fits a box, and both are wrong
+  // for a multi-line string: "AAA\nB" measured 5 characters, so it was centred
+  // 3 characters too far right and reported as far too wide to fit a 3-character
+  // cell. A newlines-are-zero-width measurement is also just wrong -- the glyphs
+  // after one are still drawn.
+  float longest = 0.0F;
+  float run = 0.0F;
+  for (const char c : str) {
+    if (c == '\n') {
+      longest = std::max(longest, run);
+      run = 0.0F;
+    } else {
+      run += 6.0F * scale;
+    }
+  }
+  return std::max(longest, run);
 }
 
 void Batcher::flush() {

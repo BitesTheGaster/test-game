@@ -12,6 +12,10 @@ namespace {
 
 constexpr float kPi = 3.14159265358979F;
 constexpr std::size_t kMaxEnemies = 8000;
+// How long a tribunal banner lives, in seconds. One constant for both the timer
+// and the fade-in, because the fade has to be measured against the lifetime it
+// is fading from.
+constexpr float kTierBannerLife = 4.0F;
 // Visible rows in the test sandbox's item list.
 constexpr int kTestShopRows = 14;
 constexpr float kSpawnDist = 11.0F;
@@ -24,6 +28,30 @@ constexpr float kContactIframes = 0.18F;    // enemies connect more often
 // reduced share of one blade's contact damage (see updateOrbitBlades).
 constexpr float kOrbitInnerMul = 0.35F;
 
+// How wide, in radians, the Blade Vortex gap is -- half-angle, so the full
+// opening is twice this. Sized off the ring rather than hard-coded to a blade
+// count: with two blades a gap narrower than a blade's own shadow would never
+// fit an enemy, and with six a wide one would overlap its neighbours and the
+// "gap" would stop being a gap.
+constexpr float kOrbitWindowHalf = 0.42F;
+
+// How far above the first target a chain bolt is drawn coming down from. A
+// lightning strike that starts at the victim's own centre is just a dot; the
+// vertical drop is what makes it read as a strike.
+constexpr float kChainSkyDrop = 4.2F;
+
+// Deterministic per-point jitter for a jagged bolt, in [-1, 1]. Derived from the
+// entity handle and the step index so the bolt is a different shape every shot
+// but does not shimmer between frames within one shot (which would look like
+// noise, not lightning).
+float boltJitter(unsigned seed) {
+  unsigned h = seed * 2654435761U;
+  h ^= h >> 15U;
+  h *= 2246822519U;
+  h ^= h >> 13U;
+  return static_cast<float>(h & 0xFFFFU) / 32767.5F - 1.0F;
+}
+
 // Enemies die once their HP drops to (or below) this tiny epsilon. Defense
 // mitigation and float rounding can otherwise leave a sliver of HP, so a hit
 // that should be lethal leaves a "0 HP" enemy alive.
@@ -32,12 +60,18 @@ constexpr float kEnemyDeathEpsilon = 1.0e-3F;
 // Base HP multiplier ranges per enemy tier. Rolled per spawn so each elite is
 // tougher than the last; higher tiers are exponentially beefier so they never
 // simply melt. Applied on top of the global time-based hp scale.
-constexpr float kEliteHpMin = 5.0F;
-constexpr float kEliteHpMax = 10.0F;
-constexpr float kChampionHpMin = 25.0F;
-constexpr float kChampionHpMax = 100.0F;
-constexpr float kOverlordHpMin = 125.0F;
-constexpr float kOverlordHpMax = 1000.0F;
+// These came down across the board. An elite is meant to be the thing that
+// interrupts a good run, not the thing that ends it: at 5-10x base HP an elite
+// of an ordinary trash type was already a health bar, and a champion at 25-100x
+// was a wall. The bands are still far enough apart to read at a glance (a
+// champion is visibly a different proposition from an elite) but they no longer
+// out-scale everything the player can own by minute three.
+constexpr float kEliteHpMin = 3.5F;
+constexpr float kEliteHpMax = 6.5F;
+constexpr float kChampionHpMin = 15.0F;
+constexpr float kChampionHpMax = 55.0F;
+constexpr float kOverlordHpMin = 70.0F;
+constexpr float kOverlordHpMax = 450.0F;
 
 // Trait pool. Elites roll exactly one; champions and overlords roll several
 // (see traitsForTier).
@@ -69,9 +103,12 @@ struct TierBuffs {
 
 TierBuffs tierBuffs(int tier) {
   switch (tier) {
-    case 3: return {kOverlordHpMin, kOverlordHpMax, 4.0F, 1.5F, 10.0F};
-    case 2: return {kChampionHpMin, kChampionHpMax, 2.5F, 1.3F, 5.0F};
-    case 1: return {kEliteHpMin, kEliteHpMax, 1.5F, 1.15F, 3.0F};
+    // Touch and speed are down too. The XP multiplier is deliberately NOT: an
+    // elite is a reward before it is a threat, and if killing it is worse value
+    // than killing three pieces of trash then the player is right to ignore it.
+    case 3: return {kOverlordHpMin, kOverlordHpMax, 2.8F, 1.30F, 10.0F};
+    case 2: return {kChampionHpMin, kChampionHpMax, 1.9F, 1.18F, 5.0F};
+    case 1: return {kEliteHpMin, kEliteHpMax, 1.25F, 1.08F, 3.0F};
     default: return {1.0F, 1.0F, 1.0F, 1.0F, 1.0F};
   }
 }
@@ -358,13 +395,23 @@ float mitigateDamage(float raw, float defense) {
 
 float xpForLevel(int level) {
   // The pacing lever of the whole game. Level-ups are picks, and picks are the
-  // only thing that makes a run interesting, so the curve is deliberately
-  // steep: with the old numbers a build was maxed out in ~4 minutes and the
-  // remaining 20 were an empty walk. At this rate the core damage/fire-rate
-  // cards are still worth taking at minute 10, and the big milestones (16, 32,
-  // 64) land at 3 / 8 / 20+ minutes instead of 1 / 2 / 4.
+  // only thing that makes a run interesting.
+  //
+  // This curve was made deliberately steep a few rounds back, on the reasoning
+  // that a build maxed out in four minutes makes the other twenty an empty walk.
+  // That was half right, and it overshot: the same steepness that keeps picks
+  // coming late also keeps the player BEHIND for the whole first half of a run,
+  // because the fight is on before the build is. Being under-levelled is not a
+  // slow start, it is a dead run -- the player never gets the tools that answer
+  // what is hitting them.
+  //
+  // So this is about 0.62x of the old curve, uniformly: reaching level 16 costs
+  // 3.0k instead of 4.8k, level 32 costs 20k instead of 33k. The shape is
+  // deliberately unchanged -- still a rising quadratic, not a flattened one --
+  // because a flat curve would deliver every level in the same length of time
+  // and the run would stop having a shape at all.
   const float l = static_cast<float>(level - 1);
-  return 12.0F + 9.0F * l + 2.6F * l * (l + 1.0F);
+  return 10.0F + 6.5F * l + 1.55F * l * (l + 1.0F);
 }
 
 float aoeFalloff(int enemiesHit, int pierce) {
@@ -377,25 +424,38 @@ float aoeFalloff(int enemiesHit, int pierce) {
 }
 
 float enemyDefense(float simTime, int tier) {
-  // A short grace period keeps the opening minute free of mitigation, then
-  // defense ramps so late waves shrug off a slice of every hit.
-  const float base = std::max(0.0F, simTime - 30.0F) / 25.0F;
-  const float tierMul = tier >= 3 ? 2.8F : tier == 2 ? 2.0F : tier == 1 ? 1.4F : 1.0F;
+  // A grace period keeps the opening free of mitigation, then defense ramps so
+  // late waves shrug off a slice of every hit.
+  //
+  // The grace is a full minute now and the ramp is a third slower, for the same
+  // reason the XP curve came down: mitigation is a tax on every hit forever, so
+  // it punishes a build that is still coming together far more than it punishes
+  // a finished one. An enemy that takes 10% off every swing from minute two is
+  // not a difficulty curve, it is an invisible tax on the first ten picks.
+  const float base = std::max(0.0F, simTime - 60.0F) / 34.0F;
+  const float tierMul = tier >= 3 ? 2.2F : tier == 2 ? 1.7F : tier == 1 ? 1.25F : 1.0F;
   return base * tierMul;
 }
 
 float enemyLifestealResistance(float simTime, int tier, bool resistant) {
-  float res = std::min(0.75F, simTime / 1200.0F);
+  // Caps and rates both down. Drain is one of the strongest things a build can
+  // own, and a resistance curve that reaches 75% on ordinary trash quietly taxes
+  // every lifesteal build for the whole run rather than making elites the thing
+  // you build drain for.
+  float res = std::min(0.60F, simTime / 1500.0F);
   res += tier >= 3 ? 0.35F : tier == 2 ? 0.25F : tier == 1 ? 0.15F : 0.0F;
   if (resistant) res += 0.5F;
   return std::min(1.0F, res);
 }
 
 float enemyKnockbackResistance(float simTime, int tier, bool resistant) {
-  // Reaches 70% resistance for an ordinary enemy at 8:45, then tier and trait
-  // bonuses push elites/champions/overlords towards the cap. 750s instead of
-  // the old 900s makes the ramp visible inside a normal run.
-  float res = std::min(0.7F, simTime / 750.0F);
+  // Reaches 55% resistance for an ordinary enemy at 13:45 instead of 70% at
+  // 8:45, then tier and trait bonuses push elites towards the cap. Knockback is
+  // a positioning tool, so resistance is a tax on the player's control rather
+  // than on their damage: at the old rate an ordinary enemy stopped being
+  // pushable halfway through a run, which quietly turned "walk backwards and
+  // kite" into "stand still and hope".
+  float res = std::min(0.55F, simTime / 900.0F);
   res += tier >= 3 ? 0.35F : tier == 2 ? 0.25F : tier == 1 ? 0.15F : 0.0F;
   if (resistant) res += 0.5F;
   return std::min(1.0F, res);
@@ -403,9 +463,12 @@ float enemyKnockbackResistance(float simTime, int tier, bool resistant) {
 
 int traitsForTier(int tier, float simTime) {
   if (tier <= 1) return tier == 1 ? 1 : 0; // elite: exactly one bonus
-  // Champions: 2 base, +1 after 4 minutes. Overlords: 4 base, +1 after 8.
-  if (tier == 2) return 2 + (simTime >= 240.0F ? 1 : 0);
-  return 4 + (simTime >= 480.0F ? 1 : 0);
+  // Champions: 2 base, +1 after 5 minutes. Overlords: 4 base, +1 after 10.
+  // Both extra traits moved later. A champion with three traits at the four
+  // minute mark is not a champion, it is a boss with a champion's label, and the
+  // player has no way to have built for it yet.
+  if (tier == 2) return 2 + (simTime >= 300.0F ? 1 : 0);
+  return 4 + (simTime >= 600.0F ? 1 : 0);
 }
 
 Game::Game(const Content& content, std::uint32_t seed)
@@ -432,6 +495,13 @@ void Game::reset() {
   pending_.clear();
   particles_.clear();
   particleCursor_ = 0;
+
+  // The manual is not run state and deliberately survives a reset — a player who
+  // was partway through the weapon list should not lose their place. The page
+  // INDEX is clamped here anyway, because the content it indexes into is what a
+  // reset could plausibly change, and out of range is the one value the renderer
+  // cannot recover from.
+  if (manualPage_ >= content_.manual.size()) manualPage_ = 0;
 
   shield_ = 0.0F;
   shieldDelay_ = 0.0F;
@@ -486,8 +556,17 @@ void Game::reset() {
   syncProfileUnlocks();
 
   // Weapon test mode is a session-level sandbox; a fresh run starts clean.
+  // All five flags, not the two that were here: testInvuln_, testTimeScale_ and
+  // testShopOpen_ were left stale across a reset. Nothing broke, because every
+  // reader is gated on testMode_ (now false) and enterTestModeImpl happens to
+  // re-initialise them -- but that masking is incidental, and a new consumer
+  // reading one of the three would have inherited the previous run's sandbox
+  // state.
   testMode_ = false;
   testBoosted_ = false;
+  testInvuln_ = false;
+  testShopOpen_ = false;
+  testTimeScale_ = 1;
   testWeaponIdx_ = 0;
   savedWeaponCount_ = 0;
   savedStats_ = PlayerStats{};
@@ -746,6 +825,11 @@ void Game::advance(float frameDt, const FrameInput& input) {
   // F1 from a live run, the pause screen or a level-up screen. The run is not
   // advanced this frame: reading the manual should not cost you the horde.
   if (input.manualToggle) {
+    // Opening the manual disarms an armed abandon. It used not to, so the flow
+    // "arm Q, open the manual, close it" left a destructive action primed with
+    // its red hint still showing -- and this branch returns before the cancel
+    // list below ever gets a look at the input.
+    quitArmed_ = false;
     openManual();
     timestep_.reset();
     return;
@@ -758,10 +842,39 @@ void Game::advance(float frameDt, const FrameInput& input) {
   if (input.togglePause) {
     if (state_ == RunState::Playing) {
       state_ = RunState::Paused;
+      // Pausing disarms the quit, so the arming window belongs to the pause you
+      // are looking at rather than surviving an unpause/pause cycle.
+      quitArmed_ = false;
     } else if (state_ == RunState::Paused) {
       state_ = RunState::Playing;
       bestiaryOpen_ = false;
+      quitArmed_ = false;
     }
+  }
+  // Q on the pause screen abandons the run. Two presses, because throwing away a
+  // twenty-minute run on a stray keypress is unforgivable and there was, until
+  // now, no way out of a run at all short of dying on purpose.
+  if (state_ == RunState::Paused && input.quitRun) {
+    if (quitArmed_) {
+      quitArmed_ = false;
+      bestiaryOpen_ = false;
+      testShopOpen_ = false;
+      // reset() rebuilds the registry and clears stats and weapons outright, so
+      // it supersedes everything the sandbox would have restored. Calling
+      // exitTestMode() here too was pure waste -- and worse, exitTestModeImpl
+      // sets state_ = GameOver on its way out, which reset() then undoes.
+      reset();
+      menuOpen_ = true;
+      return;
+    }
+    quitArmed_ = true;
+  }
+  // Anything else the player decides on the pause screen cancels the armed quit,
+  // so a player who changes their mind and does something else does not lose the
+  // run to a later Q. (F1 is not in this list because it is handled above and
+  // returns, which is exactly why it had to be cleared there.)
+  if (quitArmed_ && state_ == RunState::Paused && input.togglePause) {
+    quitArmed_ = false;
   }
   // ESC from game over returns to the main menu (the menu is where a fresh
   // player starts, and R still restarts in place).
@@ -779,16 +892,26 @@ void Game::advance(float frameDt, const FrameInput& input) {
     return;
   }
   // Weapon test mode: T opens/closes it, then the sandbox keys take over.
-  if ((state_ == RunState::Playing || state_ == RunState::LevelUp) &&
-      input.testModeToggle) {
+  //
+  // Only Playing. The condition used to also accept LevelUp on the strength of
+  // a comment claiming "sandbox switches work even while a level-up card screen
+  // is open" -- but that state is unreachable while the sandbox is on: the
+  // sandbox can only be entered from Playing, and while it is on nothing can
+  // reach LevelUp (grantXp returns early, the level-up trigger is gated on
+  // !testMode_, and enterTestMode arms a weapon so the starter pick never
+  // fires). It was a branch that looked like a feature and did nothing.
+  if (state_ == RunState::Playing && input.testModeToggle) {
     if (testMode_) {
       exitTestMode();
-    } else if (state_ == RunState::Playing) {
+    } else {
       enterTestMode();
     }
   }
   if (testMode_) {
-    // Sandbox switches work even while a level-up card screen is open.
+    // The switches that are not about the run itself (shop, invulnerability,
+    // difficulty clock, max-all) stay live on any screen, so a player does not
+    // have to un-pause the game to flip one. The ones that drive the world --
+    // killing the player, changing weapon -- need the world to be running.
     if (input.testShop) toggleTestShop();
     if (input.testInvuln) toggleTestInvuln();
     if (input.testTime) cycleTestTimeScale();
@@ -913,6 +1036,7 @@ void Game::fixedStep() {
   updateZoneEffects();
   updateLures();
   updateChainLightning();
+  updateWaveEffects();
   updateNovaRing();
   updateEnemyShots();
   updatePickups();
@@ -1143,11 +1267,13 @@ void Game::updateEnemies() {
       }
     });
 
-    // Slowed enemies (ice blood) move at 45%.
+    // Chilled/slowed enemies move at `slowMul` of their own speed. The multiplier
+    // is stored on the enemy rather than being a constant so that a deeper chill
+    // replaces a shallower one instead of both fighting over one number.
     float effSpeed = en.speed;
     if (en.slowT > 0.0F) {
       en.slowT -= dt;
-      effSpeed *= 0.45F;
+      effSpeed *= en.slowMul;
     }
 
     v.x = dx * effSpeed + sepX * 12.0F;
@@ -1192,6 +1318,7 @@ void Game::updateEnemies() {
       }
       if (stats_.iceBlood != 0) {
         en.slowT = 2.0F;
+        en.slowMul = 0.45F;
       }
       hurtPlayer(en.touch);
       retaliateKnockback(e);
@@ -1251,6 +1378,55 @@ void Game::fireWeapons() {
 
   for (int i = 0; i < weaponCount_; ++i) {
     auto& w = weapons_[i];
+
+    // --- Draining a shot that is still in progress ---------------------------
+    // These two are NOT cooldowns. A three-arc whip and a double-pulse nova are
+    // each ONE attack that pays out over the following beat, and the whole point
+    // is that they do NOT recharge in between: the second arc is part of the same
+    // swing, and the echo ring lands while the first ring is still growing.
+    //
+    // They used to sit BELOW the cooldown gate, under a comment saying they were
+    // drained before the cooldown was consulted -- which was not true. So the
+    // follow-up waited for the weapon's own cooldown to expire first: a
+    // three-arc Tidal Lash whose last two arcs were really two more separate
+    // attacks, and a Discharge echo that arrived two seconds after the ring it
+    // was supposed to double had already finished. Both cards did nothing.
+    //
+    // Draining first also gets the ordering right for free: a shot that is mid
+    // burst spends its frames finishing the burst, and only fires again once the
+    // burst is over AND the timer has expired.
+    if (w.attackType == AttackType::Wave && w.waveBurstLeft > 0) {
+      if (w.waveBurstTimer > 0.0F) {
+        w.waveBurstTimer -= 1.0F / 60.0F;
+        continue;
+      }
+      w.waveBurstTimer = kWaveBurstGap;
+      const float burstDmg = w.damage * stats_.damageMul * momentumDamageMul_;
+      spawnWaveCrescent(w, w.waveBurstAngle, burstDmg, w.pierce + stats_.pierceAdd);
+      --w.waveBurstLeft;
+      w.waveBurstAngle += w.waveArcStep;
+      // Deliberately does NOT touch `w.timer`: the rest of the burst is part of
+      // the same shot, and recharging between arcs would turn a three-arc whip
+      // into three separate attacks.
+      continue;
+    }
+
+    if (w.attackType == AttackType::Nova && w.novaEchoesLeft > 0) {
+      if (w.novaEchoTimer > 0.0F) {
+        w.novaEchoTimer -= 1.0F / 60.0F;
+        continue;
+      }
+      if (player_ == entt::null || !registry_.valid(player_)) {
+        w.novaEchoesLeft = 0;
+      } else {
+        const auto& ept = registry_.get<Transform>(player_);
+        spawnNovaRing(ept.x, ept.y, w, w.pierce + stats_.pierceAdd);
+      }
+      --w.novaEchoesLeft;
+      w.novaEchoTimer = w.novaEcho;
+      continue;
+    }
+
     w.timer -= 1.0F / 60.0F;
     if (w.timer > 0.0F) continue;
 
@@ -1274,7 +1450,32 @@ void Game::fireWeapons() {
           s.color = w.color;
           s.circle = true;
           registry_.emplace<Sprite>(proj, s);
-          registry_.emplace<Projectile>(proj, damage, pierce, w.life, w.area, w.strength, w.homing, w.bounces, 0);
+          Projectile pr{};
+          pr.damage = damage;
+          pr.pierce = pierce;
+          pr.life = w.life;
+          pr.area = w.area;
+          pr.strength = w.strength;
+          pr.homing = w.homing;
+          pr.bounces = w.bounces;
+          // The ice carries its status onto every shot it fires; a weapon with
+          // no chill leaves both at zero and the hit path skips it entirely.
+          pr.chillMul = w.chillMul;
+          pr.chillTime = w.chillTime;
+          pr.auraRadius = w.auraRadius;
+          pr.auraDps = w.auraDps;
+          pr.auraTick = w.auraTick;
+          pr.auraTimer = 0.0F;
+          pr.auraChillMul = w.auraChillMul;
+          pr.auraChillTime = w.auraChillTime;
+          pr.reaimRange = w.reaimRange;
+          pr.reaimTurn = w.reaimTurn;
+          // One bend per body the bolt is allowed to touch. See the note on
+          // `reaimLeft`: the bend is NOT paid out of the pierce, because that
+          // would make `pierce` mean "a third fewer bodies" on this weapon and
+          // exactly what it means on the other thirty-two.
+          pr.reaimLeft = w.reaimRange > 0.0F ? pierce + 1 : 0;
+          registry_.emplace<Projectile>(proj, pr);
         }
         w.timer = cooldown;
         break;
@@ -1296,6 +1497,7 @@ void Game::fireWeapons() {
           std::vector<entt::entity> hits;
           std::vector<float> hx;
           std::vector<float> hy;
+          std::vector<float> hdist;
           for (const auto e : view) {
             const auto& et = view.get<Transform>(e);
             const float dx = et.x - pt.x;
@@ -1310,13 +1512,96 @@ void Game::fireWeapons() {
               hits.push_back(e);
               hx.push_back(et.x);
               hy.push_back(et.y);
+              hdist.push_back(dist2);
             }
           }
-          // AoE falloff: a cone that catches a crowd deals less to each target.
-          const float coneMul = aoeFalloff(static_cast<int>(hits.size()), pierce);
-          for (std::size_t hi = 0; hi < hits.size(); ++hi) {
-            applyEnemyDamage(hits[hi], damage * coneMul);
-            spawnParticles(hx[hi], hy[hi], {1.0F, 0.5F, 0.1F, 1.0F}, 4, 3.0F);
+          // NEAREST FIRST, and this has to be a real sort rather than a comment
+          // claiming the registry hands them over in range order -- it does not,
+          // and the drill's whole rule is "the bit latches the NEAREST body in
+          // the arc". Without the sort it latched whichever enemy the entity
+          // store happened to yield first, so the same two bodies could be
+          // drilled in either order depending on spawn order, and the weapon's
+          // description was a lie.
+          const auto byRange = [&hdist](std::size_t a, std::size_t b) {
+            return hdist[a] < hdist[b];
+          };
+          std::vector<std::size_t> order(hits.size());
+          for (std::size_t i = 0; i < order.size(); ++i) order[i] = i;
+          std::sort(order.begin(), order.end(), byRange);
+          if (!order.empty() && order.front() != 0) {
+            std::vector<entt::entity> sortedE;
+            std::vector<float> sortedX;
+            std::vector<float> sortedY;
+            sortedE.reserve(hits.size());
+            sortedX.reserve(hits.size());
+            sortedY.reserve(hits.size());
+            for (const std::size_t i : order) {
+              sortedE.push_back(hits[i]);
+              sortedX.push_back(hx[i]);
+              sortedY.push_back(hy[i]);
+            }
+            hits.swap(sortedE);
+            hx.swap(sortedX);
+            hy.swap(sortedY);
+          }
+
+          if (w.coneBite > 0.0F) {
+            // --- The drill's bite --------------------------------------------
+            // The Jackhammer Drill was "a cone" and so was the Ember Sprayer, so
+            // one of them had to stop being a cone. The bite is the difference:
+            // the bit commits to ONE body in the arc and chews it, and the longer
+            // it stays buried the deeper it goes. The Sprayer washes a crowd
+            // evenly and is therefore better at trash; the drill is the answer to
+            // something with armour, and a real mistake against a swarm.
+            //
+            // So: keep only the latched target, and re-latch when it dies or
+            // steps out of the arc. `hits` is already in range order, so the
+            // first entry is the nearest.
+            //
+            // Two different ways to lose the latch, and they are treated
+            // differently on purpose. If the target DIED, the bit carries its ramp
+            // straight onto the next body -- that is what makes drilling a queue of
+            // heavies worth so much more than drilling one, and it is the Bore
+            // card's whole rule. If the target merely walked out of the arc, the
+            // ramp restarts, because the bit never actually went deep on anything.
+            const bool latchAlive = w.coneLatch != entt::null && registry_.valid(w.coneLatch);
+            const bool stillLatched =
+                latchAlive && std::find(hits.begin(), hits.end(), w.coneLatch) != hits.end();
+            if (stillLatched) {
+              ++w.coneBiteTicks;
+            } else {
+              w.coneLatch = hits.empty() ? entt::null : hits.front();
+              if (w.coneLatch == entt::null) {
+                w.coneBiteTicks = 0;
+              } else if (latchAlive) {
+                // Left the arc without dying: it was not drilled through.
+                w.coneBiteTicks = 1;
+              } else {
+                // Drilled through: keep the depth. `>= 1` covers the case where
+                // the slot was empty on the very first tick.
+                w.coneBiteTicks = std::max(1, w.coneBiteTicks);
+              }
+            }
+            if (w.coneLatch != entt::null) {
+              const auto latchIt = std::find(hits.begin(), hits.end(), w.coneLatch);
+              const std::size_t hi = static_cast<std::size_t>(latchIt - hits.begin());
+              // The ramp is a multiple of the base, capped, so a bite can never
+              // become the answer to everything by out-scaling the rest of the kit.
+              const float ramp = std::min(
+                  std::max(1.0F, w.coneBiteMax),
+                  1.0F + static_cast<float>(w.coneBiteTicks - 1) * w.coneBite);
+              // No crowd falloff: the bite hit exactly one body, which is the
+              // entire point of committing to it.
+              applyEnemyDamage(w.coneLatch, damage * ramp);
+              spawnParticles(hx[hi], hy[hi], {0.88F, 0.92F, 1.0F, 1.0F}, 4, 3.0F);
+            }
+          } else {
+            // AoE falloff: a cone that catches a crowd deals less to each target.
+            const float coneMul = aoeFalloff(static_cast<int>(hits.size()), pierce);
+            for (std::size_t hi = 0; hi < hits.size(); ++hi) {
+              applyEnemyDamage(hits[hi], damage * coneMul);
+              spawnParticles(hx[hi], hy[hi], {1.0F, 0.5F, 0.1F, 1.0F}, 4, 3.0F);
+            }
           }
           // Visible flame fan along the aim direction so the cone reads on
           // screen (reuses the fading-wedge renderer).
@@ -1330,32 +1615,140 @@ void Game::fireWeapons() {
           sw.timer = 0.22F;
           sw.startAngle = baseAngle - halfAngle;
           sw.endAngle = baseAngle + halfAngle;
-          sw.color = {1.0F, 0.55F, 0.10F, 1.0F};
+          sw.color = w.coneBite > 0.0F
+                         ? core::render::Color{0.88F, 0.92F, 1.0F, 1.0F}
+                         : core::render::Color{1.0F, 0.55F, 0.10F, 1.0F};
           registry_.emplace<SweepEffect>(se, sw);
+
+          // --- Hearthfire: scorch the ground the cone has swept -------------
+          // Pools are dropped by DISTANCE the tip has travelled, not on a timer,
+          // so walking with the sprayer lays a continuous trail and standing
+          // still does not stack a hundred pools on one tile. The tip is where the
+          // cone actually reaches, which is the point: the trail is in front of
+          // you, where you are about to be.
+          if (w.coneEmberAt > 0.0F) {
+            const float tipX = pt.x + std::cos(baseAngle) * coneRange * 0.75F;
+            const float tipY = pt.y + std::sin(baseAngle) * coneRange * 0.75F;
+            if (w.coneEmberWalked <= 0.0F) {
+              w.coneEmberWalked = w.coneEmberAt; // drop the first one immediately
+            }
+            const float dx = tipX - w.coneEmberLastX;
+            const float dy = tipY - w.coneEmberLastY;
+            w.coneEmberWalked += std::sqrt(dx * dx + dy * dy);
+            w.coneEmberLastX = tipX;
+            w.coneEmberLastY = tipY;
+            // A while-loop, not an if: crossing a whole screen in one tick must
+            // not silently drop a single pool and leave a dotted line.
+            while (w.coneEmberWalked >= w.coneEmberAt) {
+              w.coneEmberWalked -= w.coneEmberAt;
+              // Cap the live pools. An uncapped trail is a fire map, which is a
+              // different weapon: it removes the reason to keep moving.
+              if (w.coneEmberLive >= 6) {
+                entt::entity oldest = entt::null;
+                float oldestAge = -1.0F;
+                for (const auto ze : registry_.view<ZoneEffect>()) {
+                  const auto& z = registry_.get<ZoneEffect>(ze);
+                  if (z.weaponIndex != i) continue;
+                  const float age = z.duration - z.timer;
+                  if (oldest == entt::null || age > oldestAge) {
+                    oldest = ze;
+                    oldestAge = age;
+                  }
+                }
+                if (oldest != entt::null) {
+                  destroyQueue_.push_back(oldest);
+                  --w.coneEmberLive;
+                }
+              }
+              const auto pool = registry_.create();
+              registry_.emplace<Transform>(pool, tipX, tipY, tipX, tipY);
+              registry_.emplace<Radius>(pool, w.coneEmberRadius);
+              Sprite ps{};
+              ps.color = w.color;
+              ps.color.a = 0.3F;
+              ps.circle = true;
+              registry_.emplace<Sprite>(pool, ps);
+              ZoneEffect pz{};
+              pz.dps = w.damage * 0.35F;
+              pz.pierce = pierce;
+              pz.radius = w.coneEmberRadius;
+              pz.duration = w.coneEmberDuration;
+              pz.tickRate = std::max(0.05F, w.coneTickRate);
+              // Age, not remaining life. `updateZoneEffects` counts the timer UP
+              // and destroys the zone when it reaches `duration`, so seeding the
+              // timer with the duration made every pool born already dead: the
+              // card created a scorch, it was reaped on the very next frame, and
+              // the Ember Sprayer's whole Hearthfire rule did nothing at all.
+              pz.timer = 0.0F;
+              pz.color = w.color;
+              pz.weaponIndex = i;
+              registry_.emplace<ZoneEffect>(pool, pz);
+              ++w.coneEmberLive;
+            }
+          }
         }
         w.timer = cooldown;
         break;
       }
       case AttackType::Bomb: {
         // Arcing projectile that explodes on impact
+        const float gravity = 30.0F; // matches updateBombProjectiles
+        // More projectiles = a taller arc; more pierce = a bigger blast.
+        const float arcHeight = w.bombArcHeight * (1.0F + stats_.projAdd * 0.25F);
+        // A shell thrown over an arc comes back down to its launch height after a
+        // fixed flight time, whatever it was aimed at: t = sqrt(8H/g). Solving for
+        // that ONCE per shot is what makes the landing point a decision instead of
+        // an accident of the ballistics.
+        //
+        // It used to be an accident. The horizontal speed was always `proj_speed`
+        // and the arc height alone decided where the shell ended up, so
+        // `bomb_ahead` computed a target point, stored it on the shell, and then
+        // never used it -- the mortar's "land four and a half units past the front
+        // rank" was a number in a struct that no code read. The two bomb weapons
+        // really were the same arcing shell with different arc heights, which is
+        // exactly what they looked like.
+        const float flightTime = std::sqrt(8.0F * arcHeight / gravity);
         for (int p = 0; p < count; ++p) {
           const float offset = (static_cast<float>(p) - static_cast<float>(count - 1) * 0.5F) * w.spread;
           const float angle = baseAngle + offset;
-          // Calculate horizontal distance to target
-          const float range = w.speed * w.life; // approximate range
-          const float tx = pt.x + std::cos(angle) * range;
-          const float ty = pt.y + std::sin(angle) * range;
+          const float dirX = std::cos(angle);
+          const float dirY = std::sin(angle);
+          // Where an uninterested shell lands: its own ballistic range, which is
+          // what every bomb without a landing rule has always done.
+          float land = w.speed * flightTime;
+          if (w.bombAhead > 0.0F || w.bombOnTarget) {
+            // Whoever is nearest the aim line, in front of the player and inside
+            // the shell's own reach. A shell is not a laser, so a body a little
+            // off the line still counts.
+            float bestAlong = -1.0F;
+            for (const auto e : registry_.view<Transform, Health, Enemy>()) {
+              auto* eh = registry_.try_get<Health>(e);
+              if (eh == nullptr || eh->hp <= 0.0F) continue;
+              const auto& et = registry_.get<Transform>(e);
+              const float dx = et.x - pt.x;
+              const float dy = et.y - pt.y;
+              const float along = dx * dirX + dy * dirY;
+              if (along <= 0.0F) continue;
+              const float perp = std::abs(dx * dirY - dy * dirX);
+              if (perp > w.bombExplodeRadius) continue;
+              if (bestAlong < 0.0F || along < bestAlong) bestAlong = along;
+            }
+            if (bestAlong > 0.0F) {
+              // A hammer lands ON the body; a mortar lands this far PAST it, which
+              // is the whole difference between them. Opposites, not degrees: one
+              // answers the thing in front of you, the other answers the horde
+              // behind it and treats the front rank as something to fire through.
+              land = w.bombOnTarget ? bestAlong : bestAlong + w.bombAhead;
+            }
+          }
+          const float tx = pt.x + dirX * land;
+          const float ty = pt.y + dirY * land;
           const auto bomb = registry_.create();
           registry_.emplace<Transform>(bomb, pt.x, pt.y, pt.x, pt.y);
-          // Calculate initial velocity for parabolic arc
-          // Horizontal velocity
-          const float vx = std::cos(angle) * w.speed;
-          // Vertical velocity to achieve bombArcHeight at midpoint
-          // Using: H = vy^2 / (2*g) => vy = sqrt(2*g*H)
-          const float gravity = 30.0F; // matches updateBombProjectiles
-          // More projectiles = a taller arc; more pierce = a bigger blast.
-          const float arcHeight = w.bombArcHeight * (1.0F + stats_.projAdd * 0.25F);
-          const float vy = std::sqrt(2.0F * gravity * arcHeight);
+          // Solve the launch velocity for THAT landing point: cover `land` in
+          // `flightTime`, and arc `arcHeight` high at the midpoint.
+          const float vx = dirX * (land / flightTime);
+          const float vy = gravity * flightTime * 0.5F;
           registry_.emplace<Velocity>(bomb, vx, vy);
           registry_.emplace<Radius>(bomb, 0.2F);
           Sprite s{};
@@ -1447,6 +1840,7 @@ void Game::fireWeapons() {
         bp.bounceCount = 0;
         bp.splashRadius = w.area;
         bp.infinite = w.bounceInfinite;
+        bp.splits = w.bounceSplits;
         bp.color = w.color;
         registry_.emplace<BounceProjectile>(proj, bp);
         w.liveBounce = proj;
@@ -1552,6 +1946,18 @@ void Game::fireWeapons() {
           // Knockback away from the reap center (dead center pushes along aim).
           float pushAngle = std::atan2(dy, dx);
           if (dist2 < 1e-4F) pushAngle = baseAngle;
+          // A hooked whip drags its catch IN instead of shoving it away. The two
+          // are opposites, not degrees, and the barbs are the only thing in the
+          // weapon's name that was not already accounted for: a whip that only
+          // pushes is a weapon you can never start anything with. Opt-in
+          // (`sweep_hook`) so the Soul Scythe -- whose entire job is a knockback
+          // circle around its prey -- is untouched.
+          if (w.sweepHook) {
+            pushAngle = std::atan2(-dy, -dx);
+            // Dead center: nothing to pull toward, so fall back to dragging
+            // straight back along the aim rather than leaving it alone.
+            if (dist2 < 1e-4F) pushAngle = baseAngle + kPi;
+          }
           applyKnockback(e, pushAngle, w.sweepKnockback);
           spawnParticles(hx[hi], hy[hi], {0.7F, 1.0F, 0.8F, 1.0F}, 6, 4.0F);
         }
@@ -1577,53 +1983,51 @@ void Game::fireWeapons() {
       case AttackType::Chain: {
         // Chain lightning - strike the nearest enemy, then chain onward.
         if (found) {
-          // The first jump originates from the target's own position, so hit
-          // it immediately (otherwise a lone enemy would never take damage).
-          if (bestEnemy != entt::null && registry_.valid(bestEnemy)) {
-            applyEnemyDamage(bestEnemy, damage);
-            const auto& bt = registry_.get<Transform>(bestEnemy);
-            spawnParticles(bt.x, bt.y, {0.55F, 1.0F, 1.0F, 1.0F}, 6, 4.0F);
-          }
-          const auto chain = registry_.create();
-          registry_.emplace<Transform>(chain, targetX, targetY, targetX, targetY);
-          registry_.emplace<Radius>(chain, w.chainJumpRange);
-          Sprite s{};
-          s.color = w.color;
-          s.circle = true;
-          registry_.emplace<Sprite>(chain, s);
-          ChainLightning cl{};
-          cl.damage = w.damage; // base; updateChainLightning scales by damageMul
-          cl.maxJumps = w.chainMaxJumps + stats_.pierceAdd;
-          cl.jumpRange = w.chainJumpRange;
-          cl.damageMul = w.chainDamageMul;
-          cl.jumpsDone = 0;
-          cl.timer = 0.0F;
-          cl.color = w.color;
-          registry_.emplace<ChainLightning>(chain, cl);
+          // The first strike is NOT applied here. It used to be, on the same line
+          // that created the bolt, which meant the damage landed at the instant
+          // the bolt was born and the ring that is supposed to warn about it came
+          // after the fact. The bolt now owns its own landing hit
+          // (ChainLightning::pendingFirst), so the sequence is: converge, land,
+          // arc on. A lone enemy still takes damage, because the landing is not
+          // the same event as arcing onward.
+          spawnChainBolt(
+              targetX, targetY, w,
+              bestEnemy == entt::null ? 0U : static_cast<std::uint32_t>(bestEnemy));
         }
         w.timer = cooldown;
         break;
       }
+      case AttackType::Wave: {
+        // A crescent that leaves the player and travels. With waveCount == 1
+        // that is a single outgoing slash; with more, the arcs are laid down
+        // one after another over a beat (see the burst drain in fireWeapons),
+        // so a three-arc whip reads as the tide coming around you rather than
+        // as one flat simultaneous wall.
+        if (w.waveBurstLeft <= 0) {
+          w.waveBurstLeft = std::max(1, w.waveCount);
+          w.waveBurstTimer = 0.0F;
+          w.waveBurstAngle = baseAngle;
+        }
+        spawnWaveCrescent(w, w.waveBurstAngle, damage, pierce);
+        --w.waveBurstLeft;
+        w.waveBurstAngle += w.waveArcStep;
+        w.timer = cooldown;
+        break;
+      }
       case AttackType::Nova: {
-        // Nova - expanding ring from player
-        const auto nova = registry_.create();
-        registry_.emplace<Transform>(nova, pt.x, pt.y, pt.x, pt.y);
-        registry_.emplace<Radius>(nova, w.novaMaxRadius * (1.0F + stats_.projAdd * 0.1F));
-        Sprite s{};
-        s.color = w.color;
-        s.circle = true;
-        registry_.emplace<Sprite>(nova, s);
-        NovaRing nr{};
-        nr.damagePerTick = w.novaDamagePerTick;
-        nr.pierce = pierce;
-        nr.maxRadius = w.novaMaxRadius * (1.0F + stats_.projAdd * 0.1F);
-        nr.expandSpeed = w.novaExpandSpeed;
-        nr.tickRate = w.novaTickRate;
-        nr.radius = 0.0F;
-        nr.timer = 0.0F;
-        nr.tickTimer = 0.0F;
-        nr.color = w.color;
-        registry_.emplace<NovaRing>(nova, nr);
+        // A nova is a ring that starts at the player and either grows out of it
+        // (the Shock Core) or is cast wide and rushes back in (the Void Nova).
+        // Both are the same entity; `novaContract` only decides which end it
+        // starts at and which way `radius` moves.
+        spawnNovaRing(pt.x, pt.y, w, pierce);
+        // Discharge: the second ring is scheduled here rather than spawned, so it
+        // is a genuine DELAY and not two rings on the same frame. The echo lands
+        // after the first blast has had time to open a gap in the pack, which is
+        // the whole reason a double is worth having over one bigger ring.
+        if (w.novaEcho > 0.0F) {
+          w.novaEchoesLeft = 1;
+          w.novaEchoTimer = w.novaEcho;
+        }
         w.timer = cooldown;
         break;
       }
@@ -1715,8 +2119,29 @@ void Game::fireWeapons() {
         // Inferno evolution (flame + scythe): reaps a full circle around the
         // nearest enemy AND leaves burning ground that keeps dealing damage.
         const float sweepRadius = w.sweepRadius * (1.0F + stats_.projAdd * 0.15F);
-        const float ix = targetX;
-        const float iy = targetY;
+        float ix = targetX;
+        float iy = targetY;
+        // Siege Mortar (mortar + lure): the shells land on the BELL. Its whole
+        // pitch is "the bell gathers the horde and the shells fall inside the
+        // crowd it gathered", and without this the Ashfall was just a bigger
+        // Inferno with no connection to the Grave Bell its recipe names. So
+        // when a bell is standing, the barrage is centred on the bell instead
+        // of on the nearest enemy -- which turns the pair into one machine
+        // (gather, then cook) instead of two weapons that happen to coexist.
+        if (w.infernoBindsToLure) {
+          float bestBell2 = 0.0F;
+          bool haveBell = false;
+          for (const auto e : registry_.view<Transform, Lure>()) {
+            const auto& lt = registry_.get<Transform>(e);
+            const float d2 = (lt.x - pt.x) * (lt.x - pt.x) + (lt.y - pt.y) * (lt.y - pt.y);
+            if (!haveBell || d2 < bestBell2) {
+              haveBell = true;
+              bestBell2 = d2;
+              ix = lt.x;
+              iy = lt.y;
+            }
+          }
+        }
         auto iview = registry_.view<Transform, Health, Radius, Enemy>();
         std::vector<entt::entity> ihits;
         std::vector<float> ihx;
@@ -1932,6 +2357,17 @@ void Game::fireWeapons() {
   }
 }
 
+// Pins an enemy to `mul` of its own speed for `time` seconds. The stronger of
+// two sources wins, and a weaker one still refreshes the timer, so a stream of
+// light hits holds a chill that one heavy hit would have dropped.
+void Game::applyChill(entt::entity e, float mul, float time) {
+  if (!registry_.valid(e) || mul <= 0.0F || time <= 0.0F) return;
+  auto* en = registry_.try_get<Enemy>(e);
+  if (en == nullptr) return;
+  if (mul <= en->slowMul || en->slowT <= 0.0F) en->slowMul = mul;
+  en->slowT = std::max(en->slowT, time);
+}
+
 void Game::applyEnemyDamage(entt::entity e, float dmg) {
   if (!registry_.valid(e)) return;
   auto* eh = registry_.try_get<Health>(e);
@@ -1971,6 +2407,17 @@ void Game::applyEnemyDamage(entt::entity e, float dmg) {
 void Game::killEnemy(entt::entity e) {
   if (!registry_.valid(e)) return;
   const auto& t = registry_.get<Transform>(e);
+
+  // A body that dies while frozen comes apart. This is the ice weapon's actual
+  // identity rather than a colour: the chill is not just a damage multiplier
+  // that happens to be small, it is the setup for a burst. A frost shard that
+  // only slowed things would read as a worse crossbow; one that leaves a corpse
+  // that bursts into a fan of ice reads as ice, and it rewards the player for
+  // chilling first and killing second instead of swapping one number for another.
+  if (const auto* en = registry_.try_get<Enemy>(e); en != nullptr && en->slowT > 0.0F) {
+    spawnShatterBurst(t.x, t.y, 0.55F * stats_.damageMul);
+    spawnParticles(t.x, t.y, {0.70F, 0.94F, 1.0F, 1.0F}, 10, 4.5F);
+  }
 
   // Death: XP orb + counter; actual destroy deferred. The orb's colour (and
   // size) telegraphs its value: green -> cyan -> violet -> gold.
@@ -2213,12 +2660,87 @@ void Game::updateProjectiles() {
       }
     }
 
+    // --- Re-aim steering -----------------------------------------------------
+    // Runs AFTER homing, so a card that hands both to one weapon resolves the
+    // conflict the same way every frame: the bend wins, because the bend is the
+    // thing the weapon was built around and homing is the thing that was added.
+    //
+    // The bend is held rather than kicked (see Projectile::hasReaim), so this is
+    // a few lines of steering that run for as many steps as the corner takes.
+    if (pr.hasReaim && pr.reaimLeft > 0) {
+      const float want = std::atan2(pr.reaimY - t.y, pr.reaimX - t.x);
+      const float cur = std::atan2(v.y, v.x);
+      float diff = want - cur;
+      while (diff >  kPi) diff -= 2.0F * kPi;
+      while (diff < -kPi) diff += 2.0F * kPi;
+      if (std::abs(diff) < 0.02F) {
+        // Arrived, or the target moved off the heading. Either way there is
+        // nothing left to steer at; the next body it touches picks a new one.
+        pr.hasReaim = false;
+      } else {
+        const float speed = std::sqrt(v.x * v.x + v.y * v.y);
+        const float bent = cur + std::clamp(diff, -pr.reaimTurn, pr.reaimTurn);
+        v.x = std::cos(bent) * speed;
+        v.y = std::sin(bent) * speed;
+      }
+    }
+
     t.x += v.x / 60.0F;
     t.y += v.y / 60.0F;
     pr.life -= 1.0F / 60.0F;
     if (pr.life <= 0.0F) {
       destroyQueue_.push_back(e);
       continue;
+    }
+
+    // --- The carried aura ----------------------------------------------------
+    // A corona, not a status: while the shard is in the air it drags a bubble of
+    // cold with it, and everything inside that bubble is chilled and ground down
+    // whether the shard ever went through it or not. This is the difference
+    // between "ice that hits" and "a line of ice you walk into slowly", and it
+    // has to be a separate tick from the body hit -- otherwise the aura would
+    // only ever pay for the enemies the shard was aimed at, which is the one
+    // thing it is not for.
+    if (pr.auraRadius > 0.0F) {
+      pr.auraTimer += 1.0F / 60.0F;
+      if (pr.auraTimer >= std::max(0.02F, pr.auraTick)) {
+        pr.auraTimer = 0.0F;
+        const float reach = pr.auraRadius;
+        std::vector<entt::entity> auraHits;
+        for (const auto en : registry_.view<Transform, Health, Radius, Enemy>()) {
+          auto* eh = registry_.try_get<Health>(en);
+          if (eh == nullptr || eh->hp <= 0.0F) continue;
+          const auto& et = registry_.get<Transform>(en);
+          const auto& er = registry_.get<Radius>(en);
+          const float dx = et.x - t.x;
+          const float dy = et.y - t.y;
+          const float hitR = reach + er.r;
+          if (dx * dx + dy * dy > hitR * hitR) continue;
+          auraHits.push_back(en);
+        }
+        if (!auraHits.empty()) {
+          // The same crowd falloff every other area attack uses: an aura that
+          // ignores it would make every dense pack a damage jackpot and the
+          // weapon's own answer would be "stand in the thick of it".
+          const float mul = aoeFalloff(static_cast<int>(auraHits.size()), pr.pierce);
+          const float dmg = pr.auraDps * std::max(0.02F, pr.auraTick) * mul *
+                            stats_.damageMul * momentumDamageMul_;
+          for (const auto en : auraHits) {
+            if (!registry_.valid(en)) continue;
+            applyEnemyDamage(en, dmg);
+            if (pr.auraChillTime > 0.0F) {
+              applyChill(en, pr.auraChillMul, pr.auraChillTime);
+            }
+          }
+          if (auraHits.size() <= 6) {
+            for (const auto en : auraHits) {
+              if (!registry_.valid(en)) continue;
+              const auto& et = registry_.get<Transform>(en);
+              spawnParticles(et.x, et.y, {0.65F, 0.88F, 1.0F, 1.0F}, 1, 1.2F);
+            }
+          }
+        }
+      }
     }
 
     bool spent = false;
@@ -2228,6 +2750,10 @@ void Game::updateProjectiles() {
       if (!registry_.valid(enemy) || !registry_.all_of<Enemy>(enemy)) return;
       auto* eh = registry_.try_get<Health>(enemy);
       if (eh == nullptr || eh->hp <= 0.0F) return;
+      // A BENDING bolt is still inside the body it just left when the next step
+      // starts, so it has to be told what it has already paid. A straight bolt
+      // is outside that reach by then, which is why this costs it nothing.
+      if (pr.reaimedAlready(static_cast<int>(enemy))) return;
       const auto& et = registry_.get<Transform>(enemy);
       const auto& er = registry_.get<Radius>(enemy);
       const float dx = et.x - t.x;
@@ -2235,12 +2761,17 @@ void Game::updateProjectiles() {
       const float hitR = r.r + er.r;
       if (dx * dx + dy * dy > hitR * hitR) return;
 
+      pr.rememberReaimed(static_cast<int>(enemy));
+
       // Damage. Lifesteal no longer rolls here — it fires on the kill itself
       // (see killEnemy), so a many-hit weapon cannot heal per tick. `dealt` is
       // still needed to know the hit actually landed (for chain lightning).
       const float hpBefore = eh->hp;
       applyEnemyDamage(enemy, pr.damage);
       const float dealt = hpBefore - eh->hp;
+      // Chill, for the weapons that carry it. A piercing shard hits five bodies,
+      // so the status has to be applied per hit here rather than once on spawn.
+      if (pr.chillTime > 0.0F) applyChill(enemy, pr.chillMul, pr.chillTime);
 
       // Knockback on hit.
       if (pr.strength > 0.0F && player_ != entt::null) {
@@ -2278,6 +2809,63 @@ void Game::updateProjectiles() {
 
       spawnParticles(et.x, et.y, {1.0F, 0.8F, 0.3F, 1.0F}, 3, 3.0F);
       --pr.pierce;
+
+      // --- Re-aim (the Storm Caller) -----------------------------------------
+      // The bolt does not carry on through: it BENDS. The crossbow's pierce
+      // becomes the storm's steering, so the weapon inherits the wand's promise
+      // -- it does not sail past the pack -- while keeping the crossbow's
+      // punch-through, which is the part that makes the bend cost something.
+      //
+      // Three things are deliberate here:
+      //  * The bend is BOUNDED, by a budget seeded from the pierce -- not
+      //    unbounded, so a bolt dropped into a crowd of forty still stops when
+      //    its own statline says it has run out.
+      //  * The turn is limited (`reaimTurn`), not a snap to the new heading. A
+      //    perfect seeker would make the crossbow half of the pairing pointless;
+      //    a limited one can still lose a fast body that is already peeling away.
+      //  * Every body already paid is off the table, so the bolt cannot double up
+      //    on the one it is standing in or bank off the one it is trying to leave.
+      if (pr.reaimRange > 0.0F && pr.reaimTurn > 0.0F && pr.reaimLeft > 0) {
+        float bestDist2 = pr.reaimRange * pr.reaimRange;
+        entt::entity next = entt::null;
+        for (const auto oe : registry_.view<Transform, Health, Enemy>()) {
+          // Everything this bolt has already paid is off the table, not just the
+          // body it is standing in. A bolt that bent at one body and is now
+          // leaning back toward it would otherwise bank off the same target
+          // twice in a row and read as a stutter.
+          if (pr.reaimedAlready(static_cast<int>(oe))) continue;
+          auto* oh = registry_.try_get<Health>(oe);
+          if (oh == nullptr || oh->hp <= 0.0F) continue;
+          const auto& ot = registry_.get<Transform>(oe);
+          const float odx = ot.x - t.x;
+          const float ody = ot.y - t.y;
+          const float od2 = odx * odx + ody * ody;
+          // Strictly better than the best so far, and only if it is genuinely in
+          // reach -- `bestDist2` starts AT the range, so a tie loses.
+          if (od2 < bestDist2) {
+            bestDist2 = od2;
+            next = oe;
+          }
+        }
+        if (next != entt::null) {
+          const auto& ot = registry_.get<Transform>(next);
+          // Hand the bend to the steering block above rather than applying it
+          // here. The heading it leaves on is the old one -- it will be turned
+          // over the next few steps, at the corner rate the data card states.
+          pr.reaimX = ot.x;
+          pr.reaimY = ot.y;
+          pr.hasReaim = true;
+          --pr.reaimLeft;
+          // A crack of light along the course it just left, so the bend is
+          // something you can see rather than something the numbers do.
+          const float heading = std::atan2(v.y, v.x);
+          for (int sIdx = 0; sIdx < 3; ++sIdx) {
+            const float back = 0.18F + 0.14F * static_cast<float>(sIdx);
+            spawnParticles(t.x - std::cos(heading) * back, t.y - std::sin(heading) * back,
+                           {0.65F, 1.0F, 1.0F, 1.0F}, 2, 3.0F);
+          }
+        }
+      }
 
       // Bounce logic.
       if (pr.bounces > 0 && pr.bounceCount < pr.bounces) {
@@ -2363,6 +2951,24 @@ void Game::updateOrbitBlades() {
     if (orbitSlot < 0) return;
     const auto& w = weapons_[orbitSlot];
     const float radius = w.orbitRadius;
+    // Blade Vortex: find the gap in the ring. The blades are re-spaced evenly, so
+    // the midpoint between any blade and its neighbour IS a gap -- taking the
+    // first owned blade and stepping halfway is exact, not approximate, and it
+    // costs one scan of entities the loop is already touching.
+    bool hasWindow = false;
+    float gapAngle = 0.0F;
+    if (w.orbitWindow) {
+      const int blades = std::max(1, w.projectiles + stats_.projAdd);
+      for (const auto e : registry_.view<OrbitBlade>()) {
+        if (registry_.get<OrbitBlade>(e).weaponIndex != orbitSlot) continue;
+        gapAngle = registry_.get<OrbitBlade>(e).angle + kPi / static_cast<float>(blades);
+        hasWindow = true;
+        break;
+      }
+      // No blade to measure from (should not happen, the slot owns a ring): fall
+      // back to the full interior rather than silently deleting the whirl.
+      hasWindow = hasWindow && blades > 1;
+    }
     const float damage =
         w.damage * stats_.damageMul * momentumDamageMul_ * kOrbitInnerMul;
     std::vector<entt::entity> inside;
@@ -2377,6 +2983,14 @@ void Game::updateOrbitBlades() {
       const float limit = radius - (0.18F + er.r);
       if (limit <= 0.0F) continue;
       if (dx * dx + dy * dy > limit * limit) continue;
+      if (hasWindow) {
+        // Only the gap gets the interior damage. This is the whole point of the
+        // card: without it the hub is a uniform everywhere-equal grind you cannot
+        // aim, which is a worse version of the ring. With it, the safe angle
+        // becomes the killing angle, so a faster ring is worth something.
+        const float ang = std::atan2(dy, dx);
+        if (std::abs(std::remainderf(ang - gapAngle, 2.0F * kPi)) > kOrbitWindowHalf) continue;
+      }
       auto* eh = registry_.try_get<Health>(en);
       if (eh == nullptr || eh->hp <= 0.0F) continue;
       inside.push_back(en);
@@ -2420,6 +3034,7 @@ void Game::updateHaloBeams() {
     const float width = owned ? weapons_[hb.weaponIndex].beamWidth : hb.width;
     const float knockback =
         owned ? weapons_[hb.weaponIndex].haloKnockback : hb.knockback;
+    const float inner = owned ? weapons_[hb.weaponIndex].haloInner : hb.inner;
 
     t.px = t.x;
     t.py = t.y;
@@ -2434,6 +3049,12 @@ void Game::updateHaloBeams() {
     const float dy = ey - pt.y;
     const float len = std::sqrt(dx * dx + dy * dy);
     if (len < 0.001F) continue;
+    // The spoke is a segment, not a ray, once it has an inner dead zone. Clamping
+    // the far end too matters: a `haloInner` larger than the reach would otherwise
+    // produce a negative-length segment whose dot products still pass `proj > 0`
+    // and damage a body behind the player.
+    const float near = std::min(inner, len * 0.9F);
+    const float far = std::max(near + 0.05F, len);
 
     // Damage enemies along the spoke (falloff when it sweeps a whole row).
     auto enemyView = registry_.view<Transform, Health, Radius, Enemy>();
@@ -2446,7 +3067,7 @@ void Game::updateHaloBeams() {
       const float lx = et.x - pt.x;
       const float ly = et.y - pt.y;
       const float proj = (lx * dx + ly * dy) / len;
-      if (proj < 0.0F || proj > len) continue;
+      if (proj < near || proj > far) continue;
       const float closestX = pt.x + (dx / len) * proj;
       const float closestY = pt.y + (dy / len) * proj;
       const float ddx = et.x - closestX;
@@ -2491,6 +3112,13 @@ void Game::updateVortices() {
     const float damage = (owned ? w.damage : vx.damage) * stats_.damageMul * momentumDamageMul_;
     const int pierce = (owned ? w.pierce : vx.pierce) + stats_.pierceAdd;
     const float pull = owned ? w.vortexPull : vx.pull;
+    // Collapse settings are read live like everything else, so a card that adds
+    // them lands on wells that are already spinning rather than on the next
+    // weapon. A well with collapseAt <= 0 never charges and never bursts, which
+    // is what keeps the Void Gyre a patient permanent drag.
+    const float collapseAt = owned ? w.vortexCollapseAt : vx.collapseAt;
+    const float burstDamage = owned ? w.vortexBurstDamage : vx.burstDamage;
+    const float burstRadius = owned ? w.vortexBurstRadius : vx.burstRadius;
 
     t.px = t.x;
     t.py = t.y;
@@ -2525,10 +3153,75 @@ void Game::updateVortices() {
       caught.push_back(en);
     }
 
+    // --- Collapse clock -------------------------------------------------------
+    // Accumulated EVERY frame, not on the damage tick, because `collapseAt` is in
+    // seconds and "hoards for three seconds" has to mean three seconds. It used
+    // to ride the damage tick's `continue` above, which made the real clock
+    // `collapseAt / tickRate` long -- thirty seconds for a weapon whose card says
+    // three -- and then it was also paid `dt` per tick rather than per frame on
+    // top of that. Two unit errors stacked, and the implosion was effectively
+    // never seen in a run.
+    if (collapseAt > 0.0F) {
+      vx.charge += dt;
+      if (vx.charge >= collapseAt) {
+        vx.charge = 0.0F;
+        // Reopen somewhere else. Not at a random angle: a well that can land on
+        // top of the player every time is a different weapon from one that keeps
+        // its distance, and the orbit radius is the player's only control over
+        // that. Half a turn ahead is enough to read as "it moved" without ever
+        // being unpredictable.
+        vx.angle += kPi;
+        t.x = pt.x + std::cos(vx.angle) * vx.orbitRadius;
+        t.y = pt.y + std::sin(vx.angle) * vx.orbitRadius;
+        const float rBurst = burstRadius > 0.0F ? burstRadius : vx.radius * 2.2F;
+        // The collapse is worth several seconds of the steady grind, or it is not
+        // an event -- it is a slightly louder tick.
+        const float dmg = burstDamage > 0.0F
+                              ? burstDamage * stats_.damageMul * momentumDamageMul_
+                              : damage * 3.0F * stats_.damageMul * momentumDamageMul_;
+        std::vector<entt::entity> collapsed;
+        for (const auto en : registry_.view<Transform, Health, Radius, Enemy>()) {
+          auto* eh = registry_.try_get<Health>(en);
+          if (eh == nullptr || eh->hp <= 0.0F) continue;
+          const auto& et = registry_.get<Transform>(en);
+          const auto& er = registry_.get<Radius>(en);
+          const float dx = et.x - t.x;
+          const float dy = et.y - t.y;
+          if (dx * dx + dy * dy > (rBurst + er.r) * (rBurst + er.r)) continue;
+          collapsed.push_back(en);
+        }
+        // A collapse that catches the whole knot is the reward for having gathered
+        // it, so no falloff here: the pull did the crowd control and the burst
+        // collects.
+        for (const auto en : collapsed) {
+          if (!registry_.valid(en)) continue;
+          applyEnemyDamage(en, dmg);
+          const auto& et = registry_.get<Transform>(en);
+          spawnParticles(et.x, et.y, {vx.color.r, vx.color.g, vx.color.b, 1.0F}, 8, 5.0F);
+        }
+        // The implosion itself: a ring of debris at the well's old position, which
+        // is what sells the collapse as an EVENT rather than as the regular tick
+        // being louder for a frame.
+        for (int k = 0; k < 14; ++k) {
+          const float a = 2.0F * kPi * static_cast<float>(k) / 14.0F;
+          spawnParticles(t.x + std::cos(a) * rBurst * 0.5F,
+                          t.y + std::sin(a) * rBurst * 0.5F,
+                          {vx.color.r, vx.color.g, vx.color.b, 1.0F}, 3, 6.0F);
+        }
+      }
+    }
+
     // --- Core damage ---------------------------------------------------------
+    // `tickRate` is an INTERVAL in seconds here, exactly as it is on the zone, the
+    // lure and the nova. It used to be treated as a rate -- the timer was reset to
+    // `1 / tickRate` -- which turned a tenth of a second into ten seconds between
+    // damage ticks. Both vortex weapons were dealing a hundredth of the damage
+    // their numbers describe, which is most of why they read as "the same weapon
+    // twice" and did not feel like weapons at all.
     vx.tickTimer -= dt;
     if (vx.tickTimer > 0.0F) continue;
-    vx.tickTimer = 1.0F / std::max(0.02F, vx.tickRate);
+    const float tickSpan = std::max(0.02F, vx.tickRate);
+    vx.tickTimer = tickSpan;
 
     std::vector<entt::entity> inside;
     for (const auto en : caught) {
@@ -2581,36 +3274,23 @@ void Game::updateBombProjectiles() {
     t.x += v.x * dt;
     t.y += v.y * dt;
 
-    // Contact detonation. A shell with a FUSE ignores the horde entirely and
-    // only cooks where its arc lands: that is what makes a mortar a mortar
-    // instead of a slower hammer — it lobs over the front rank and detonates on
-    // the far side of the crowd the player is aiming past.
-    bool hit = false;
-    if (bp.fuse <= 0.0F) {
-      hash_.forEachNear(t.x, t.y, r.r + 1.0F, [&](std::uint32_t id) {
-        if (hit) return;
-        const auto enemy = static_cast<entt::entity>(id);
-        if (!registry_.valid(enemy) || !registry_.all_of<Enemy>(enemy)) return;
-        auto* eh = registry_.try_get<Health>(enemy);
-        if (eh == nullptr || eh->hp <= 0.0F) return;
-        const auto& et = registry_.get<Transform>(enemy);
-        const auto& er = registry_.get<Radius>(enemy);
-        const float dx = et.x - t.x;
-        const float dy = et.y - t.y;
-        const float hitR = r.r + er.r;
-        if (dx * dx + dy * dy > hitR * hitR) return;
-
-        hit = true;
-      });
-    }
-    if (hit) {
-      // Explode where the bomb is — it has just moved into the enemy, so the
-      // blast lands on the target (and the bomb entity is always removed).
-      explodeBomb(e, bp, t.x, t.y);
-      destroyQueue_.push_back(e);
-      continue;
-    }
-
+    // A shell always goes off where its arc brings it back down to launch
+    // height, and nothing else detonates it early.
+    //
+    // There used to be a contact test here as well: a fuse-less shell popped the
+    // instant it overlapped a body. That was the right idea for a shell whose
+    // landing point had never been decided -- "explodes on impact" had to mean
+    // SOMETHING, and touching a body was the only candidate. It is now strictly
+    // worse than the landing rule, because the launch velocity is now solved for
+    // a chosen landing point: the Runic Hammer already flies to the body it was
+    // aimed at, and the overlap test fires when the shell is still half a unit in
+    // the air on the way down. The blast lands in roughly the right place, but
+    // the spot it lands in depends on how fast the shell happens to be falling,
+    // so "lands on the thing you aimed at" becomes a claim about ballistics
+    // rather than a rule. The landing rule is the whole answer now: a hammer
+    // answers the thing in front of you, a mortar answers the horde behind it,
+    // and both of them say so on the data card.
+    //
     // Landing: once past the apex the bomb drops back to launch height —
     // that's where it detonates, so it never tunnels below the ground and
     // vanishes. The boom is always visible and always removes the bomb.
@@ -2718,51 +3398,80 @@ void Game::updateBoomerangProjectiles() {
     t.y += v.y / 60.0F;
 
     // "Pulsar" evolution: the blade drags a burning laser trail. Every trail
-    // tick, everything within trailWidth/2 of the segment swept this frame
-    // takes damage (uses t.px/t.py = previous position).
+    // tick, everything within trailWidth/2 of the blade's whole remembered path
+    // takes damage.
+    //
+    // The path, not this frame's segment. At 60Hz and twenty units a second the
+    // per-frame segment is a third of a unit long, which hits exactly what the
+    // blade's own contact test already hits -- so the trail was pure decoration
+    // and the weapon was, as it looked, a prettier shuriken. Remembering the last
+    // few positions is what makes the trail a swath the whole line burns at once,
+    // and that swath is the Pulsar's actual identity.
     if (bp.trailWidth > 0.0F) {
+      // Push this frame's position, keeping the buffer newest-first by index.
+      bp.trailPathX[bp.trailHead] = t.x;
+      bp.trailPathY[bp.trailHead] = t.y;
+      bp.trailHead = (bp.trailHead + 1) % BoomerangProjectile::kTrailSamples;
+      if (bp.trailCount < BoomerangProjectile::kTrailSamples) ++bp.trailCount;
+
       bp.trailTimer += 1.0F / 60.0F;
       if (bp.trailTimer >= bp.trailTick) {
         bp.trailTimer = 0.0F;
         const float halfW = bp.trailWidth * 0.5F;
-        const float segx = t.x - t.px;
-        const float segy = t.y - t.py;
-        const float segLen2 = segx * segx + segy * segy;
+        const int n = bp.trailCount;
         auto trailView = registry_.view<Transform, Health, Radius, Enemy>();
         std::vector<entt::entity> thits;
-        std::vector<float> thp;
         for (const auto te : trailView) {
           const auto& tt = trailView.get<Transform>(te);
           const auto& tr = trailView.get<Radius>(te);
-          // Distance from the enemy center to the swept segment.
-          float d2 = 0.0F;
-          if (segLen2 < 1e-6F) {
-            const float qx = tt.x - t.px;
-            const float qy = tt.y - t.py;
-            d2 = qx * qx + qy * qy;
-          } else {
-            const float qx = tt.x - t.px;
-            const float qy = tt.y - t.py;
-            float fParam = (qx * segx + qy * segy) / segLen2;
-            fParam = fParam < 0.0F ? 0.0F : (fParam > 1.0F ? 1.0F : fParam);
-            const float cx = t.px + fParam * segx;
-            const float cy = t.py + fParam * segy;
-            const float cx2 = tt.x - cx;
-            const float cy2 = tt.y - cy;
-            d2 = cx2 * cx2 + cy2 * cy2;
-          }
           const float hitR = halfW + tr.r;
-          if (d2 > hitR * hitR) continue;
+          const float hitR2 = hitR * hitR;
+          // Nearest approach to the polyline through the remembered path. Any
+          // single segment close enough counts, which is a corridor rather than
+          // a moving dot.
+          bool onTrail = false;
+          for (int s = 0; s + 1 < n && !onTrail; ++s) {
+            // Walk from oldest to newest so the arc is contiguous. `head` is the
+            // next slot to write, so the oldest live sample is the one just
+            // before it.
+            const int i0 = (bp.trailHead - n + s + BoomerangProjectile::kTrailSamples * 2) %
+                           BoomerangProjectile::kTrailSamples;
+            const int i1 = (i0 + 1) % BoomerangProjectile::kTrailSamples;
+            const float ax = bp.trailPathX[i0];
+            const float ay = bp.trailPathY[i0];
+            const float segx = bp.trailPathX[i1] - ax;
+            const float segy = bp.trailPathY[i1] - ay;
+            const float segLen2 = segx * segx + segy * segy;
+            const float qx = tt.x - ax;
+            const float qy = tt.y - ay;
+            float d2 = 0.0F;
+            if (segLen2 < 1e-6F) {
+              d2 = qx * qx + qy * qy;
+            } else {
+              float fParam = (qx * segx + qy * segy) / segLen2;
+              fParam = fParam < 0.0F ? 0.0F : (fParam > 1.0F ? 1.0F : fParam);
+              const float cx2 = qx - fParam * segx;
+              const float cy2 = qy - fParam * segy;
+              d2 = cx2 * cx2 + cy2 * cy2;
+            }
+            if (d2 <= hitR2) onTrail = true;
+          }
+          if (!onTrail && n == 1) {
+            // One sample and no segment: still hit whatever the blade is on top
+            // of, so the trail does not silently do nothing on its first tick.
+            const float qx = tt.x - t.x;
+            const float qy = tt.y - t.y;
+            onTrail = qx * qx + qy * qy <= hitR2;
+          }
+          if (!onTrail) continue;
           auto* teh = registry_.try_get<Health>(te);
           if (teh == nullptr || teh->hp <= 0.0F) continue;
           thits.push_back(te);
-          thp.push_back(teh->hp);
         }
         const float trailMul = aoeFalloff(static_cast<int>(thits.size()), bp.pierce);
-        for (std::size_t ti = 0; ti < thits.size(); ++ti) {
-          auto* teh = registry_.try_get<Health>(thits[ti]);
-          if (teh == nullptr) continue;
-          applyEnemyDamage(thits[ti], bp.trailDamage * trailMul);
+        for (const auto te : thits) {
+          if (!registry_.valid(te)) continue;
+          applyEnemyDamage(te, bp.trailDamage * trailMul);
         }
         spawnParticles(t.x, t.y, {0.55F, 1.0F, 1.0F, 0.6F}, 3, 2.0F);
       }
@@ -2850,6 +3559,89 @@ void Game::updateBounceProjectiles() {
         v.x = (sdx / sdist) * speed;
         v.y = (sdy / sdist) * speed;
       }
+    } else if (bp.bounceCount < bp.maxBounces) {
+      // A finite ricochet aims ITSELF every frame, not only on the frames it
+      // hits something. This used to live inside the collision callback, which
+      // meant an orb crossing open ground never re-aimed at all: it kept the
+      // heading it happened to have, sailed off the map, and the player watched
+      // nothing happen for the rest of a multi-second life. That is the whole
+      // complaint -- a bouncing orb you cannot get rid of and that is not
+      // hitting anything.
+      //
+      // A target inside ricochet range is a real bounce and snaps the heading.
+      // Anything further away only nudges it (kBounceReturnTurn), which keeps
+      // the arc reading as a puck searching for the next body rather than as a
+      // homing missile, and turns it back toward the player when the room is
+      // empty.
+      float inX = 0.0F, inY = 0.0F;
+      float in2 = bp.bounceRange * bp.bounceRange;
+      bool inRange = false;
+      float anyX = 0.0F, anyY = 0.0F;
+      float any2 = std::numeric_limits<float>::max();
+      bool haveAny = false;
+      // Do not aim at the body just hit, or the orb grinds against it instead of
+      // ricocheting away -- the same rule the collision test enforces.
+      const float skipX = bp.lastHitX;
+      const float skipY = bp.lastHitY;
+      const bool skip = bp.bounceCount > 0;
+      for (const auto oe : registry_.view<Transform, Enemy, Health>()) {
+        const auto& ot = registry_.get<Transform>(oe);
+        const auto* oeh = registry_.try_get<Health>(oe);
+        if (oeh == nullptr || oeh->hp <= 0.0F) continue;
+        if (skip) {
+          const float sdx = ot.x - skipX;
+          const float sdy = ot.y - skipY;
+          if (sdx * sdx + sdy * sdy < 0.1F) continue;
+        }
+        const float cdx = ot.x - t.x;
+        const float cdy = ot.y - t.y;
+        const float cd2 = cdx * cdx + cdy * cdy;
+        if (cd2 < in2) {
+          in2 = cd2;
+          inX = ot.x;
+          inY = ot.y;
+          inRange = true;
+        }
+        if (cd2 < any2) {
+          any2 = cd2;
+          anyX = ot.x;
+          anyY = ot.y;
+          haveAny = true;
+        }
+      }
+      // The player is the last resort: an orb with nowhere to go comes back into
+      // the fight instead of to the edge of the world.
+      float goalX = inX, goalY = inY;
+      if (!inRange) {
+        if (haveAny) {
+          goalX = anyX;
+          goalY = anyY;
+        } else if (player_ != entt::null && registry_.valid(player_)) {
+          const auto& ppt = registry_.get<Transform>(player_);
+          goalX = ppt.x;
+          goalY = ppt.y;
+        }
+      }
+      const float gdx = goalX - t.x;
+      const float gdy = goalY - t.y;
+      if (gdx * gdx + gdy * gdy > 0.01F) {
+        const float speed = std::sqrt(v.x * v.x + v.y * v.y);
+        if (speed > 1e-3F) {
+          const float want = std::atan2(gdy, gdx);
+          const float have = std::atan2(v.y, v.x);
+          float delta = want - have;
+          // Wrap to (-pi, pi] so a target behind the orb does not spin it the
+          // long way round.
+          constexpr float kPi = 3.14159265F;
+          while (delta > kPi) delta -= 2.0F * kPi;
+          while (delta < -kPi) delta += 2.0F * kPi;
+          const float step =
+              std::clamp(delta, -kBounceTurn * (1.0F / 60.0F), kBounceTurn * (1.0F / 60.0F));
+          const float a = have + step;
+          v.x = std::cos(a) * speed;
+          v.y = std::sin(a) * speed;
+        }
+      }
     }
 
     bool spent = false;
@@ -2903,42 +3695,71 @@ void Game::updateBounceProjectiles() {
       bp.lastHitX = et.x;
       bp.lastHitY = et.y;
 
-      // The eternal orb has no bounce budget and no re-target pass — the
-      // steering above keeps it engaged forever.
-      if (!bp.infinite) {
-        if (bp.bounceCount >= bp.maxBounces) {
-          spent = true;
-          destroyQueue_.push_back(e);
-          return;
-        }
-
-        // Find next enemy in range
-        auto enemies = registry_.view<Transform, Enemy, Health>();
-        float bestDist2 = bp.bounceRange * bp.bounceRange;
-        float nextTx = 0.0F, nextTy = 0.0F;
-        bool found = false;
-        for (const auto oe : enemies) {
-          if (oe == enemy) continue;
-          const auto& ot = enemies.get<Transform>(oe);
-          const auto* oeh = registry_.try_get<Health>(oe);
-          if (!oeh || oeh->hp <= 0.0F) continue;
-          const float cdx = ot.x - et.x;
-          const float cdy = ot.y - et.y;
-          const float cd2 = cdx * cdx + cdy * cdy;
-          if (cd2 < bestDist2) {
-            bestDist2 = cd2;
-            nextTx = ot.x;
-            nextTy = ot.y;
-            found = true;
-          }
-        }
-        if (found) {
-          const float angle = std::atan2(nextTy - et.y, nextTx - et.x);
-          const float speed = std::sqrt(v.x * v.x + v.y * v.y);
-          v.x = std::cos(angle) * speed;
-          v.y = std::sin(angle) * speed;
+      // Split: this is what separates a Chaos Orb from a Pinball Puck. The puck
+      // is one ball that ricochets; the orb COMES APART on every impact, so one
+      // shot fills the room with fragments that each go on to hit and split
+      // again. The cascade is bounded three ways -- depth, bounce budget and a
+      // shorter life per generation -- so it decays instead of multiplying into
+      // a screen full of orbs that delete the game by themselves.
+      if (bp.splits > 0 && !bp.splitUsed && bp.depth < kMaxBounceSplitDepth) {
+        // Paid out once per piece. A fragment that broke again on every bounce
+        // would multiply each generation by its remaining bounces rather than
+        // by two, and the total would be thousands of orbs from a single shot.
+        bp.splitUsed = true;
+        const float speed = std::sqrt(v.x * v.x + v.y * v.y);
+        // Fragments carry ON in the direction the parent was travelling, fanned
+        // around it. Using the offset as an absolute heading would send them all
+        // off at a fixed world angle regardless of where the orb came from,
+        // which is not what coming apart looks like.
+        const float heading = speed > 1e-3F ? std::atan2(v.y, v.x) : 0.0F;
+        for (int k = 0; k < bp.splits; ++k) {
+          // A fan of fragments rather than a symmetric ring: a ring looks like
+          // a particle effect, a fan looks like something coming apart.
+          const float spreadAngle = (static_cast<float>(k) -
+                                     static_cast<float>(bp.splits - 1) * 0.5F) * 0.7F;
+          const float a = heading + spreadAngle;
+          const auto child = registry_.create();
+          registry_.emplace<Transform>(child, et.x, et.y, et.x, et.y);
+          registry_.emplace<Velocity>(child, std::cos(a) * speed, std::sin(a) * speed);
+          // Fragments are visibly smaller than the parent, which is what makes
+          // the split legible at a glance.
+          registry_.emplace<Radius>(child, r.r * 0.62F);
+          Sprite cs{};
+          cs.color = bp.color;
+          cs.circle = true;
+          registry_.emplace<Sprite>(child, cs);
+          BounceProjectile cbp = bp;
+          cbp.depth = bp.depth + 1;
+          cbp.splits = bp.splits;
+          cbp.splitUsed = false; // a fresh piece is allowed its own break
+          // A fragment's life is a share of the parent's AND a hard ceiling.
+          // Without the ceiling the root orb's 12s life would dominate and the
+          // whole cascade would stay in the air for as long as the root, which
+          // is not a decaying cascade -- it is a slow-motion multiplication.
+          cbp.life = std::min(kMaxSplitLife, std::max(0.25F, bp.life * 0.45F));
+          cbp.maxBounces = std::max(1, bp.maxBounces - 1);
+          cbp.damage = bp.damage * 0.55F;
+          // The fragment must not be locked to the parent as its last victim, or
+          // every generation would refuse the enemy it was born on.
+          cbp.bounceCount = 0;
+          cbp.lastHitX = et.x;
+          cbp.lastHitY = et.y;
+          registry_.emplace<BounceProjectile>(child, cbp);
         }
       }
+
+      // The eternal orb has no bounce budget and no re-target pass — the
+      // steering above keeps it engaged forever.
+      if (!bp.infinite && bp.bounceCount >= bp.maxBounces) {
+        spent = true;
+        destroyQueue_.push_back(e);
+        return;
+      }
+      // No aiming here: a finite ricochet re-aims itself every frame in the
+      // pass above. Doing it only on the frame of a hit is what let an orb sail
+      // off the arena, and doing it in BOTH places is how that hid for so long —
+      // the copy that used to live here was correct and still unreachable for
+      // every orb that was not touching anything.
 
       spawnParticles(et.x, et.y, {0.75F, 0.45F, 1.0F, 1.0F}, 4, 3.0F);
     });
@@ -3151,8 +3972,54 @@ void Game::updateChainLightning() {
     auto& t = view.get<Transform>(e);
     auto& cl = view.get<ChainLightning>(e);
 
+    // Beat 1: converge. Nothing is damaged yet; the renderer is drawing a ring
+    // shrinking onto the target. The bolt only starts hopping when the ring
+    // closes, so the strike is something you watch arrive rather than something
+    // that has already happened by the time you look.
+    if (cl.telegraph > 0.0F) {
+      cl.telegraph -= 1.0F / 60.0F;
+      continue;
+    }
+    // Beat 2: the sky drop draws itself down. The bolt is already damaging
+    // during it -- the ring is the warning, not the damage -- and the renderer
+    // scales the drop's brightness by this.
+    if (cl.strike < 1.0F) {
+      cl.strike = std::min(1.0F, cl.strike + (1.0F / 60.0F) / kChainStrike);
+    }
+
+    // Pay the strike the bolt was aimed at. See ChainLightning::pendingFirst:
+    // this used to be done by fireWeapons the instant the bolt was created, so
+    // the damage always landed before the player could see anything. A fork
+    // carries nothing, so only the trunk pays.
+    if (cl.pendingFirst != 0) {
+      const entt::entity first{cl.pendingFirst};
+      cl.pendingFirst = 0;
+      if (registry_.valid(first) && registry_.all_of<Health, Enemy>(first)) {
+        auto& fh = registry_.get<Health>(first);
+        if (fh.hp > 0.0F) {
+          const float damage = cl.damage * stats_.damageMul * momentumDamageMul_;
+          applyEnemyDamage(first, damage);
+          const auto& ft = registry_.get<Transform>(first);
+          spawnParticles(ft.x, ft.y, {0.55F, 1.0F, 1.0F, 1.0F}, 8, 4.0F);
+          // Shatter on the landing hit, which is where a slug coming apart reads
+          // best: the first thing the player saw was the fan.
+          if (cl.shatter > 0) {
+            spawnChainShatter(cl, ft.x, ft.y, 0.0F, cl.damage * stats_.damageMul *
+                                                     momentumDamageMul_ * 0.5F);
+            cl.shatter = 0; // one fan per slug
+          }
+        }
+      }
+    }
+
+    // Out of jumps: stop dealing damage, but hang around so the bolt is actually
+    // visible. The whole traversal is 0.05s per hop, so without this the effect
+    // is over before the player has registered it.
     if (cl.jumpsDone >= cl.maxJumps) {
-      destroyQueue_.push_back(e);
+      cl.linger -= 1.0F / 60.0F;
+      if (cl.linger <= 0.0F) {
+        destroyQueue_.push_back(e);
+      }
       continue;
     }
 
@@ -3160,9 +4027,14 @@ void Game::updateChainLightning() {
     if (cl.timer < 0.05F) continue; // small delay between jumps
     cl.timer = 0.0F;
 
-    // Find next target
+    // Find next target. The enemy this bolt just left is only taken if there is
+    // nothing else in range: a pocket of two enemies would otherwise make the
+    // bolt strobe between them forever, and "it keeps hitting the same two" is
+    // not what lightning is supposed to look like.
     float bestDist2 = cl.jumpRange * cl.jumpRange;
+    float bestRepeat2 = cl.jumpRange * cl.jumpRange;
     entt::entity nextTarget = entt::null;
+    entt::entity repeatTarget = entt::null;
     auto enemies = registry_.view<Transform, Health, Enemy>();
     for (const auto oe : enemies) {
       if (oe == e) continue; // shouldn't happen
@@ -3172,14 +4044,34 @@ void Game::updateChainLightning() {
       const float dx = ot.x - t.x;
       const float dy = ot.y - t.y;
       const float d2 = dx * dx + dy * dy;
+      if (d2 >= cl.jumpRange * cl.jumpRange) continue;
+      if (entt::to_entity(oe) == cl.lastTarget) {
+        if (d2 < bestRepeat2) {
+          bestRepeat2 = d2;
+          repeatTarget = oe;
+        }
+        continue;
+      }
       if (d2 < bestDist2) {
         bestDist2 = d2;
         nextTarget = oe;
       }
     }
+    if (nextTarget == entt::null) nextTarget = repeatTarget;
 
     if (nextTarget == entt::null) {
-      destroyQueue_.push_back(e);
+      // Ran out of things to arc to, which is the COMMON case: an arc dead-ends
+      // against empty ground well before it uses up maxJumps. This used to
+      // destroy the bolt on the spot, which is why a bolt into a scattered crowd
+      // vanished the instant it hit the last body -- the exact moment the player
+      // most wanted to see it. Instead the bolt is marked spent and finishes its
+      // linger like any other end, which is the whole of "it disappears too
+      // early": dead-ending was bypassing the linger entirely.
+      cl.jumpsDone = cl.maxJumps;
+      cl.linger -= 1.0F / 60.0F;
+      if (cl.linger <= 0.0F) {
+        destroyQueue_.push_back(e);
+      }
       continue;
     }
 
@@ -3195,13 +4087,104 @@ void Game::updateChainLightning() {
       // Arc from current position to target
       spawnParticles(t.x, t.y, {0.55F, 1.0F, 1.0F, 0.5F}, 3, 2.0F);
       spawnParticles(targetT.x, targetT.y, {0.55F, 1.0F, 1.0F, 0.5F}, 3, 2.0F);
+
+      // Shatter: the slug comes apart on the impact it just made. Paid out
+      // once -- the count is cleared as it is spent -- so a long-jumping bolt
+      // cannot throw a fan of shards on every single hop. The trunk normally
+      // spends it on its landing (above, where there is no incoming direction to
+      // point the fan along, so it bursts radially instead), which leaves this
+      // as the fallback for a fork.
+      if (cl.shatter > 0) {
+        // Heading of the segment just travelled, so the fan carries on the way
+        // the bolt was already going rather than spraying every which way.
+        float heading = 0.0F;
+        const float segX = targetT.x - t.x;
+        const float segY = targetT.y - t.y;
+        if (std::abs(segX) + std::abs(segY) > 1e-4F) {
+          heading = std::atan2(segY, segX);
+        }
+        const float shardDamage =
+            cl.damage * stats_.damageMul * momentumDamageMul_ *
+            std::powf(cl.damageMul, static_cast<float>(cl.jumpsDone)) * 0.5F;
+        spawnChainShatter(cl, targetT.x, targetT.y, heading, shardDamage);
+        cl.shatter = 0; // one fan per slug
+      }
     }
 
-    // Move chain lightning position to target
+    // Move chain lightning position to target. px/py are the previous-tick
+    // position used for render interpolation, and they were never written here:
+    // the renderer was lerping from (0, 0), so every bolt was drawn streaking
+    // in from the world origin.
+    t.px = t.x;
+    t.py = t.y;
     const auto& targetT = registry_.get<Transform>(nextTarget);
     t.x = targetT.x;
     t.y = targetT.y;
     cl.jumpsDone++;
+    cl.lastTarget = entt::to_entity(nextTarget);
+  }
+}
+
+// Travelling crescents. Each wave moves along its own heading and hits every
+// enemy it passes exactly once, shoving it along the direction of travel -- so
+// the crowd ends up displaced downrange instead of just taking damage, which is
+// the thing a player-centred nova can never do.
+void Game::updateWaveEffects() {
+  auto view = registry_.view<Transform, WaveEffect, Radius>();
+  for (const auto e : view) {
+    auto& t = view.get<Transform>(e);
+    auto& wv = view.get<WaveEffect>(e);
+
+    t.px = t.x;
+    t.py = t.y;
+    const float step = wv.speed / 60.0F;
+    t.x += std::cos(wv.angle) * step;
+    t.y += std::sin(wv.angle) * step;
+    wv.travelled += step;
+    wv.life -= 1.0F / 60.0F;
+
+    if (wv.travelled >= wv.range || wv.life <= 0.0F) {
+      destroyQueue_.push_back(e);
+      continue;
+    }
+
+    const float dmg = wv.damage * stats_.damageMul * momentumDamageMul_;
+    auto enemies = registry_.view<Transform, Health, Enemy>();
+    std::vector<entt::entity> hits;
+    for (const auto oe : enemies) {
+      const auto& ot = enemies.get<Transform>(oe);
+      const auto* oeh = registry_.try_get<Health>(oe);
+      if (!oeh || oeh->hp <= 0.0F) continue;
+      // A wave hits each enemy ONCE. The band is as long as it is wide, so
+      // without this a target standing in the path would be struck on every
+      // single frame until the wave moved past it.
+      if (wv.alreadyHit(entt::to_entity(oe))) continue;
+      const float dx = ot.x - t.x;
+      const float dy = ot.y - t.y;
+      // A crescent, not a disc: the hit box is the wave's path swept back into
+      // a band, so what it has already passed is not re-hit.
+      const float along = dx * std::cos(wv.angle) + dy * std::sin(wv.angle);
+      if (along > 0.0F) continue; // only the half behind the front
+      const float across = -dx * std::sin(wv.angle) + dy * std::cos(wv.angle);
+      if (std::abs(across) > wv.width * 0.5F) continue;
+      if (along < -wv.width) continue;
+      hits.push_back(oe);
+    }
+    for (const auto oe : hits) {
+      const auto& ot = registry_.get<Transform>(oe);
+      applyEnemyDamage(oe, dmg);
+      // Shove along the wave's own heading, not away from the player: a wave
+      // is a push, and where it pushes things is the point. A HOOKING wave
+      // pushes across the fan instead of along it (see WaveEffect::hookPull),
+      // which is the difference between three arcs that each clear their own
+      // line and three arcs that hand the same catch down the line.
+      const bool hooking = wv.hookPull > 0.0F;
+      const float pushAngle =
+          wv.angle + (hooking ? wv.hookSide * WaveEffect::kHookAngle : 0.0F);
+      applyKnockback(oe, pushAngle, hooking ? wv.knockback * wv.hookPull : wv.knockback);
+      wv.rememberHit(entt::to_entity(oe));
+      spawnParticles(ot.x, ot.y, {wv.color.r, wv.color.g, wv.color.b, 1.0F}, 4, 3.0F);
+    }
   }
 }
 
@@ -3222,9 +4205,72 @@ void Game::updateNovaRing() {
     nr.tickTimer += 1.0F / 60.0F;
     nr.radius += nr.expandSpeed / 60.0F;
 
-    if (nr.radius >= nr.maxRadius) {
+    // The end condition follows the sign of expandSpeed rather than assuming the
+    // ring grows. A contracting ring STARTS at maxRadius, so the old
+    // "radius >= maxRadius means it is done" test fired on frame one and deleted
+    // the Void Nova before it moved -- which is why this cannot just be a
+    // negative number on a positive-only check.
+    const bool contracting = nr.expandSpeed < 0.0F;
+    const bool finished = contracting ? (nr.radius <= 0.0F) : (nr.radius >= nr.maxRadius);
+
+    if (finished) {
+      if (!nr.burstDone) {
+        // The centre detonation. `burstDone` is what makes it one hit: without it
+        // the ring would sit inside its own core radius for several ticks and pay
+        // the burst again each one, which is a different weapon than the one
+        // described.
+        nr.burstDone = true;
+        const float burst = nr.burstDamage * stats_.damageMul * momentumDamageMul_;
+        // The blast is at the player, because that is where the ring arrived.
+        auto enemyView = registry_.view<Transform, Health, Radius, Enemy>();
+        std::vector<entt::entity> bhits;
+        for (const auto en : enemyView) {
+          auto* eh = registry_.try_get<Health>(en);
+          if (eh == nullptr || eh->hp <= 0.0F) continue;
+          const auto& et = enemyView.get<Transform>(en);
+          const float dx = et.x - pt.x;
+          const float dy = et.y - pt.y;
+          // Generous: the ring dragged them in, so the payoff has to cover the
+          // knot it actually made rather than the empty ground it was cast over.
+          if (dx * dx + dy * dy > nr.maxRadius * nr.maxRadius) continue;
+          bhits.push_back(en);
+        }
+        const float burstMul = aoeFalloff(static_cast<int>(bhits.size()), nr.pierce);
+        for (const auto en : bhits) {
+          if (!registry_.valid(en)) continue;
+          applyEnemyDamage(en, burst * burstMul);
+          const auto& et = registry_.get<Transform>(en);
+          spawnParticles(et.x, et.y, {nr.color.r, nr.color.g, nr.color.b, 1.0F}, 6, 4.0F);
+        }
+      }
       destroyQueue_.push_back(e);
       continue;
+    }
+
+    // The inward drag, every frame and not on the damage tick. A ring that only
+    // pulls when it deals damage cannot gather anybody: at 0.12s per tick and
+    // 4 units a second that is less than half a unit of travel per hit, which is
+    // not enough to move a rank. This is the same reason the vortex applies its
+    // pull continuously, and it is the whole of what makes the contracting ring
+    // worth anything over the expanding one.
+    if (nr.pull > 0.0F) {
+      for (const auto en : registry_.view<Transform, Health, Radius, Enemy>()) {
+        auto* eh = registry_.try_get<Health>(en);
+        if (eh == nullptr || eh->hp <= 0.0F) continue;
+        auto& et = registry_.get<Transform>(en);
+        const auto& er = registry_.get<Radius>(en);
+        const float dx = pt.x - et.x;
+        const float dy = pt.y - et.y;
+        const float d = std::sqrt(dx * dx + dy * dy);
+        // Only what the ring has already swept past: inside the band it damages,
+        // outside it just shoves. Pulling the whole map inward would delete every
+        // positioning problem the rest of the roster exists to pose.
+        if (d > nr.radius + er.r || d < 1e-4F) continue;
+        const float step = std::min(nr.pull * continuousPullScale(en) / 60.0F,
+                                    std::max(0.0F, d - er.r * 0.5F));
+        et.x += (dx / d) * step;
+        et.y += (dy / d) * step;
+      }
     }
 
     if (nr.tickTimer >= nr.tickRate) {
@@ -3364,19 +4410,27 @@ void Game::updateUniqueEffects() {
 }
 
 void Game::currentScales(float& hp, float& speed, float& touch) const {
-  // Growth is piecewise: after the 6-minute mark enemies develop even faster
-  // (steeper HP and speed ramps), so the late game keeps escalating.
-  if (simTime_ <= 360.0F) {
-    hp = 1.0F + simTime_ / 70.0F;
-    speed = 1.0F + simTime_ / 600.0F;
+  // Growth is piecewise: past the 7-minute mark enemies develop faster, so the
+  // late game keeps escalating.
+  //
+  // Every number here is lower than it was and the knee is a minute later. The
+  // reason is the same as the XP curve: the HP ramp is the one piece of the
+  // difficulty that the player has NO answer to. A build that is three picks
+  // behind cannot outshoot a 12x enemy, and at the old rates a ten-minute run
+  // put ordinary bats at nearly ten times the HP of the first minute while the
+  // player's damage was still mostly on the cards. The shape is intact -- it is
+  // still a rising ramp that steepens -- it just stops outrunning the build.
+  if (simTime_ <= 420.0F) {
+    hp = 1.0F + simTime_ / 95.0F;
+    speed = 1.0F + simTime_ / 720.0F;
   } else {
-    hp = 1.0F + 360.0F / 70.0F + (simTime_ - 360.0F) / 45.0F;
-    speed = 1.0F + 360.0F / 600.0F + (simTime_ - 360.0F) / 300.0F;
+    hp = 1.0F + 420.0F / 95.0F + (simTime_ - 420.0F) / 60.0F;
+    speed = 1.0F + 420.0F / 720.0F + (simTime_ - 420.0F) / 360.0F;
   }
-  hp = std::min(hp, 30.0F);
-  speed = std::min(speed, 2.4F);
+  hp = std::min(hp, 22.0F);
+  speed = std::min(speed, 2.15F);
   // Contact damage also creeps up so late enemies hit harder.
-  touch = 1.0F + simTime_ / 1500.0F;
+  touch = 1.0F + simTime_ / 2000.0F;
 }
 
 // Overlord retirement: once an overlord of type X has spawned, X is retired
@@ -3413,12 +4467,209 @@ bool Game::testTypeIsRecent(int def) const {
   return recentTypes_[static_cast<std::size_t>(def)] != 0;
 }
 
+float Game::fastTraitSpeedMul() const {
+  return 1.0F + (kFastTraitMaxMul - 1.0F) *
+                    std::min(1.0F, simTime_ / kFastTraitFullTime);
+}
+
+float Game::typeSpeedRamp(int def) const {
+  if (def < 0 || static_cast<std::size_t>(def) >= content_.enemies.size()) {
+    return 1.0F;
+  }
+  const float max = content_.enemies[static_cast<std::size_t>(def)].speedRampMax;
+  return 1.0F + max * std::min(1.0F, simTime_ / kSpeedRampFullTime);
+}
+
+float Game::enemySpawnSpeed(int def) const {
+  if (def < 0 || static_cast<std::size_t>(def) >= content_.enemies.size()) {
+    return 0.0F;
+  }
+  float hpScale = 1.0F;
+  float speedScale = 1.0F;
+  float touchScale = 1.0F;
+  currentScales(hpScale, speedScale, touchScale);
+  return content_.enemies[static_cast<std::size_t>(def)].speed * typeSpeedRamp(def) *
+         speedScale;
+}
+
+float Game::typeLockedUntil(int def) const {
+  if (def < 0 || static_cast<std::size_t>(def) >= content_.enemies.size()) {
+    return 0.0F;
+  }
+  const auto& d = content_.enemies[static_cast<std::size_t>(def)];
+  // A `fast` archetype is gated by the later of its own unlock time and the
+  // global fast-enemy floor, so the data only has to say "this is a sprinter"
+  // and the pacing rule lives in one place.
+  return d.fast ? std::max(d.unlockAt, kFastEnemyMinTime) : d.unlockAt;
+}
+
 bool Game::typeCanSpawn(int def) const {
   if (def < 0 || static_cast<std::size_t>(def) >= content_.enemies.size()) return false;
-  if (simTime_ < content_.enemies[static_cast<std::size_t>(def)].unlockAt) return false;
+  if (simTime_ < typeLockedUntil(def)) return false;
   if (!typeRetired(def)) return true;
   // Retired, but exempt because it is one of the 3 newest types.
   return testTypeIsRecent(def);
+}
+
+// Spawns one chain bolt. The arc itself is the Tesla Coil's whole identity, and
+// the one thing that distinguishes another chain weapon is what the bolt DOES at
+// each hop rather than how many hops it has: the Blizzard Rail shatters into a
+// fan of flat shards on its landing (see spawnChainShatter).
+void Game::spawnChainBolt(float x, float y, const WeaponSlot& w,
+                          std::uint32_t fromTarget) {
+  const auto chain = registry_.create();
+  registry_.emplace<Transform>(chain, x, y, x, y);
+  registry_.emplace<Radius>(chain, w.chainJumpRange);
+  Sprite s{};
+  s.color = w.color;
+  s.circle = true;
+  registry_.emplace<Sprite>(chain, s);
+  ChainLightning cl{};
+  cl.damage = w.damage; // base; updateChainLightning scales by damageMul
+  cl.maxJumps = w.chainMaxJumps + stats_.pierceAdd;
+  cl.jumpRange = w.chainJumpRange;
+  cl.damageMul = w.chainDamageMul;
+  cl.jumpsDone = 0;
+  cl.timer = 0.0F;
+  cl.color = w.color;
+  cl.lastTarget = fromTarget;
+  cl.linger = kChainLinger;
+  // Every bolt converges first, and every bolt owns its own landing hit. There
+  // used to be a second kind of chain bolt -- a "fork", born mid-arc off a body
+  // that was already being struck, with no wind-up and no strike owed -- but the
+  // only weapon that forked was the Storm Caller, and it stopped being a chain
+  // weapon when it became a bolt that bends. So there is one kind of bolt now,
+  // and it behaves the same way every time it is spawned.
+  cl.telegraph = kChainTelegraph;
+  cl.strike = 0.0F;
+  cl.pendingFirst = fromTarget;
+  cl.shatter = w.chainShatter;
+  cl.shatterSpeed = w.chainShatterSpeed;
+  cl.shatterSpread = w.chainShatterSpread;
+  registry_.emplace<ChainLightning>(chain, cl);
+}
+
+// The Blizzard Rail slug coming apart. Every shard is a plain fast projectile
+// aimed along the direction the bolt was travelling, spread into a fan. They
+// are projectiles and not bolts on purpose: the fragments fly flat and stop
+// where they stop, where a fork would arc on toward a new victim. That
+// difference is the whole read of "it shattered".
+void Game::spawnChainShatter(const ChainLightning& cl, float x, float y,
+                             float heading, float damage) {
+  const int n = std::max(0, cl.shatter);
+  const int count = std::max(1, n);
+  for (int k = 0; k < n; ++k) {
+    // Fan centred on the bolt's own heading, so the burst goes where the strike
+    // was already going instead of spraying in every direction at once.
+    const float offset = (static_cast<float>(k) - static_cast<float>(count - 1) * 0.5F) *
+                         std::max(0.05F, cl.shatterSpread);
+    const float a = heading + offset;
+    const auto sh = registry_.create();
+    registry_.emplace<Transform>(sh, x, y, x, y);
+    registry_.emplace<Velocity>(sh, std::cos(a) * cl.shatterSpeed,
+                                 std::sin(a) * cl.shatterSpeed);
+    // Fragments are visibly smaller than a bolt, which is most of what makes
+    // the shatter legible at a glance.
+    registry_.emplace<Radius>(sh, 0.12F);
+    Sprite s{};
+    s.color = cl.color;
+    registry_.emplace<Sprite>(sh, s);
+    Projectile p{};
+    p.damage = damage;
+    // A fixed, short life rather than a share of the bolt's reach: these are
+    // pieces of a slug, not a second slug.
+    p.life = 0.55F;
+    p.pierce = cl.maxJumps > 0 ? 1 : 0;
+    registry_.emplace<Projectile>(sh, p);
+  }
+}
+
+// A burst of ice fragments thrown from a frozen corpse. A ring, not the
+// Blizzard's directional fan: a dead body has no heading, and a symmetric spray
+// is what coming apart looks like anyway.
+void Game::spawnShatterBurst(float x, float y, float damage) {
+  constexpr int kShards = 6;
+  constexpr float kShardSpeed = 7.0F;
+  for (int k = 0; k < kShards; ++k) {
+    const float a = (static_cast<float>(k) / static_cast<float>(kShards)) * 2.0F * kPi;
+    const auto sh = registry_.create();
+    registry_.emplace<Transform>(sh, x, y, x, y);
+    registry_.emplace<Velocity>(sh, std::cos(a) * kShardSpeed, std::sin(a) * kShardSpeed);
+    registry_.emplace<Radius>(sh, 0.11F);
+    Sprite s{};
+    s.color = {0.70F, 0.92F, 1.0F, 1.0F};
+    s.circle = true;
+    registry_.emplace<Sprite>(sh, s);
+    Projectile p{};
+    p.damage = damage;
+    // Short and single-target. The point is a punctuation mark on a kill, not a
+    // second volley: a corpse that cleared the room would make the ice weapon
+    // scale off kills rather than off what the player aims at.
+    p.life = 0.4F;
+    registry_.emplace<Projectile>(sh, p);
+  }
+}
+
+// Spawns one nova ring at (x, y). Every ring in the game goes through here, which
+// is the only reason the expanding Shock Core and the contracting Void Nova cannot
+// drift apart: they are the same call with different fields, so a change to one is
+// automatically a change to the other.
+void Game::spawnNovaRing(float x, float y, const WeaponSlot& w, int pierce) {
+  const float maxR = w.novaMaxRadius * (1.0F + stats_.projAdd * 0.1F);
+  const auto nova = registry_.create();
+  registry_.emplace<Transform>(nova, x, y, x, y);
+  registry_.emplace<Radius>(nova, maxR);
+  Sprite s{};
+  s.color = w.color;
+  s.circle = true;
+  registry_.emplace<Sprite>(nova, s);
+  NovaRing nr{};
+  nr.damagePerTick = w.novaDamagePerTick;
+  nr.pierce = pierce;
+  nr.maxRadius = maxR;
+  // A negative speed is how "inward" is spelled: one ring type, one integrator,
+  // and no branch in the update for which way it travels.
+  nr.expandSpeed = w.novaContract ? -w.novaExpandSpeed : w.novaExpandSpeed;
+  // Cast at full radius, not at zero -- that is the whole visual difference
+  // between a wall arriving and a knot arriving.
+  nr.radius = w.novaContract ? maxR : 0.0F;
+  nr.tickRate = w.novaTickRate;
+  nr.timer = 0.0F;
+  nr.tickTimer = 0.0F;
+  nr.pull = w.novaContract ? w.novaPull : 0.0F;
+  nr.burstDone = !w.novaContract || w.novaBurstDamage <= 0.0F;
+  nr.burstDamage = w.novaBurstDamage;
+  nr.color = w.color;
+  registry_.emplace<NovaRing>(nova, nr);
+}
+
+// Spawns one travelling crescent at `angle`.
+void Game::spawnWaveCrescent(const WeaponSlot& w, float angle, float damage, int pierce) {
+  const auto pt = registry_.get<Transform>(player_);
+  const auto we = registry_.create();
+  registry_.emplace<Transform>(we, pt.x, pt.y, pt.x, pt.y);
+  registry_.emplace<Radius>(we, w.waveWidth * 0.5F);
+  Sprite s{};
+  s.color = w.color;
+  s.circle = true;
+  registry_.emplace<Sprite>(we, s);
+  WaveEffect wv{};
+  wv.damage = damage;
+  wv.speed = w.waveSpeed;
+  wv.width = w.waveWidth;
+  wv.spread = w.waveSpread;
+  wv.angle = angle;
+  wv.knockback = w.waveKnockback;
+  // The herd goes the way the NEXT arc is actually thrown, which is the sign of
+  // the fan's step -- not whichever perpendicular happened to be cheaper.
+  wv.hookPull = w.waveHookPull;
+  wv.hookSide = w.waveArcStep >= 0.0F ? 1.0F : -1.0F;
+  wv.travelled = 0.0F;
+  wv.range = w.waveRange;
+  wv.life = w.waveRange / std::max(0.5F, w.waveSpeed) + 0.2F;
+  wv.color = w.color;
+  registry_.emplace<WaveEffect>(we, wv);
+  (void)pierce; // a wave hits each enemy once; crowd falloff is applied per hit
 }
 
 void Game::spawnWave() {
@@ -3433,6 +4684,13 @@ void Game::spawnWave() {
   float speedScale;
   float touchScale;
   currentScales(hpScale, speedScale, touchScale);
+
+  // Per-type acceleration on top of the global ramp. A fast archetype is
+  // authored slow (that is what the player meets in the first minute) and gains
+  // speed over the run, saturating at kSpeedRampFullTime. Types with no ramp
+  // get exactly 1.0 and are unaffected, so this is a no-op for the whole roster
+  // except the types that ask for it.
+  const auto rampFor = [&](int def) { return typeSpeedRamp(def); };
 
   // Spawns walk in from farther away each minute, capping at 2x the base
   // distance by 10:00; after that the distance no longer changes.
@@ -3449,15 +4707,20 @@ void Game::spawnWave() {
       }
     }
     if (totalWeight <= 0.0F) {
+      // Retirement emptied the pool, so fall back to every time-unlocked type
+      // regardless of retirement. This has to use the SAME gate as the first
+      // pass: weighting a type here that the selection loop below then skips
+      // would leave `roll` never reaching zero and silently stop ALL spawns.
       for (const auto& def : content_.enemies) {
-        if (simTime_ >= def.unlockAt) totalWeight += def.weight;
+        if (simTime_ >= typeLockedUntil(static_cast<int>(&def - content_.enemies.data()))) {
+          totalWeight += def.weight;
+        }
       }
       if (totalWeight <= 0.0F) return -1;
     }
     float roll = unit(rng_) * totalWeight;
     for (std::size_t i = 0; i < content_.enemies.size(); ++i) {
       const auto& candidate = content_.enemies[i];
-      if (simTime_ < candidate.unlockAt) continue;
       if (!typeCanSpawn(static_cast<int>(i))) continue;
       roll -= candidate.weight;
       if (roll <= 0.0F) return static_cast<int>(i);
@@ -3493,7 +4756,7 @@ void Game::spawnWave() {
           pending.def = hordeDef;
           pending.hpMul = std::max(1.0F, hpScale);
           pending.touchMul = touchScale;
-          pending.speedMul = speedScale;
+          pending.speedMul = speedScale * rampFor(hordeDef);
           pending.xpMul = 1.0F;
           pending.traits = TraitNone;
           pending.tier = 0;
@@ -3568,7 +4831,7 @@ void Game::spawnWave() {
 
     float mHpMul = hpScale;
     float mTouchMul = touchScale;
-    float mSpeedMul = speedScale;
+    float mSpeedMul = speedScale * rampFor(defIndex);
     float mXpMul = 1.0F;
     std::uint32_t mTraits = TraitNone;
     std::uint8_t mTier = 0;
@@ -3591,7 +4854,16 @@ void Game::spawnWave() {
         }
         used[static_cast<std::size_t>(pick)] = true;
         switch (pick) {
-          case PickFast: mSpeedMul *= 1.7F; break;
+          // The Fast trait is a RAMP, not a flat 1.7x. A flat bonus applied the
+          // moment a horde spawns makes a 4-minute ring of elites undodgeable,
+          // and it makes the trait worthless to read: there is no difference
+          // between a 2-minute and a 9-minute Fast elite. Growing to the full
+          // bonus by kFastTraitFullTime means a Fast elite is a genuine threat
+          // only once the run is built to handle one.
+          case PickFast:
+            mSpeedMul *= fastTraitSpeedMul();
+            mTraits |= TraitFast;
+            break;
           case PickArmored: mHpMul *= 2.5F; mTouchMul *= 1.3F; break;
           case PickRegenerating: mTraits |= TraitRegenerating; break;
           case PickExplosive: mTraits |= TraitExplosive; break;
@@ -3760,7 +5032,10 @@ void Game::enterLevelUp() {
 bool Game::tierUnlocked(int tier) const {
   switch (tier) {
     case 0: return true;
-    case 1: return tierOpen_[1] && simTime_ >= 45.0F;
+    // 1:30 instead of 0:45. The first elite used to arrive before the player
+    // had a third pick, which meant the run's first real decision was "do I
+    // play around the thing that is about to end me".
+    case 1: return tierOpen_[1] && simTime_ >= 90.0F;
     case 2: return tierOpen_[2];
     case 3: return tierOpen_[3];
     default: return false;
@@ -3770,7 +5045,9 @@ bool Game::tierUnlocked(int tier) const {
 float Game::tierSpawnChance(int tier) const {
   if (!tierUnlocked(tier)) return 0.0F;
   if (tier == 1) {
-    return std::min(0.15F, 0.05F + simTime_ * 0.0005F);
+    // Starts rarer AND tops out lower. At the old 15% one in seven spawns was an
+    // elite, which stops being an event and becomes a tax on the trash.
+    return std::min(0.10F, 0.025F + simTime_ * 0.0003F);
   }
   if (tier == 2) {
     // The further above the "elites are routine" line the player is, the more
@@ -3808,7 +5085,7 @@ void Game::updateTierDirector() {
       // saying "you outgrew the last tier".
       if (!tierOpen_[tier]) {
         tierBanner_ = std::string(label) + " TRIBUNAL OPEN";
-        tierBannerT_ = 4.0F;
+        tierBannerT_ = kTierBannerLife;
       }
       tierOpen_[tier] = true;
       tierGrace_[tier] = kTierGrace;
@@ -4238,11 +5515,23 @@ void Game::addWeapon(int defIndex) {
   w.coneRange = def.coneRange;
   w.coneTickRate = def.coneTickRate;
   w.coneTimer = 0.0F;
+  w.coneBite = def.coneBite;
+  w.coneBiteMax = def.coneBiteMax;
+  w.coneLatch = entt::null;
+  w.coneBiteTicks = 0;
+  w.coneEmberAt = def.coneEmberAt;
+  w.coneEmberRadius = def.coneEmberRadius;
+  w.coneEmberDuration = def.coneEmberDuration;
+  w.coneEmberWalked = 0.0F;
+  w.coneEmberLive = 0;
+  w.coneEmberLastX = 0.0F;
+  w.coneEmberLastY = 0.0F;
 
   // Orbit
   w.orbitRadius = def.orbitRadius;
   w.orbitSpeed = def.orbitSpeed;
   w.orbitCount = def.orbitCount;
+  w.orbitWindow = def.orbitWindow;
   w.orbitAngle = 0.0F;
 
   // Bomb
@@ -4250,6 +5539,10 @@ void Game::addWeapon(int defIndex) {
   w.bombExplodeRadius = def.bombExplodeRadius;
   w.bombKnockback = def.bombKnockback;
   w.bombFuse = def.bombFuse;
+  w.bombAhead = def.bombAhead;
+  w.bombOnTarget = def.bombOnTarget;
+  w.reaimRange = def.reaimRange;
+  w.reaimTurn = def.reaimTurn;
 
   // Boomerang
   w.boomerangRange = def.boomerangRange;
@@ -4260,6 +5553,7 @@ void Game::addWeapon(int defIndex) {
   w.bounceRange = def.bounceRange;
   w.bounceDamageMul = def.bounceDamageMul;
   w.bounceInfinite = def.bounceInfinite;
+  w.bounceSplits = def.bounceSplits;
   w.liveBounce = entt::null;
 
   // Beam
@@ -4269,6 +5563,7 @@ void Game::addWeapon(int defIndex) {
 
   // Halo
   w.haloKnockback = def.haloKnockback;
+  w.haloInner = def.haloInner;
 
   // Sweep
   w.sweepAngle = def.sweepAngle;
@@ -4285,12 +5580,34 @@ void Game::addWeapon(int defIndex) {
   w.chainJumpRange = def.chainJumpRange;
   w.chainMaxJumps = def.chainMaxJumps;
   w.chainDamageMul = def.chainDamageMul;
+  w.chainShatter = def.chainShatter;
+  w.chainShatterSpeed = def.chainShatterSpeed;
+  w.chainShatterSpread = def.chainShatterSpread;
+  w.infernoBindsToLure = def.infernoBindsToLure;
+
+  // Wave
+  w.waveSpeed = def.waveSpeed;
+  w.waveRange = def.waveRange;
+  w.waveWidth = def.waveWidth;
+  w.waveKnockback = def.waveKnockback;
+  w.waveDamageMul = def.waveDamageMul;
+  w.waveCount = def.waveCount;
+  w.waveArcStep = def.waveArcStep;
+  w.waveHookPull = def.waveHookPull;
+  w.waveSpread = def.waveSpread;
+  w.waveBurstLeft = 0;
+  w.waveBurstTimer = 0.0F;
+  w.waveBurstAngle = 0.0F;
 
   // Nova
   w.novaMaxRadius = def.novaMaxRadius;
   w.novaExpandSpeed = def.novaExpandSpeed;
   w.novaDamagePerTick = def.novaDamagePerTick;
   w.novaTickRate = def.novaTickRate;
+  w.novaContract = def.novaContract;
+  w.novaPull = def.novaPull;
+  w.novaBurstDamage = def.novaBurstDamage;
+  w.novaEcho = def.novaEcho;
   w.novaRadius = 0.0F;
   w.novaTimer = 0.0F;
   w.novaActive = false;
@@ -4302,6 +5619,9 @@ void Game::addWeapon(int defIndex) {
   w.vortexOrbit = def.vortexOrbit;
   w.vortexOrbitSpeed = def.vortexOrbitSpeed;
   w.vortexTickRate = def.vortexTickRate;
+  w.vortexCollapseAt = def.vortexCollapseAt;
+  w.vortexBurstDamage = def.vortexBurstDamage;
+  w.vortexBurstRadius = def.vortexBurstRadius;
 
   // Prism
   w.prismRange = def.prismRange;
@@ -4323,10 +5643,18 @@ void Game::addWeapon(int defIndex) {
   w.strength = 0.0F;
   w.homing = def.homing;
   w.bounces = 0;
+  w.chillMul = def.chillMul;
+  w.chillTime = def.chillTime;
+  w.auraRadius = def.auraRadius;
+  w.auraDps = def.auraDps;
+  w.auraTick = def.auraTick;
+  w.auraChillMul = def.auraChillMul;
+  w.auraChillTime = def.auraChillTime;
 
   // Round-3 additions.
   w.cdBonus = 0.0F;
   w.sweepLead = def.sweepLead;
+  w.sweepHook = def.sweepHook;
   w.uniqueHeal = 0.0F;
   w.beamSplit = 0;
 
@@ -4453,6 +5781,7 @@ void Game::syncHaloBeams(int slot) {
     hb.angle = 0.0F;
     hb.spin = w.orbitSpeed;
     hb.knockback = w.haloKnockback;
+    hb.inner = w.haloInner;
     hb.weaponIndex = slot;
     hb.color = w.color;
     registry_.emplace<HaloBeam>(beam, hb);
@@ -4532,6 +5861,10 @@ void Game::syncVortices(int slot) {
     vx.angle = 0.0F;
     vx.tickRate = w.vortexTickRate;
     vx.tickTimer = 0.0F;
+    vx.collapseAt = w.vortexCollapseAt;
+    vx.charge = 0.0F;
+    vx.burstDamage = w.vortexBurstDamage;
+    vx.burstRadius = w.vortexBurstRadius;
     vx.weaponIndex = slot;
     vx.color = w.color;
     registry_.emplace<Vortex>(z, vx);
@@ -4585,12 +5918,32 @@ void Game::applyWeaponEffect(int slotIndex, std::string_view effect, float value
   } else if (effect == "w_unique_area") {
     w.area = value;
   } else if (effect == "w_unique_vortex") {
+    // Throwing Dagger: the ring stops being a solid wall and becomes a HUB with
+    // one safe angle in it. Anything standing in the gap is held where it is and
+    // cut continuously, so the card's rule is that the safe spot is also the
+    // killing spot -- which is the only thing that would make a faster ring worth
+    // having, because now you have to be able to stand somewhere inside it.
     w.orbitSpeed *= 2.0F;
     w.orbitRadius *= 1.25F;
+    w.orbitWindow = true;
   } else if (effect == "w_unique_hearthfire") {
+    // Hearthfire: the Sprayer's cone starts LEAVING EMBERS on the ground it
+    // washes. A cone that only ever damages what is standing in it right now is
+    // a cone you have to keep pointing at things; a cone that scorches where it
+    // has been is a trail you lay down and then walk away from. The wider, longer
+    // reach is the same card's other half, but the pools are the rule.
     w.coneRange *= 1.5F;
     w.coneAngle *= 1.4F;
+    w.coneEmberAt = 0.9F;      // one pool per this many world units travelled
+    w.coneEmberRadius = 1.15F;
+    w.coneEmberDuration = 2.6F;
   } else if (effect == "w_unique_cataclysm") {
+    // Cataclysm: a shell that detonates ONCE and is gone, so the card's job is to
+    // make that one boom worth the wait. The stacked fuse is the rule: the shells
+    // no longer arrive as a volley you can walk out of between shots, they arrive
+    // together, and the bigger radius is the payoff rather than the point.
+    w.bombFuse += 0.3F;
+    w.cooldown *= 1.15F;
     w.bombExplodeRadius *= 1.6F;
     w.bombKnockback *= 1.5F;
   } else if (effect == "w_unique_prism") {
@@ -4600,8 +5953,47 @@ void Game::applyWeaponEffect(int slotIndex, std::string_view effect, float value
     w.zoneDuration += 2.0F;
     w.zoneRadius *= 1.25F;
   } else if (effect == "w_unique_thunderlord") {
+    // CHAIN-ONLY, and deliberately so. This used to be the card for three chain
+    // weapons, one of which stopped being a chain weapon when the Storm Caller
+    // became a bolt that bends. For a month the Storm's copy of it edited two
+    // numbers the weapon never reads: the card showed up on the level-up screen,
+    // read beautifully, and did nothing at all. The split is what stops that --
+    // see `w_unique_reaim` for the bolt, and the effect table in the test that
+    // fails the build when a `w_unique_*` card lands on a type it cannot move.
     w.chainMaxJumps += static_cast<int>(value);
     w.chainDamageMul = 1.0F;
+  } else if (effect == "w_unique_reaim") {
+    // The Storm Caller's own card, and the one thing its merge is FOR: the bolt
+    // spends its pierce on direction, so a pierce point is both one more body it
+    // may touch and one more body it may bend onto. The card's `value` is read
+    // as chain-jump points and halved, because "+4 chain jumps" in those units
+    // is "+2 bodies" in these -- which is the same promise the old card was
+    // making, finally told in the currency the weapon actually spends.
+    //
+    // The other two are the numbers that decide how well it keeps that promise:
+    // how far ahead it can see for the next body, and how hard it corners once
+    // it has picked one. A longer sight line is what lets it cross a gap the
+    // crowd left; a harder corner is what lets it keep up with a sprinter.
+    w.pierce += static_cast<int>(value) / 2;
+    w.reaimRange *= 1.35F;
+    w.reaimTurn *= 1.45F;
+  } else if (effect == "w_unique_faultline") {
+    // The Sundering Core is a WIDE crescent shoved away from the player at a
+    // crawl: a wall, not a lash. So its card makes it more of a wall. It had
+    // been sharing the Void Nova's `w_unique_supernova` and its description
+    // verbatim -- "ring expands faster, wider, and hits harder", on a weapon
+    // that throws no ring and no Nova-shaped anything. A copy-pasted desc is
+    // usually a copy-pasted effect underneath it, and here it was.
+    //
+    // Nothing here adds a second crescent: that is the Tidal Lash's whole
+    // identity (three arcs, evenly stepped), and handing it to the Core would
+    // collapse the one distinction the two wave weapons have.
+    w.waveWidth *= 1.5F;
+    w.waveRange *= 1.35F;
+    w.waveSpeed *= 1.25F;
+    w.waveDamageMul *= 1.6F;
+    w.waveSpread *= 1.2F;
+    w.waveKnockback *= 1.3F;
   } else if (effect == "w_unique_supernova") {
     w.novaExpandSpeed *= 1.8F;
     w.novaMaxRadius *= 1.4F;
@@ -4633,9 +6025,27 @@ void Game::applyWeaponEffect(int slotIndex, std::string_view effect, float value
     w.chainJumpRange *= 1.5F;
     w.chainDamageMul = std::max(w.chainDamageMul, 0.85F);
   } else if (effect == "w_unique_lash") {
-    w.sweepRadius *= 1.35F;
-    w.sweepKnockback *= 1.4F;
-    w.sweepLead += 0.4F;
+    // Tidal Lash. This card was four SWEEP fields and a `sweepHook` -- the
+    // Barbed Whip's best trick, drag-the-catch-in and all -- sitting on a weapon
+    // that throws WAVES. A wave reads no sweep field at all, so every edit was
+    // invisible: the Tidal Lash's own card was the deadest pick in the pool
+    // while reading like the strongest one in it.
+    //
+    // What it does now is buy more of the thing the weapon already IS. Coverage
+    // is the Lash's identity against the Sundering Core's single wall, so: one
+    // more arc, thrown further apart, reaching further and biting harder -- and
+    // a stronger herd, because the hook is what makes an extra arc worth having
+    // rather than a fourth independent shove. The Core's card
+    // (`w_unique_faultline`) goes the opposite way, making its ONE crescent
+    // wider; between them, the two wave weapons' cards are as opposed as the
+    // weapons themselves.
+    w.waveCount += static_cast<int>(value);
+    w.waveArcStep += 0.18F;
+    w.waveRange *= 1.30F;
+    w.waveWidth *= 1.20F;
+    w.waveDamageMul *= 1.25F;
+    w.waveKnockback *= 1.35F;
+    w.waveHookPull *= 1.30F;
   } else if (effect == "w_unique_corona") {
     // --- Uniques for the evolutions and supers that had no card at all -------
     // Halo, Void Gyre and Prism Array carried zero weapon-scoped cards, so
@@ -4666,13 +6076,32 @@ void Game::applyWeaponEffect(int slotIndex, std::string_view effect, float value
     w.prismMaxTargets = std::min(6, w.prismMaxTargets + 1);
     w.prismRicochet = std::min(4.0F, w.prismRicochet * 1.4F);
     w.prismRange *= 1.15F;
+  } else if (effect == "w_unique_deepfreeze") {
+    // Hoarfrost Wake: the aura stops being a bubble around each shard and becomes
+    // the corridor itself. Every shot fires a second, much wider shell that lags
+    // behind the volley rather than riding with it, so the cold is a lane with
+    // walls and the shards only have to carry the freezing. A bigger aura radius
+    // alone would have been strictly a bigger aura.
+    w.projectiles += 1;
+    w.auraRadius = std::max(w.auraRadius, w.auraRadius * 1.55F);
+    w.auraDps *= 1.35F;
+    w.auraChillMul = std::min(0.45F, w.auraChillMul * 0.85F);
+    w.auraChillTime *= 1.3F;
+    // The direct hit gets weaker on purpose: once the lane itself is doing the
+    // work, the shard is a delivery mechanism, and a shard that also hits hard is
+    // the same weapon with more of everything.
+    w.damage *= 0.85F;
   } else if (effect == "w_unique_rime") {
     // Frost Shards: the volley stops being a spray of ice and becomes a line of
-    // lances. Damage comes down to pay for the pierce and the extra flight
-    // time, so the payoff is "it keeps going" rather than "it hits harder".
+    // lances that FREEZE. The chill is the point, not a stat line: the pierce
+    // and the extra flight time are what let one lance keep chilling new bodies
+    // instead of re-chilling the one in front of it, so the payoff is that the
+    // horde arrives at you walking. Damage comes down to pay for it.
     w.pierce += 4;
     w.life *= 1.4F;
     w.damage *= 0.8F;
+    w.chillMul = std::max(0.35F, w.chillMul * 0.6F);
+    w.chillTime *= 1.6F;
   } else if (effect == "w_unique_siege_doctrine") {
     // Siege Mortar: a three-shell salvo on a longer fuse, so the whole salvo
     // lands together instead of dribbling out one shell at a time. The cooldown
@@ -4691,41 +6120,77 @@ void Game::applyWeaponEffect(int slotIndex, std::string_view effect, float value
     w.bounceDamageMul = 1.0F;
     w.bounceRange *= 1.3F;
   } else if (effect == "w_unique_bore") {
-    // Jackhammer Drill: the bit stops being a narrow jab. A wider, longer, far
-    // faster cone is a different shape of threat, not a bigger number.
+    // Jackhammer Drill: the bit stops being a narrow jab and starts drilling
+    // THROUGH. The card's rule is the ramp -- the bite gets deeper the longer it
+    // stays buried, and it keeps its ramp the instant the previous target dies,
+    // so drilling a queue of heavies is worth far more than drilling one. The
+    // width and reach are the same card's other half.
+    w.coneBite = 0.20F;
+    w.coneBiteMax = std::max(w.coneBiteMax, 5.0F);
     w.coneAngle *= 1.6F;
     w.coneRange *= 1.4F;
     w.coneTickRate *= 0.6F;
     w.damage *= 1.15F;
   } else if (effect == "w_unique_discharge") {
-    // Shock Core: the ring stops being a single pulse and starts arcing around
-    // the inside of itself, re-striking on a much tighter tick.
+    // Shock Core: the ring stops being a single pulse and goes off TWICE. The
+    // outward blast is unchanged in character -- it still expands, it still
+    // shoves the crowd into open ground -- and then a second, faster ring is cast
+    // on top of it a beat later, after the first has thinned the pack. That is
+    // the rule: a discharge is one pulse, this makes it a double. Charging
+    // outward is left alone, so the card cannot be mistaken for the Void Nova's
+    // inward pull that it visually sits next to.
     w.novaMaxRadius *= 1.35F;
     w.novaExpandSpeed *= 1.4F;
     w.novaTickRate *= 0.5F;
     w.novaDamagePerTick *= 1.5F;
+    w.novaEcho = 0.35F;   // seconds until the second ring, 0 = single pulse
   } else if (effect == "w_unique_chainlash") {
-    // Barbed Whip: the lash goes all the way around. The lead is kept (not
+    // Barbed Whip: the lash goes all the way around AND the barbs bite -- the
+    // hook from the Lash card, on the Chainlash card. The lead is kept (not
     // zeroed) so it still centres in front of the player instead of becoming
-    // a reaper that also swings at whatever is behind you.
+    // a reaper that also swings at whatever is behind you. The two cards are
+    // deliberately complementary rather than two versions of a wider arc, so
+    // taking both is a build and taking one is a build.
     w.sweepAngle = 6.2832F;
     w.sweepRadius *= 1.3F;
     w.sweepKnockback *= 1.5F;
+    w.sweepHook = true;
   } else if (effect == "w_unique_wingbeat") {
-    // Seraph Array: the wings beat faster, shove much harder and burn wider.
+    // Seraph Array: the wings beat faster, shove much harder and burn wider --
+    // and the hole at your feet CLOSES, which is the card's real rule. Until now
+    // the Seraph's dead zone was permanent and free, so the card had nothing to
+    // decide: take the reach and keep the safety, or neither. Closing the hole
+    // turns that into a choice -- the wings become a real guard again, at the
+    // cost of the reach they were bought for. `haloInner` is clamped just under
+    // the beam range so the spoke can never invert into a segment pointing the
+    // wrong way.
     w.haloKnockback += 5.0F;
     w.beamWidth *= 1.3F;
     w.orbitSpeed *= 1.6F;
     w.damage *= 1.2F;
+    w.haloInner = std::max(0.0F, w.haloInner * 0.35F);
     syncHaloBeams(slotIndex);
   } else if (effect == "w_unique_singularity") {
     // Event Horizon: the last word in crowd control. Pull is capped for the
     // same reason Void Gyre's is — a hard pin that never releases would delete
     // every positioning problem the rest of the roster exists to pose.
+    //
+    // The rule the card adds is the CLOCK, not the size: the wells collapse twice
+    // as often and each implosion hits far harder, so the weapon stops being a
+    // steady drag and becomes a thing that gathers and then detonates. Charging
+    // faster without hitting harder would just be a shorter fuse on the same
+    // weapon, and a longer one would make it strictly worse.
     w.vortexPull = std::min(14.0F, w.vortexPull * 1.5F);
     w.vortexRadius *= 1.35F;
     w.vortexReach *= 1.25F;
     w.vortexTickRate *= 0.75F;
+    if (w.vortexCollapseAt > 0.0F) {
+      w.vortexCollapseAt *= 0.5F;
+      w.vortexBurstDamage = std::max(w.vortexBurstDamage,
+                                     w.vortexBurstDamage > 0.0F ? w.vortexBurstDamage * 1.8F
+                                                                  : w.damage * 3.0F * 1.8F);
+      w.vortexBurstRadius *= 1.2F;
+    }
     syncVortices(slotIndex);
   } else if (effect == "w_orb_grow") {
     // --- Stackable cards for the weapons that only had their one unique ------
@@ -5430,6 +6895,15 @@ void Game::testKillPlayer() {
   if (player_ == entt::null || !registry_.valid(player_)) return;
   registry_.get<Health>(player_).hp = 0.0F;
   state_ = RunState::GameOver;
+  // Leave the sandbox on the way out. It used not to, so the death screen came
+  // up wearing the sandbox keymap -- and with testMode_ still true, the two keys
+  // that would have got you out of it (T and [5] CLOSE) were both dead, leaving
+  // only R and the Q Q abandon. The run is over; the sandbox has no business
+  // still being open on top of it.
+  if (testMode_) {
+    testMode_ = false;
+    testShopOpen_ = false;
+  }
 }
 
 void Game::updateTestShop(const FrameInput& input) {
@@ -5496,12 +6970,33 @@ void Game::renderTestShop(core::render::Batcher& b, float px, float py) {
     const std::string label = def.name + "  " + std::to_string(have) + "/" +
                               std::to_string(def.maxStacks) + tag;
     b.text(x0 + 20.0F, y + 1.0F, 1.6F, col, label);
-    // A short hint of what the card actually does, right-aligned.
-    const std::string hint = def.desc;
-    const float hw = b.textWidth(1.2F, hint);
-    if (hw < panelW * 0.5F) {
-      b.text(x0 + panelW - 20.0F - hw, y + 3.0F, 1.2F,
-             usable ? Color{0.55F, 0.55F, 0.65F, 1.0F} : maxed, hint);
+    // What the card actually does, right-aligned and wrapped into the space
+    // left over by the name. This used to measure the description and simply
+    // not draw it if it was wider than half the panel, so every long item in
+    // the picker showed as a bare name with no explanation at all.
+    const float nameW = b.textWidth(1.6F, label);
+    const float hintBox = panelW - 48.0F - nameW;
+    if (hintBox > 60.0F) {
+      // The hint is right-aligned, so the indent goes on the RIGHT of the box:
+      // wrapped lines hang toward the panel edge and the first line, which sits
+      // against the name, is the one that gets the full width.
+      const float hintX = x0 + panelW - 20.0F;
+      const auto hintLines =
+          wrapToWidth(def.desc, hintBox, 1.2F, 12.0F);
+      const Color hintCol = usable ? Color{0.55F, 0.55F, 0.65F, 1.0F} : maxed;
+      // Two lines at most: the row pitch is 19px, so a third would land on
+      // top of the next row's name.
+      int drawn = 0;
+      for (const auto& hl : hintLines) {
+        if (drawn >= 2) break;
+        const float lx = hintX - b.textWidth(1.2F, hl) - (drawn == 0 ? 0.0F : 12.0F);
+        b.text(lx, y + (drawn == 0 ? 3.0F : 1.0F), 1.2F, hintCol, hl);
+        ++drawn;
+      }
+      if (hintLines.size() > 2) {
+        // Say that there is more rather than silently cutting it off.
+        b.text(hintX - 12.0F, y + 1.0F, 1.2F, hintCol, "+");
+      }
     }
   }
 }
@@ -5523,19 +7018,35 @@ void Game::testSpawnEnemyAt(float x, float y) {
   registry_.emplace<Xp>(e, 1.0F);
 }
 
+void Game::testDespawnEnemies() {
+  std::vector<entt::entity> dead;
+  for (const auto e : registry_.view<Enemy>()) dead.push_back(e);
+  for (const auto e : dead) {
+    if (registry_.valid(e)) registry_.destroy(e);
+  }
+}
+
 void Game::testSpawnTieredEnemyAt(float x, float y, int tier, std::uint32_t traits,
                                   int def) {
   const int t = std::clamp(tier, 0, 3);
   const int d = std::clamp(def, 0, static_cast<int>(content_.enemies.size()) - 1);
   const TierBuffs buffs = tierBuffs(t);
+  // The global time ramps are applied here too, because this hook stands in for
+  // a real spawn and a spawn at minute eight IS scaled. Leaving them off made
+  // every "what does an enemy look like" test silently run at minute zero, which
+  // is exactly the kind of gap the difficulty curves can then drift through.
+  float hpScale = 1.0F;
+  float speedScale = 1.0F;
+  float touchScale = 1.0F;
+  currentScales(hpScale, speedScale, touchScale);
   PendingSpawn p{};
   p.x = x;
   p.y = y;
   p.t = 0.0F;
   p.def = d;
-  p.hpMul = rollTierHpMul(buffs, rng_);
-  p.touchMul = buffs.touch;
-  p.speedMul = buffs.speed;
+  p.hpMul = hpScale * rollTierHpMul(buffs, rng_);
+  p.touchMul = touchScale * buffs.touch;
+  p.speedMul = speedScale * buffs.speed;
   p.xpMul = buffs.xp;
   p.traits = traits;
   p.tier = static_cast<std::uint8_t>(t);
@@ -5582,6 +7093,15 @@ Game::DebugCounts Game::debugCounts() const {
   c.vortices = registry_.view<Vortex>().size();
   c.lures = registry_.view<Lure>().size();
   return c;
+}
+
+void Game::testSetPlayerPosition(float x, float y) {
+  if (player_ == entt::null || !registry_.valid(player_)) return;
+  auto& t = registry_.get<Transform>(player_);
+  t.px = x;
+  t.py = y;
+  t.x = x;
+  t.y = y;
 }
 
 float Game::testFirstEnemyHp() const {
@@ -5763,6 +7283,163 @@ std::vector<float> Game::testBounceRadii() const {
   return out;
 }
 
+std::size_t Game::testChainCount() const {
+  return registry_.view<ChainLightning>().size();
+}
+
+std::size_t Game::testWaveCount() const {
+  return registry_.view<WaveEffect>().size();
+}
+
+std::size_t Game::testBounceCount() const {
+  return registry_.view<BounceProjectile>().size();
+}
+
+std::size_t Game::testProjectileCount() const {
+  return registry_.view<Projectile>().size();
+}
+
+std::vector<float> Game::testBombPositions() const {
+  std::vector<float> out;
+  for (const auto e : registry_.view<Transform, BombProjectile>()) {
+    const auto& t = registry_.get<Transform>(e);
+    out.push_back(t.x);
+    out.push_back(t.y);
+  }
+  return out;
+}
+
+std::vector<float> Game::testNovaRadii() const {
+  std::vector<float> out;
+  for (const auto e : registry_.view<NovaRing>()) {
+    out.push_back(registry_.get<NovaRing>(e).radius);
+  }
+  return out;
+}
+
+std::vector<float> Game::testHaloBeamInners() const {
+  std::vector<float> out;
+  for (const auto e : registry_.view<HaloBeam>()) {
+    out.push_back(registry_.get<HaloBeam>(e).inner);
+  }
+  return out;
+}
+
+std::vector<float> Game::testVortexCharges() const {
+  std::vector<float> out;
+  for (const auto e : registry_.view<Vortex>()) {
+    const auto& vx = registry_.get<Vortex>(e);
+    out.push_back(vx.charge);
+    out.push_back(vx.angle);
+  }
+  return out;
+}
+
+std::vector<float> Game::testBoomerangPositions() const {
+  std::vector<float> out;
+  for (const auto e : registry_.view<Transform, BoomerangProjectile>()) {
+    const auto& t = registry_.get<Transform>(e);
+    out.push_back(t.x);
+    out.push_back(t.y);
+  }
+  return out;
+}
+
+float Game::testEnemyHpNear(float x, float y) const {
+  entt::entity best = entt::null;
+  float bestD2 = 1e12F;
+  for (const auto e : registry_.view<Transform, Health, Enemy>()) {
+    const auto& t = registry_.get<Transform>(e);
+    const float dx = t.x - x;
+    const float dy = t.y - y;
+    const float d2 = dx * dx + dy * dy;
+    if (d2 < bestD2) {
+      bestD2 = d2;
+      best = e;
+    }
+  }
+  if (best == entt::null) return -1.0F;
+  return registry_.get<Health>(best).hp;
+}
+
+float Game::testOrbitWindowAngle(int slot) const {
+  if (slot < 0 || slot >= weaponCount_) return -1.0F;
+  const auto& w = weapons_[slot];
+  if (w.attackType != AttackType::Orbit || !w.orbitWindow) return -1.0F;
+  const int blades = std::max(1, w.projectiles + stats_.projAdd);
+  if (blades < 2) return -1.0F;
+  for (const auto e : registry_.view<OrbitBlade>()) {
+    if (registry_.get<OrbitBlade>(e).weaponIndex == slot) {
+      return registry_.get<OrbitBlade>(e).angle + kPi / static_cast<float>(blades);
+    }
+  }
+  return -1.0F;
+}
+
+std::vector<int> Game::testChainTelegraphs() const {
+  // Milliseconds of wind-up left, rounded, so a test can assert "this bolt has not
+  // struck yet" without depending on the exact frame the timer happened to land
+  // on. A landed bolt is -1.
+  std::vector<int> out;
+  for (const auto e : registry_.view<ChainLightning>()) {
+    const auto& cl = registry_.get<ChainLightning>(e);
+    out.push_back(cl.telegraph > 0.0F ? static_cast<int>(cl.telegraph * 1000.0F) : -1);
+  }
+  return out;
+}
+
+std::vector<float> Game::testWavePositions() const {
+  std::vector<float> out;
+  for (const auto e : registry_.view<Transform, WaveEffect>()) {
+    const auto& t = registry_.get<Transform>(e);
+    out.push_back(t.x);
+    out.push_back(t.y);
+  }
+  return out;
+}
+
+std::vector<float> Game::testEnemyPositions() const {
+  std::vector<float> out;
+  for (const auto e : registry_.view<Transform, Enemy>()) {
+    const auto& t = registry_.get<Transform>(e);
+    out.push_back(t.x);
+    out.push_back(t.y);
+  }
+  return out;
+}
+
+std::vector<float> Game::testBouncePositions() const {
+  std::vector<float> out;
+  for (const auto e : registry_.view<Transform, BounceProjectile>()) {
+    const auto& t = registry_.get<Transform>(e);
+    out.push_back(t.x);
+    out.push_back(t.y);
+  }
+  return out;
+}
+
+std::vector<float> Game::testEnemyChills() const {
+  std::vector<float> out;
+  for (const auto e : registry_.view<Enemy>()) {
+    const auto& en = registry_.get<Enemy>(e);
+    // 1.0 is reported for an enemy that is not chilled, so a test reads "is it
+    // slowed" without having to know the unchilled default.
+    out.push_back(en.slowT > 0.0F ? en.slowMul : 1.0F);
+    out.push_back(en.slowT);
+  }
+  return out;
+}
+
+void Game::testAdvance(float seconds) {
+  // Fixed 1/60 steps, same as fixedStep(). A test that only watched entity
+  // counts right after adding a weapon would never see the fire path run, and
+  // the whole point of these hooks is to watch a cascade start.
+  const int steps = static_cast<int>(std::max(0.0F, seconds) * 60.0F);
+  for (int i = 0; i < steps; ++i) {
+    fixedStep();
+  }
+}
+
 float Game::testOrbitBladeAngle() const {
   for (const auto e : registry_.view<OrbitBlade>()) {
     return registry_.get<OrbitBlade>(e).angle;
@@ -5812,20 +7489,222 @@ std::vector<std::string> wrapWords(std::string_view str, std::size_t maxChars) {
   return lines;
 }
 
-// Greedy word-wrap: renders str in lines that fit maxWidth pixels.
-static void renderWrappedText(core::render::Batcher& b, float x, float y,
-                              float scale, core::render::Color c,
-                              std::string_view str, float maxWidth,
-                              float lineHeight) {
-  // The 5x7 bitmap font advances 6*scale pixels per character, so the pixel
-  // limit maps 1:1 onto a character limit (textWidth() is size()*6*scale).
-  const std::size_t maxChars =
-      maxWidth > 0.0F ? static_cast<std::size_t>(maxWidth / (6.0F * scale))
-                      : str.size();
-  for (const auto& line : wrapWords(str, maxChars)) {
-    b.text(x, y, scale, c, line);
-    y += lineHeight;
+std::vector<std::string> wrapToWidth(std::string_view str, float maxWidth, float scale,
+                                    float indent, float contScale) {
+  if (maxWidth <= 0.0F || scale <= 0.0F) return {std::string(str)};
+  // The 5x7 bitmap font advances 6*scale pixels per character, so a pixel
+  // budget maps onto a character count. The indent eats width on every line
+  // after the first, which is why the loop narrows the budget as it goes
+  // rather than subtracting once up front.
+  //
+  // `contScale` is the size the CONTINUATION lines will be drawn at. When they
+  // are drawn larger than the first line (which is the card's style) the wrap
+  // has to measure them at that larger size, or every one of them overflows the
+  // card by exactly the size of the bump. Zero or negative means "the same as
+  // the first line", which is the plain single-size case.
+  const float cs = contScale > 0.0F ? contScale : scale;
+  // The character budget of line `idx`, which shrinks by one indent for every
+  // line after the first. It has to be a function of the line index rather than
+  // a single number: a word that does not fit the line it is on gets moved to
+  // the NEXT line, and that line is the narrower one.
+  const auto budgetFor = [&](std::size_t idx) {
+    const float advance = 6.0F * (idx == 0 ? scale : cs);
+    return static_cast<std::size_t>(
+        std::max(1.0F, (maxWidth - (idx == 0 ? 0.0F : indent)) / advance));
+  };
+  std::vector<std::string> lines;
+  std::string current;
+  std::string_view rest(str);
+  std::size_t maxChars = budgetFor(0);
+  while (!rest.empty()) {
+    const std::size_t space = rest.find(' ');
+    std::string_view word = rest.substr(0, space);
+    if (space != std::string_view::npos) rest.remove_prefix(space + 1);
+    else rest = std::string_view();
+    // Start a new line only if the word cannot share this one.
+    if (!current.empty() && current.size() + 1 + word.size() > maxChars) {
+      lines.push_back(current);
+      current.clear();
+      maxChars = budgetFor(lines.size());
+    }
+    // A word too long for a whole line is hard-broken rather than allowed to
+    // run off the panel. wrapWords() deliberately does NOT do this (its own test
+    // pins that contract), but there the limit is a character count for a list
+    // of short identifiers, whereas here it is a pixel box on a card: an
+    // over-long word ("invulnerability" is 15 characters and a 4-card row leaves
+    // room for 14) would otherwise put a character outside the card.
+    while (word.size() > maxChars) {
+      if (!current.empty()) {
+        lines.push_back(current);
+        current.clear();
+        maxChars = budgetFor(lines.size());
+      }
+      lines.emplace_back(word.substr(0, maxChars));
+      word.remove_prefix(maxChars);
+      maxChars = budgetFor(lines.size());
+    }
+    if (word.empty()) continue;
+    if (!current.empty()) current += ' ';
+    current.append(word);
   }
+  if (!current.empty()) lines.push_back(current);
+  return lines;
+}
+
+// The card body's hanging indent. Twice the card's 16px left padding, so a
+// wrapped continuation line sits visibly inboard of the first line instead of
+// blending into it.
+constexpr float kCardIndent = 32.0F;
+
+// The card body is set at a FIXED scale, not derived from the card width.
+//
+// Deriving it was tried: clamp((cardW - 64) / 26, 1.3, 1.6). For every card
+// width the level-up row can actually produce -- 200 to 400 -- that expression
+// is 5.2 to 12.9, so it always clamped to the maximum and the "derivation" was a
+// constant wearing a formula. The premise behind it was wrong anyway: a
+// narrower card does not need smaller text to keep a readable measure, because
+// the card being narrower already shortens the measure. At a fixed scale the
+// first line holds (cardW - 32) / 9.6 characters -- about 20 on a 5-card row and
+// about 38 on a 3-card row -- which is the range the derivation was trying to
+// manufacture in the first place.
+//
+// The value is deliberately modest. Blowing the body text up to fill the card
+// was tried and it was the wrong instinct: bigger is not more readable once the
+// measure drops to a dozen characters per line, and it made the card a wall of
+// type. The wrapped lines are where the emphasis belongs, not the first.
+constexpr float kCardDescScale = 1.6F;
+
+// Horizontal padding and body line pitch of the card, and how much louder the
+// wrapped lines speak than the first one.
+constexpr float kCardPadX = 16.0F;
+constexpr float kCardLineH = 15.0F;
+constexpr float kCardContScaleMul = 1.18F;
+constexpr float kCardContLineMul = 1.45F;
+
+CardTextLayout cardTextLayout(float cardW) {
+  CardTextLayout lay;
+  lay.width = cardW - kCardPadX * 2.0F;
+  lay.scale = kCardDescScale;
+  // Wrapped lines are set LARGER than the first, not smaller, and are pushed
+  // down a little further than the normal pitch: same indent, more ink.
+  lay.contScale = lay.scale * kCardContScaleMul;
+  lay.lineH = kCardLineH;
+  lay.contLineH = kCardLineH * kCardContLineMul;
+  lay.indent = kCardIndent;
+  return lay;
+}
+
+float cardTextHeight(int lines, const CardTextLayout& lay) {
+  if (lines <= 0) return 0.0F;
+  if (lines == 1) return lay.lineH;
+  return lay.lineH + static_cast<float>(lines - 1) * lay.contLineH;
+}
+
+// The level-up card row's geometry, as one function so it can be tested. The
+// renderer calls this, so a test that checks "the row fits on screen" is
+// checking the renderer's own arithmetic rather than a copy of it.
+Game::LevelUpRow Game::levelUpRowLayout(float px, float py, std::size_t n,
+                                        std::size_t tallestDescLines,
+                                        std::size_t tallestNameLines) {
+  LevelUpRow out;
+  if (n == 0) {
+    out.top = py * 0.32F;
+    out.cardH = 176.0F;
+    out.hintY = py * 0.66F;
+    out.bodyLines = 4;
+    return out;
+  }
+  const float gap = 24.0F;
+  const float avail =
+      (px - gap * static_cast<float>(n - 1) - 40.0F) / static_cast<float>(n);
+  // Width: the 200px floor is a legibility PREFERENCE, not a constraint. It was
+  // applied as a clamp, which meant a 3-card row on a 640px-wide window -- 184px
+  // each after the gaps and the side margin -- drew at 200 and put 4px of the
+  // first and last card off each edge of the screen. So the preference is capped
+  // by what the row's share of the window actually is. Below the floor the card
+  // simply wraps into more lines; the body scale is a constant, so a narrow card
+  // is still legible.
+  out.cardW = std::min(std::clamp(avail, 200.0F, 400.0F), avail);
+  const CardTextLayout lay = cardTextLayout(out.cardW);
+  out.nameLines = static_cast<int>(std::max<std::size_t>(tallestNameLines, 1));
+  // Where the description starts: below the [1] key badge (52), plus the title
+  // block, plus 10px of air. For a one-line title that is the 86 this has always
+  // been, so nothing moves unless a title actually wraps.
+  const float footer = 30.0F;
+  out.bodyTop = 52.0F + 24.0F * static_cast<float>(out.nameLines) + 10.0F;
+  // The height ceiling is above what any reachable row actually needs, not a
+  // tight fit: the worst case is a 4-card row with a two-line title, which wants
+  // 110 + 211 + 30 = 351. At 340 it lost a line of a long description, so the
+  // ceiling was silently truncating cards the players DO see. Being a ceiling
+  // rather than a target, raising it costs nothing for a short description --
+  // the row is still as tall as its own tallest body.
+  out.cardH = std::clamp(
+      out.bodyTop + cardTextHeight(static_cast<int>(tallestDescLines), lay) + footer,
+      150.0F, 364.0F);
+  out.bodyLines = cardTextLinesThatFit(out.cardH - out.bodyTop - footer, lay);
+  // The row's TOP is clamped so the whole card plus the reroll hint below it
+  // stays on screen. It used to be a fixed py * 0.32, which needs a window of
+  // at least (cardH + 68) / 0.68 -- 503px for a 4-card row -- and the window is
+  // resizable with no minimum, so a short window pushed the cards and the hint
+  // clean off the bottom. Only the width was ever tested. The outer max stops
+  // the clamp from shoving the row into the title on a window too short to hold
+  // it at all, which then clips the bottom -- the lesser of the two evils, and
+  // only reachable by dragging the window to about 300px tall.
+  out.top = std::max(py * 0.16F + 44.0F, std::min(py * 0.32F, py - out.cardH - 44.0F));
+  out.hintY = out.top + out.cardH + 24.0F;
+  return out;
+}
+
+int cardTextLinesThatFit(float avail, const CardTextLayout& lay) {
+  if (avail < lay.lineH) return 1;
+  return 1 + static_cast<int>((avail - lay.lineH) / lay.contLineH);
+}
+
+// Greedy word-wrap: renders str under `lay`, indenting every continuation line
+// by lay.indent and drawing it at lay.contScale. Draws at most `maxLines` lines
+// (-1 for all of them) and returns the number drawn, so a caller with a fixed
+// box can clamp instead of letting the text run off the bottom of it.
+//
+// When the clamp actually bites, the last visible line gets an ellipsis. A
+// description that stops mid-sentence with no marker reads as a complete
+// thought, which is worse than a slightly longer panel.
+static int renderWrappedText(core::render::Batcher& b, float x, float y,
+                             const CardTextLayout& lay, core::render::Color c,
+                             std::string_view str, int maxLines = -1) {
+  // The continuation lines are set at their own scale, so the wrap has to be
+  // MEASURED at that scale too. Measuring them at the first line's size is what
+  // makes a line quietly overflow the card by exactly the size of the bump.
+  const auto lines = wrapToWidth(str, lay.width, lay.scale, lay.indent, lay.contScale);
+  const bool clipped = maxLines >= 0 && static_cast<std::size_t>(maxLines) < lines.size();
+  const int limit = maxLines < 0 ? static_cast<int>(lines.size()) : maxLines;
+  int drawn = 0;
+  for (; drawn < limit && drawn < static_cast<int>(lines.size()); ++drawn) {
+    const std::string_view text = lines[static_cast<std::size_t>(drawn)];
+    const bool cont = drawn > 0;
+    const float s = cont ? lay.contScale : lay.scale;
+    const float lineX = x + (cont ? lay.indent : 0.0F);
+    // A continuation line gets its own budget: it is indented, so it has less
+    // room to work with than the first line did.
+    const float lineMax = lay.width - (cont ? lay.indent : 0.0F);
+    if (clipped && drawn == limit - 1) {
+      // Make room for "..." on the final line, trimming characters from the
+      // end of the text if the line is already full.
+      constexpr std::string_view kDots = "...";
+      const float dotsW = static_cast<float>(kDots.size()) * 6.0F * s;
+      std::size_t keep = text.size();
+      while (keep > 0 && static_cast<float>(keep) * 6.0F * s + dotsW > lineMax) {
+        --keep;
+      }
+      std::string last(text.substr(0, keep));
+      last.append(kDots);
+      b.text(lineX, y, s, c, last);
+      y += cont ? lay.contLineH : lay.lineH;
+      continue;
+    }
+    b.text(lineX, y, s, c, text);
+    y += cont ? lay.contLineH : lay.lineH;
+  }
+  return drawn;
 }
 
 // Human-readable labels for attack patterns (ASCII only - font is 32..96).
@@ -5841,6 +7720,7 @@ static const char* attackTypeName(AttackType t) {
     case AttackType::Sweep: return "sweep";
     case AttackType::Zone: return "zone";
     case AttackType::Chain: return "chain";
+    case AttackType::Wave: return "wave";
     case AttackType::Nova: return "nova";
     case AttackType::Inferno: return "inferno";
     case AttackType::Pulsar: return "pulsar";
@@ -5858,7 +7738,61 @@ static std::string fit1(float v) {
   return buf;
 }
 
+// The card's title, wrapped to two lines rather than sliced or shrunk.
+CardNameLayout cardNameLayout(std::string_view name, float maxWidth) {
+  CardNameLayout out;
+  if (name.empty()) return out;
+  // The 5x7 font advances 6*scale pixels per character, so a pixel budget maps
+  // onto a character count. The comfortable size is tried first, and only if the
+  // name will not fit on one line there does it drop to the wrapped size.
+  constexpr float kNameScale = 2.3F;
+  constexpr float kNameWrapScale = 2.0F;
+  if (static_cast<float>(name.size()) * 6.0F * kNameScale <= maxWidth) {
+    out.scale = kNameScale;
+    out.lines = {std::string(name)};
+    return out;
+  }
+  out.scale = kNameWrapScale;
+  out.lines = wrapToWidth(name, maxWidth, kNameWrapScale, 0.0F, kNameWrapScale);
+  // A title is one to three words, so two lines is enough for every shipped
+  // name. A third line would mean the wrap point is inside a single word (a very
+  // long name with no spaces), which reads worse than an ellipsis, so cap it
+  // here and let the caller mark the tail.
+  if (out.lines.size() > 2) {
+    out.lines.resize(2);
+    std::string& last = out.lines.back();
+    while (static_cast<float>(last.size() + 3) * 6.0F * kNameWrapScale > maxWidth &&
+           !last.empty()) {
+      last.pop_back();
+    }
+    last += "...";
+    out.elided = true;
+  }
+  return out;
+}
+
+// The card's title. It was drawn at a fixed 2.3 with no width check, and
+// "Total Internal Reflection" is 345px in a 260px cell -- so the tail of the
+// name ran under the next card's 95%-opaque panel with no ellipsis, which reads
+// as a misspelled word rather than a long name. Stepping the scale down to 1.7
+// was the first attempt and it was also wrong: that is below the body's own
+// first-line scale, so a long name stopped reading as a title at all, and 25
+// characters still did not fit the narrowest card. Wrapping keeps the whole
+// name at a size that is still larger than the body.
+void Game::drawCardName(core::render::Batcher& b, std::string_view name, float x, float y,
+                        float maxWidth, const core::render::Color& accent,
+                        const core::render::Color& fallback) {
+  const CardNameLayout lay = cardNameLayout(name, maxWidth);
+  float ly = y;
+  for (std::size_t i = 0; i < lay.lines.size(); ++i) {
+    const bool last = i + 1 == lay.lines.size();
+    b.text(x, ly, lay.scale, lay.elided && last ? accent : fallback, lay.lines[i]);
+    ly += lay.lineH;
+  }
+}
+
 // Character sheet shown when the run is paused (ESC).
+
 void Game::renderPlayerStats(core::render::Batcher& b, float px, float py) {
   const core::render::Color gold{1.0F, 0.85F, 0.4F, 1.0F};
   const core::render::Color dim{0.72F, 0.72F, 0.82F, 1.0F};
@@ -5960,7 +7894,19 @@ void Game::renderPlayerStats(core::render::Batcher& b, float px, float py) {
 
   const float lineH = 17.0F;
   const float padX = 24.0F;
-  const float panelW = 560.0F;
+  const std::string title = "PLAYER - PAUSED  [ESC] RESUME  [B] BESTIARY";
+  // The panel is sized to its CONTENT, not to a literal. It used to be a fixed
+  // 560px, which is narrower than its own title: "PLAYER - PAUSED [ESC] RESUME
+  // [B] BESTIARY" is 774px at scale 3.0, so 238px of the title hung off the
+  // right edge of its own panel on every single pause, and the ability row (600px
+  // at base stats, 792px once the cooldown and echo cards are taken) hung off it
+  // too. Measuring is the only version of this that cannot go stale the next time
+  // a row gets longer.
+  float contentW = b.textWidth(3.0F, title);
+  for (const auto& r : rows) {
+    if (!r.empty()) contentW = std::max(contentW, b.textWidth(2.0F, r));
+  }
+  const float panelW = std::min(px - 24.0F, std::max(560.0F, contentW + padX * 2.0F + 16.0F));
   const float panelX = px * 0.5F - panelW * 0.5F;
   const float panelY = 40.0F;
 
@@ -5972,17 +7918,31 @@ void Game::renderPlayerStats(core::render::Batcher& b, float px, float py) {
   const float panelH = std::min((yEnd - panelY) + 22.0F, py - 70.0F);
   b.rectTopLeft(panelX, panelY, panelW, panelH, core::render::Color{0.08F, 0.07F, 0.12F, 0.92F});
   b.rectTopLeft(panelX, panelY, panelW, 4.0F, teal);
-  const std::string title = "PLAYER - PAUSED  [ESC] RESUME  [B] BESTIARY";
   b.text(panelX + padX, panelY + 14.0F, 3.0F, gold, title);
 
+  // Rows are clipped to the panel. The height is already clamped to the window,
+  // so on a short window the list used to run off the bottom of its own
+  // backdrop and continue over the world with no marker at all. Anything that
+  // does not fit is counted and said out loud rather than silently drawn.
   float y = panelY + 52.0F;
+  const float clipY = panelY + panelH - 12.0F;
+  std::size_t skipped = 0;
   for (const auto& r : rows) {
+    const float step = r.empty() ? 10.0F : lineH;
+    if (y + step > clipY) {
+      ++skipped;
+      continue;
+    }
     if (r.empty()) {
-      y += 10.0F;
+      y += step;
       continue;
     }
     b.text(panelX + padX, y, 2.0F, dim, r);
-    y += lineH;
+    y += step;
+  }
+  if (skipped > 0) {
+    b.text(panelX + padX, y, 1.6F, core::render::Color{1.0F, 0.6F, 0.5F, 1.0F},
+           "+" + std::to_string(skipped) + " MORE LINES - RESIZE THE WINDOW");
   }
 }
 
@@ -6060,7 +8020,12 @@ void Game::renderBestiary(core::render::Batcher& b, float px, float py) {
   b.text(24.0F, 100.0F, 1.8F, gold, "TRIBUNALS");
   const float tribW = (px - 48.0F) / 3.0F;
   const float tribY = 122.0F;
-  const float tribH = 112.0F;
+  // Six text rows: roman+name at +8, traits/XP/gate at +26, the live gate status
+  // at +38, the stat line at +52, the resistance line at +66, then up to four
+  // wrapped pool lines from +80 at a 12px pitch -- which lands the last one at
+  // +116 and a 19px line, so 132 is the tight fit. It used to be 112, which is
+  // exactly why the stat line and the gate status ended up sharing a slot.
+  const float tribH = 132.0F;
   for (std::size_t ti = 0; ti < 3; ++ti) {
     const auto& tb = tribunals[ti];
     const float x = 24.0F + static_cast<float>(ti) * tribW;
@@ -6087,7 +8052,12 @@ void Game::renderBestiary(core::render::Batcher& b, float px, float py) {
       const float need = tb.tier == 2 ? kChampionPressure : kOverlordPressure;
       const int pct = static_cast<int>(std::clamp(have / need, 0.0F, 1.0F) * 100.0F);
       std::snprintf(buf, sizeof(buf), "%s  %d%%", open ? "OPEN" : "LOCKED", pct);
-      b.text(x + 14.0F, tribY + 40.0F, 1.25F,
+      // Its OWN row, at tribY + 38. This used to be drawn at tribY + 40 -- the
+      // exact slot the stat line below uses -- so the two overwrote each other
+      // and the gate progress, which is the whole point of the adaptive
+      // director, was never once visible on screen. The stat line was drawn
+      // second, so it always won.
+      b.text(x + 14.0F, tribY + 38.0F, 1.25F,
              open ? tb.color : Color{dim.r, dim.g, dim.b, 0.7F}, buf);
     }
 
@@ -6095,7 +8065,7 @@ void Game::renderBestiary(core::render::Batcher& b, float px, float py) {
                   static_cast<double>(buffs.hpMin), static_cast<double>(buffs.hpMax),
                   static_cast<double>(buffs.touch), static_cast<double>(buffs.speed),
                   static_cast<int>(enemyDefense(simTime_, tb.tier)));
-    b.text(x + 14.0F, tribY + 40.0F, 1.25F, statBlue, buf);
+    b.text(x + 14.0F, tribY + 52.0F, 1.25F, statBlue, buf);
 
     // Resistances at the current run time (they grow with it, so this is the
     // live number, not a constant).
@@ -6103,20 +8073,29 @@ void Game::renderBestiary(core::render::Batcher& b, float px, float py) {
                   static_cast<int>(enemyLifestealResistance(simTime_, tb.tier, false) * 100.0F),
                   static_cast<int>(enemyKnockbackResistance(simTime_, tb.tier, false) * 100.0F),
                   static_cast<int>(stats_.armorPierce));
-    b.text(x + 14.0F, tribY + 54.0F, 1.25F, resOrange, buf);
+    b.text(x + 14.0F, tribY + 66.0F, 1.25F, resOrange, buf);
 
-    // The full ability pool, word-wrapped, with a "(rolls N)" note so the
-    // player knows how many they will actually get.
+    // The full ability pool, word-wrapped. The wrap is 56 characters, not 40:
+    // at 40 the eleven trait names needed four lines and the fourth -- which is
+    // "RESIST +40 DEF" -- was silently dropped by the 3-line cap, so every
+    // panel ended mid-list and the player never learned the pool included a
+    // defence trait. 56 fits the list in three lines at this column width, and
+    // the cap is now 4 so a future trait does not vanish without a trace.
     std::string pool;
     for (const char* n : kTraitNames) {
       if (!pool.empty()) pool += "  ";
       pool += n;
     }
-    const std::vector<std::string> lines = wrapWords(pool, 40);
-    float ly = tribY + 68.0F;
-    for (std::size_t li = 0; li < lines.size() && li < 3; ++li) {
+    const std::vector<std::string> lines = wrapWords(pool, 56);
+    float ly = tribY + 80.0F;
+    for (std::size_t li = 0; li < lines.size() && li < 4; ++li) {
       b.text(x + 14.0F, ly, 1.15F, violet, lines[li]);
       ly += 12.0F;
+    }
+    // Say so when the cap actually bites, rather than pretending the list ends.
+    if (lines.size() > 4) {
+      b.text(x + 14.0F, ly, 1.15F, core::render::Color{violet.r, violet.g, violet.b, 0.6F},
+             "+ MORE");
     }
 
     // Slain badge, bottom-right of the panel.
@@ -6247,6 +8226,18 @@ void Game::renderManual(core::render::Batcher& b, float px, float py) {
     return;
   }
 
+  // Bound-checked, because everything below indexes by it. openManual() clamps
+  // it and the page controls only ever move it within range, so the empty case is
+  // the only way to get here out of bounds — but "should not happen" is not
+  // "cannot", and this is the difference between a wrong page and a read past
+  // the end of a vector.
+  if (manualPage_ >= content_.manual.size()) {
+    b.text(px * 0.5F - b.textWidth(2.4F, "NO PAGE") * 0.5F, py * 0.45F, 2.4F, dim,
+           "NO PAGE");
+    b.text(px * 0.5F - b.textWidth(1.8F, "[F1] CLOSE") * 0.5F, py - 40.0F, 1.8F, dim,
+           "[F1] CLOSE");
+    return;
+  }
   const ManualPage& page = content_.manual[manualPage_];
   const std::size_t total = content_.manual.size();
   const std::size_t n = manualPage_ + 1;
@@ -6266,29 +8257,47 @@ void Game::renderManual(core::render::Batcher& b, float px, float py) {
     const float listX = 26.0F;
     const float listY0 = 74.0F;
     const float rowH = 22.0F;
+    // The rail is sized to its own labels and is forbidden from reaching the
+    // body column. It used to be a hardcoded 196px, which page 6's
+    // "6  ABILITIES  J / K / L" overran by 33px -- so the selected page's own
+    // highlight bar stopped short of its own label, and the label's tail landed
+    // 3px short of the text it was supposed to be separating from.
+    const float railBudget = kManualBodyX - listX - 14.0F;
+    float railW = 0.0F;
+    for (std::size_t i = 0; i < total; ++i) {
+      railW = std::max(railW, b.textWidth(1.6F, std::to_string(i + 1) + "  " +
+                                                        content_.manual[i].title));
+    }
+    railW = std::clamp(railW + 10.0F, 90.0F, railBudget);
     for (std::size_t i = 0; i < total; ++i) {
       const float y = listY0 + static_cast<float>(i) * rowH;
       const bool sel = (i == manualPage_);
       const auto& p = content_.manual[i];
       // Highlight bar behind the active page.
       if (sel) {
-        b.rectTopLeft(listX - 8.0F, y - 4.0F, 196.0F, 18.0F,
+        b.rectTopLeft(listX - 8.0F, y - 4.0F, railW, 18.0F,
                       Color{gold.r, gold.g, gold.b, 0.16F});
         b.circle(listX - 12.0F, y + 4.0F, 3.5F, gold);
       }
-      const std::string label =
-          std::to_string(i + 1) + "  " + p.title;
+      std::string label = std::to_string(i + 1) + "  " + p.title;
+      if (b.textWidth(1.6F, label) > railW - 6.0F) {
+        while (!label.empty() && b.textWidth(1.6F, label + "...") > railW - 6.0F) {
+          label.pop_back();
+        }
+        label += "...";
+      }
       b.text(listX, y, 1.6F, sel ? gold : dim, label);
     }
   }
 
   // --- Page body (right) -----------------------------------------------------
   {
-    const float bodyX = 250.0F;
-    const float bodyY0 = 74.0F;
-    const float lineH = 15.0F;
+    const float bodyX = kManualBodyX;
+    const float bodyY0 = kManualBodyY;
+    const float lineH = kManualLineH;
     // The body must fit the gap between the rail and the hint bar.
-    const float maxLines = std::max(1.0F, (py - bodyY0 - 56.0F) / lineH);
+    const float maxLines =
+        std::max(1.0F, (py - bodyY0 - kManualBottomPad) / lineH);
     const std::size_t shown = std::min<std::size_t>(page.lines.size(),
                                                     static_cast<std::size_t>(maxLines));
     for (std::size_t i = 0; i < shown; ++i) {
@@ -6297,29 +8306,38 @@ void Game::renderManual(core::render::Batcher& b, float px, float py) {
       // Leading markers are markup, not text: '>' is a highlighted bullet, '#' is
       // a sub-heading, and "  " is an indent under the bullet above.
       if (!raw.empty() && raw.front() == '>') {
-        b.text(bodyX, y, 1.6F, gold, ">");
-        b.text(bodyX + 18.0F, y, 1.6F, bullet, raw.substr(1));
+        b.text(bodyX, y, kManualBodyScale, gold, ">");
+        b.text(bodyX + kManualIndent, y, kManualBodyScale, bullet, raw.substr(1));
       } else if (!raw.empty() && raw.front() == '#') {
-        b.text(bodyX, y, 1.6F, violet, raw.substr(1));
+        b.text(bodyX, y, kManualBodyScale, violet, raw.substr(1));
       } else if (raw.size() >= 2 && raw[0] == ' ' && raw[1] == ' ') {
-        b.text(bodyX + 18.0F, y, 1.6F, dim, raw.substr(2));
+        b.text(bodyX + kManualIndent, y, kManualBodyScale, dim, raw.substr(2));
       } else if (raw.empty()) {
         b.circle(bodyX + 4.0F, y + 5.0F, 1.0F, Color{dim.r, dim.g, dim.b, 0.35F});
       } else {
-        b.text(bodyX, y, 1.6F, white, raw);
+        b.text(bodyX, y, kManualBodyScale, white, raw);
       }
     }
-    // Overflow marker, so a clipped page says it is clipped.
+    // Overflow marker, so a clipped page says it is clipped. It used to read
+    // "...MORE, NEXT PAGE", which is the wrong instruction twice over: the next
+    // page is a different topic, not a continuation, and there is no in-page
+    // scroll for "more" to refer to. What is true is that the text ends here.
     if (page.lines.size() > shown) {
       const float y = bodyY0 + static_cast<float>(shown) * lineH;
-      b.text(bodyX, y, 1.6F, Color{0.95F, 0.55F, 0.45F, 1.0F}, "...MORE, NEXT PAGE");
+      b.text(bodyX, y, 1.6F, Color{0.95F, 0.55F, 0.45F, 1.0F}, "...ENDS HERE - NO SCROLL");
     }
   }
 
   // --- Hint bar --------------------------------------------------------------
   {
+    // The jump range is what the DECODER can do, not how many pages exist. Only
+    // choose1..choose5 are read, so advertising "[1-11]" and then silently
+    // ignoring 6..11 is a lie on the one screen whose whole job is telling the
+    // player what the keys do. Clamped to the five that actually work.
+    constexpr std::size_t kJumpPages = 5;
+    const std::size_t jumpable = std::min(total, kJumpPages);
     const std::string hint =
-        "[F1] CLOSE   [UP/DOWN] PAGE   [1-" + std::to_string(total) + "] JUMP";
+        "[F1] CLOSE   [UP/DOWN] PAGE   [1-" + std::to_string(jumpable) + "] JUMP";
     b.text(px * 0.5F - b.textWidth(1.5F, hint) * 0.5F, py - 30.0F, 1.5F,
            Color{0.5F, 0.5F, 0.6F, 1.0F}, hint);
   }
@@ -6349,32 +8367,59 @@ bool Game::WeaponSnapshot::operator==(const WeaponSnapshot& other) const {
          speed == other.speed && life == other.life && pierce == other.pierce &&
          spread == other.spread && coneAngle == other.coneAngle &&
          coneRange == other.coneRange && coneTickRate == other.coneTickRate &&
+         coneBite == other.coneBite && coneBiteMax == other.coneBiteMax &&
+         coneEmberAt == other.coneEmberAt && coneEmberRadius == other.coneEmberRadius &&
+         coneEmberDuration == other.coneEmberDuration &&
          orbitRadius == other.orbitRadius && orbitSpeed == other.orbitSpeed &&
-         orbitCount == other.orbitCount && bombArcHeight == other.bombArcHeight &&
+         orbitCount == other.orbitCount && orbitWindow == other.orbitWindow &&
+         waveSpread == other.waveSpread && bombArcHeight == other.bombArcHeight &&
          bombExplodeRadius == other.bombExplodeRadius &&
          bombKnockback == other.bombKnockback && bombFuse == other.bombFuse &&
+         bombAhead == other.bombAhead && bombOnTarget == other.bombOnTarget &&
+         reaimRange == other.reaimRange && reaimTurn == other.reaimTurn &&
          boomerangRange == other.boomerangRange &&
          boomerangReturnSpeed == other.boomerangReturnSpeed &&
          bounceCount == other.bounceCount && bounceRange == other.bounceRange &&
          bounceDamageMul == other.bounceDamageMul &&
          bounceInfinite == other.bounceInfinite && beamRange == other.beamRange &&
          beamWidth == other.beamWidth && beamDuration == other.beamDuration &&
-         haloKnockback == other.haloKnockback && sweepAngle == other.sweepAngle &&
+         // chill was in the snapshot but not in the comparison, so the Rime
+         // Lances' whole effect -- the only thing that card really does -- was
+         // invisible to the "did this card do anything" test.
+         chillMul == other.chillMul && chillTime == other.chillTime &&
+         auraRadius == other.auraRadius && auraDps == other.auraDps &&
+         auraTick == other.auraTick && auraChillMul == other.auraChillMul &&
+         auraChillTime == other.auraChillTime &&
+         haloKnockback == other.haloKnockback && haloInner == other.haloInner &&
+         sweepAngle == other.sweepAngle &&
          sweepRadius == other.sweepRadius && sweepKnockback == other.sweepKnockback &&
          zoneRadius == other.zoneRadius && zoneDuration == other.zoneDuration &&
          zoneDps == other.zoneDps && zoneMaxPools == other.zoneMaxPools &&
          chainJumpRange == other.chainJumpRange && chainMaxJumps == other.chainMaxJumps &&
-         chainDamageMul == other.chainDamageMul && novaMaxRadius == other.novaMaxRadius &&
+         chainDamageMul == other.chainDamageMul &&
+         chainShatter == other.chainShatter && bounceSplits == other.bounceSplits &&
+         waveSpeed == other.waveSpeed && waveRange == other.waveRange &&
+         waveWidth == other.waveWidth && waveKnockback == other.waveKnockback &&
+         waveDamageMul == other.waveDamageMul && waveCount == other.waveCount &&
+         waveArcStep == other.waveArcStep && waveHookPull == other.waveHookPull &&
+         novaMaxRadius == other.novaMaxRadius &&
          novaExpandSpeed == other.novaExpandSpeed &&
          novaDamagePerTick == other.novaDamagePerTick &&
-         novaTickRate == other.novaTickRate && area == other.area &&
+         novaTickRate == other.novaTickRate && novaContract == other.novaContract &&
+         novaPull == other.novaPull && novaBurstDamage == other.novaBurstDamage &&
+         novaEcho == other.novaEcho && area == other.area &&
          strength == other.strength && homing == other.homing && bounces == other.bounces &&
          cdBonus == other.cdBonus && sweepLead == other.sweepLead &&
+         sweepHook == other.sweepHook &&
          uniqueHeal == other.uniqueHeal && beamSplit == other.beamSplit &&
          vortexRadius == other.vortexRadius && vortexReach == other.vortexReach &&
          vortexPull == other.vortexPull && vortexOrbit == other.vortexOrbit &&
          vortexOrbitSpeed == other.vortexOrbitSpeed &&
-         vortexTickRate == other.vortexTickRate && prismRange == other.prismRange &&
+         vortexTickRate == other.vortexTickRate &&
+         vortexCollapseAt == other.vortexCollapseAt &&
+         vortexBurstDamage == other.vortexBurstDamage &&
+         vortexBurstRadius == other.vortexBurstRadius &&
+         prismRange == other.prismRange &&
          prismWidth == other.prismWidth && prismMaxTargets == other.prismMaxTargets &&
          prismRicochet == other.prismRicochet && lureRadius == other.lureRadius &&
          lureReach == other.lureReach && lurePull == other.lurePull &&
@@ -6398,13 +8443,24 @@ Game::WeaponSnapshot Game::testWeaponSnapshot(int slotIndex) const {
   s.coneAngle = w.coneAngle;
   s.coneRange = w.coneRange;
   s.coneTickRate = w.coneTickRate;
+  s.coneBite = w.coneBite;
+  s.coneBiteMax = w.coneBiteMax;
+  s.coneEmberAt = w.coneEmberAt;
+  s.coneEmberRadius = w.coneEmberRadius;
+  s.coneEmberDuration = w.coneEmberDuration;
   s.orbitRadius = w.orbitRadius;
   s.orbitSpeed = w.orbitSpeed;
   s.orbitCount = w.orbitCount;
+  s.orbitWindow = w.orbitWindow;
+  s.waveSpread = w.waveSpread;
   s.bombArcHeight = w.bombArcHeight;
   s.bombExplodeRadius = w.bombExplodeRadius;
   s.bombKnockback = w.bombKnockback;
   s.bombFuse = w.bombFuse;
+  s.bombAhead = w.bombAhead;
+  s.bombOnTarget = w.bombOnTarget;
+  s.reaimRange = w.reaimRange;
+  s.reaimTurn = w.reaimTurn;
   s.boomerangRange = w.boomerangRange;
   s.boomerangReturnSpeed = w.boomerangReturnSpeed;
   s.bounceCount = w.bounceCount;
@@ -6414,7 +8470,15 @@ Game::WeaponSnapshot Game::testWeaponSnapshot(int slotIndex) const {
   s.beamRange = w.beamRange;
   s.beamWidth = w.beamWidth;
   s.beamDuration = w.beamDuration;
+  s.chillMul = w.chillMul;
+  s.chillTime = w.chillTime;
+  s.auraRadius = w.auraRadius;
+  s.auraDps = w.auraDps;
+  s.auraTick = w.auraTick;
+  s.auraChillMul = w.auraChillMul;
+  s.auraChillTime = w.auraChillTime;
   s.haloKnockback = w.haloKnockback;
+  s.haloInner = w.haloInner;
   s.sweepAngle = w.sweepAngle;
   s.sweepRadius = w.sweepRadius;
   s.sweepKnockback = w.sweepKnockback;
@@ -6425,16 +8489,31 @@ Game::WeaponSnapshot Game::testWeaponSnapshot(int slotIndex) const {
   s.chainJumpRange = w.chainJumpRange;
   s.chainMaxJumps = w.chainMaxJumps;
   s.chainDamageMul = w.chainDamageMul;
+  s.chainShatter = w.chainShatter;
+  s.bounceSplits = w.bounceSplits;
+  s.waveSpeed = w.waveSpeed;
+  s.waveRange = w.waveRange;
+  s.waveWidth = w.waveWidth;
+  s.waveKnockback = w.waveKnockback;
+  s.waveDamageMul = w.waveDamageMul;
+  s.waveCount = w.waveCount;
+  s.waveArcStep = w.waveArcStep;
+  s.waveHookPull = w.waveHookPull;
   s.novaMaxRadius = w.novaMaxRadius;
   s.novaExpandSpeed = w.novaExpandSpeed;
   s.novaDamagePerTick = w.novaDamagePerTick;
   s.novaTickRate = w.novaTickRate;
+  s.novaContract = w.novaContract;
+  s.novaPull = w.novaPull;
+  s.novaBurstDamage = w.novaBurstDamage;
+  s.novaEcho = w.novaEcho;
   s.area = w.area;
   s.strength = w.strength;
   s.homing = w.homing;
   s.bounces = w.bounces;
   s.cdBonus = w.cdBonus;
   s.sweepLead = w.sweepLead;
+  s.sweepHook = w.sweepHook;
   s.uniqueHeal = w.uniqueHeal;
   s.beamSplit = w.beamSplit;
   s.vortexRadius = w.vortexRadius;
@@ -6443,6 +8522,9 @@ Game::WeaponSnapshot Game::testWeaponSnapshot(int slotIndex) const {
   s.vortexOrbit = w.vortexOrbit;
   s.vortexOrbitSpeed = w.vortexOrbitSpeed;
   s.vortexTickRate = w.vortexTickRate;
+  s.vortexCollapseAt = w.vortexCollapseAt;
+  s.vortexBurstDamage = w.vortexBurstDamage;
+  s.vortexBurstRadius = w.vortexBurstRadius;
   s.prismRange = w.prismRange;
   s.prismWidth = w.prismWidth;
   s.prismMaxTargets = w.prismMaxTargets;
@@ -6583,12 +8665,16 @@ void Game::renderMainMenu(core::render::Batcher& b, float px, float py) {
     } else if (i == kMenuManual) {
       const std::size_t pages = content_.manual.size();
       value = pages == 0 ? "< no manual in build >"
-                         : "< " + std::to_string(pages) + " pages >";
+                         : "< " + std::to_string(pages) + " pages >  OR [F1] >";
     } else if (i == kMenuReset) {
       if (profile_ == nullptr) {
         value = "< no profile >";
       } else if (armedReset) {
-        value = "< ENTER = WIPE ALL >";
+        // Deliberately EMPTY while armed. "RESET? PRESS AGAIN" already ends at
+        // 707px and "< ENTER = WIPE ALL >" started at 618px, so the two
+        // overwrote each other across 90px on the one row that deletes saved
+        // progress. The label is the instruction now; the value would only
+        // repeat it on top of itself.
       } else {
         value = "< 2-STEP >";
       }
@@ -6618,7 +8704,14 @@ void Game::renderMainMenu(core::render::Batcher& b, float px, float py) {
       }
     }
     if (!hint.empty()) {
-      b.text(px * 0.5F - b.textWidth(1.5F, hint) * 0.5F, rowY0 + 4.0F * rowH + 18.0F, 1.5F,
+      // Anchored to the OUTLINE row, not to a hardcoded index. It said
+      // rowY0 + 4*rowH, which is RESET PROGRESS -- two rows below the thing the
+      // hint is about -- so the requirement for the outline you cannot use yet
+      // read as if it belonged to the button that wipes your unlocks. The 18px
+      // drop clears the next row's 38px pitch: the line ends at +33 and the row
+      // below starts at +38.
+      b.text(px * 0.5F - b.textWidth(1.5F, hint) * 0.5F,
+             rowY0 + static_cast<float>(kMenuOutline) * rowH + 18.0F, 1.5F,
              Color{0.85F, 0.55F, 0.35F, 1.0F}, hint);
     }
   }
@@ -6631,7 +8724,6 @@ void Game::renderMainMenu(core::render::Batcher& b, float px, float py) {
   b.text(px * 0.5F - b.textWidth(1.2F, manualHint) * 0.5F, py - 22.0F, 1.2F,
          Color{0.42F, 0.45F, 0.55F, 1.0F}, manualHint);
 }
-
 void Game::spawnParticles(float x, float y, core::render::Color c, int count, float speed) {
   std::uniform_real_distribution<float> unit(0.0F, 1.0F);
   for (int i = 0; i < count; ++i) {
@@ -6678,6 +8770,16 @@ void Game::render(core::render::Batcher& b, float alpha) {
   if (menuOpen_) {
     b.setScreenView();
     renderMainMenu(b, static_cast<float>(b.fbWidth()), static_cast<float>(b.fbHeight()));
+    // ...except the manual, which advance() treats as the topmost modal overlay
+    // and which therefore DOES take input while the menu is open. It used to be
+    // skipped here, so the MANUAL row and F1 both set manualOpen_, advance()
+    // routed every keystroke to updateManual(), and the screen never changed:
+    // the keys were live and the manual was invisible. A modal that eats your
+    // input without drawing is the worst of both, and from the menu there was no
+    // way back either — the menu's own handler was no longer being called.
+    if (manualOpen_) {
+      renderManual(b, static_cast<float>(b.fbWidth()), static_cast<float>(b.fbHeight()));
+    }
     b.flush();
     return;
   }
@@ -6741,8 +8843,38 @@ void Game::render(core::render::Batcher& b, float alpha) {
       const auto& h = view.get<Health>(e);
       const float x = t.px + (t.x - t.px) * lerp;
       const float y = t.py + (t.y - t.py) * lerp;
-      if (s.circle) b.circle(x, y, r.r, s.color);
-      else b.rect(x, y, r.r * 2.0F, r.r * 2.0F, s.color);
+      // A chilled enemy is visibly frosted. The tint is the only feedback the
+      // player gets that a status is on the field -- without it, "slowed" is an
+      // invisible multiplier and the ice weapons read as plain damage.
+      const auto* en = registry_.try_get<Enemy>(e);
+      const bool chilled = en != nullptr && en->slowT > 0.0F;
+      Color body = s.color;
+      if (chilled) {
+        // Lerp toward ice blue by how hard the chill is, so a 30% chill and a
+        // deep freeze are distinguishable at a glance and the effect visibly
+        // decays instead of snapping off.
+        const float depth =
+            std::clamp((1.0F - en->slowMul) / 0.65F, 0.0F, 1.0F) *
+            std::clamp(en->slowT * 3.0F, 0.0F, 1.0F);
+        constexpr Color kIce{0.62F, 0.90F, 1.0F, 1.0F};
+        body.r += (kIce.r - body.r) * depth;
+        body.g += (kIce.g - body.g) * depth;
+        body.b += (kIce.b - body.b) * depth;
+      }
+      if (s.circle) b.circle(x, y, r.r, body);
+      else b.rect(x, y, r.r * 2.0F, r.r * 2.0F, body);
+      // A hard freeze gets a ring, borrowing the elite outline's language so
+      // "this one is pinned" reads at the same glance as "this one is tough".
+      if (chilled && en->slowMul <= 0.55F) {
+        constexpr Color kFrostRing{0.70F, 0.94F, 1.0F, 0.55F};
+        constexpr float kDot = 0.07F;
+        constexpr int kRingDots = 20;
+        for (int k = 0; k < kRingDots; ++k) {
+          const float a = (static_cast<float>(k) / static_cast<float>(kRingDots)) * 2.0F * kPi;
+          b.circle(x + std::cos(a) * r.r * 1.14F, y + std::sin(a) * r.r * 1.14F, kDot,
+                   kFrostRing);
+        }
+      }
 
       const auto* tr = registry_.try_get<EnemyTraits>(e);
       if (h.hp < h.max || (tr != nullptr && tr->tier > 0)) {
@@ -6821,8 +8953,40 @@ void Game::render(core::render::Batcher& b, float alpha) {
       const auto& r = view.get<Radius>(e);
       const float x = t.px + (t.x - t.px) * lerp;
       const float y = t.py + (t.y - t.py) * lerp;
-      if (s.circle) b.circle(x, y, r.r, s.color);
-      else b.rect(x, y, r.r * 2.0F, r.r * 2.0F, s.color);
+      // The carried aura, drawn. Without this the weapon is invisible: the shots
+      // are the same specks the Frost Shards threw, and the one thing the player
+      // has to be able to see is the bubble that is actually doing the slowing.
+      const auto& pr = view.get<Projectile>(e);
+      if (pr.auraRadius > 0.0F) {
+        Color wash = s.color;
+        wash.a = 0.09F;
+        b.circle(x, y, pr.auraRadius, wash);
+        Color edge = s.color;
+        edge.a = 0.20F;
+        b.circle(x, y, pr.auraRadius * 0.72F, edge);
+      }
+      if (s.circle) {
+        if (pr.reaimRange > 0.0F) {
+          // A short comet tail, and only on the bolt that bends. The whole point
+          // of the weapon is that its heading CHANGES, and a bare circle moving in
+          // a straight line is drawn identically before a bend, during one and
+          // after one -- so the mechanic is real and invisible. The tail is the
+          // course it just flew, which is exactly the thing a bend changes, and
+          // it costs one interpolated segment because the previous position is
+          // already on the transform.
+          const float sx = t.px + (t.x - t.px) * lerp;
+          const float sy = t.py + (t.y - t.py) * lerp;
+          for (int k = 1; k <= 4; ++k) {
+            const float f = 1.0F - static_cast<float>(k) / 5.0F;
+            Color c = s.color;
+            c.a *= 0.30F * f;
+            b.circle(sx + (x - sx) * f, sy + (y - sy) * f, r.r * 0.72F * f, c);
+          }
+        }
+        b.circle(x, y, r.r, s.color);
+      } else {
+        b.rect(x, y, r.r * 2.0F, r.r * 2.0F, s.color);
+      }
     }
   }
 
@@ -6846,22 +9010,32 @@ void Game::render(core::render::Batcher& b, float alpha) {
       const auto& t = view.get<Transform>(e);
       const auto& hb = view.get<HaloBeam>(e);
       const float len = hb.length;
-      const float ex = t.x + std::cos(hb.angle) * len;
-      const float ey = t.y + std::sin(hb.angle) * len;
+      // The drawn spoke is a SEGMENT, not a ray. A halo with a dead zone has to
+      // show that hole or the player has no way to tell that the safe ring is
+      // safe -- it would read as a plain halo and the whole point would be
+      // invisible. Clamped exactly as the damage test clamps it, so what is drawn
+      // is what is hit.
+      const float near = std::min(hb.inner, len * 0.9F);
+      const float far = std::max(near + 0.05F, len);
+      const float sx0 = t.x + std::cos(hb.angle) * near;
+      const float sy0 = t.y + std::sin(hb.angle) * near;
+      const float ex = t.x + std::cos(hb.angle) * far;
+      const float ey = t.y + std::sin(hb.angle) * far;
       Color glow = hb.color;
       glow.a = 0.16F;
       Color core = hb.color;
       core.a = 0.95F;
-      const int steps = std::max(1, static_cast<int>(len / std::max(0.03F, hb.width * 0.15F)));
+      const int steps = std::max(
+          1, static_cast<int>((far - near) / std::max(0.03F, hb.width * 0.15F)));
       for (int s = 0; s <= steps; ++s) {
         const float fr = static_cast<float>(s) / static_cast<float>(steps);
-        const float sx = t.x + (ex - t.x) * fr;
-        const float sy = t.y + (ey - t.y) * fr;
+        const float sx = sx0 + (ex - sx0) * fr;
+        const float sy = sy0 + (ey - sy0) * fr;
         b.circle(sx, sy, hb.width * 0.52F, glow);
         b.circle(sx, sy, hb.width * 0.30F, core);
       }
-      // Bright hub where the spoke meets the player.
-      b.circle(t.x, t.y, hb.width * 0.7F, core);
+      // Bright hub at the inner end of the spoke, wherever that turns out to be.
+      b.circle(sx0, sy0, hb.width * 0.7F, core);
     }
   }
 
@@ -6934,19 +9108,29 @@ void Game::render(core::render::Batcher& b, float alpha) {
       const auto& bp = view.get<BoomerangProjectile>(e);
       const float x = t.px + (t.x - t.px) * lerp;
       const float y = t.py + (t.y - t.py) * lerp;
-      if (bp.trailWidth > 0.0F) {
+      if (bp.trailWidth > 0.0F && bp.trailCount > 1) {
+        // Drawn along the same remembered path the damage uses, so what the player
+        // sees IS what is being hit. Drawing only the last frame's sliver (which is
+        // what this did) is part of why the trail read as decoration.
         Color glow = bp.color;
-        glow.a = 0.10F;
+        glow.a = 0.09F;
         Color trailCore = bp.color;
-        trailCore.a = 0.55F;
-        const float len = std::sqrt((t.x - t.px) * (t.x - t.px) + (t.y - t.py) * (t.y - t.py));
-        const int steps = std::max(1, static_cast<int>(len / std::max(0.03F, bp.trailWidth * 0.15F)));
-        for (int s = 0; s <= steps; ++s) {
-          const float fr = static_cast<float>(s) / static_cast<float>(steps);
-          const float lx = t.px + (t.x - t.px) * fr;
-          const float ly = t.py + (t.y - t.py) * fr;
-          b.circle(lx, ly, bp.trailWidth * 0.52F, glow);
-          b.circle(lx, ly, bp.trailWidth * 0.30F, trailCore);
+        trailCore.a = 0.42F;
+        const int n = bp.trailCount;
+        for (int s = 0; s < n; ++s) {
+          const int i = (bp.trailHead - n + s + BoomerangProjectile::kTrailSamples * 2) %
+                        BoomerangProjectile::kTrailSamples;
+          // Older samples fade, so the trail has a direction: brightest at the
+          // blade, dying out behind it.
+          const float age = static_cast<float>(n - s) / static_cast<float>(n);
+          const float lx = bp.trailPathX[i];
+          const float ly = bp.trailPathY[i];
+          Color g = glow;
+          Color c = trailCore;
+          g.a *= age;
+          c.a *= age;
+          b.circle(lx, ly, bp.trailWidth * 0.62F, g);
+          b.circle(lx, ly, bp.trailWidth * 0.34F, c);
         }
       }
       b.rect(x, y, 0.34F, 0.14F, bp.color);
@@ -7091,7 +9275,22 @@ void Game::render(core::render::Batcher& b, float alpha) {
     }
   }
 
-  // Chain lightning: halo + core at the current jump position.
+  // Chain lightning: a bolt that strikes down from the sky onto the first
+  // target, then arcs from enemy to enemy. Drawn as a run of small circles with
+  // a deterministic perpendicular jitter, because a straight line between two
+  // enemies reads as a laser sight and a jagged one reads as lightning.
+  //
+  // The strike is in three beats, and the order is the whole point of it:
+  //   1. telegraph -- a transparent ring converges on the target. Nothing has
+  //      damaged yet. This is the only warning, and without it the first thing
+  //      the player saw was the enemy's health bar already moving.
+  //   2. strike    -- the drop draws itself down out of the sky over
+  //      kChainStrike, so the bolt arrives instead of appearing.
+  //   3. arc + hang -- enemy to enemy, then a linger (kChainLinger) in which the
+  //      bolt stays where it ended and fades. A bolt into a scattered crowd used
+  //      to end the instant it hit the last body; dead-ending bypassed the linger
+  //      altogether, which is the "it vanishes too early" the linger was meant to
+  //      prevent in the first place.
   {
     auto view = registry_.view<Transform, ChainLightning>();
     for (const auto e : view) {
@@ -7099,8 +9298,166 @@ void Game::render(core::render::Batcher& b, float alpha) {
       const auto& cl = view.get<ChainLightning>(e);
       const float x = t.px + (t.x - t.px) * lerp;
       const float y = t.py + (t.y - t.py) * lerp;
-      b.circle(x, y, 0.22F, Color{cl.color.r, cl.color.g, cl.color.b, 0.40F});
-      b.circle(x, y, 0.11F, cl.color);
+
+      // --- Beat 1: the ring closes on the target. ----------------------------
+      if (cl.telegraph > 0.0F) {
+        // 1 at the start of the window, 0 at the moment of the strike. Squared,
+        // so the ring spends most of its time close in and then closes the last
+        // stretch quickly -- a linear shrink reads as slow and even, which is
+        // the least alarming thing a telegraph can look like.
+        const float open = std::clamp(cl.telegraph / kChainTelegraph, 0.0F, 1.0F);
+        const float f = 1.0F - open * open;
+        Color ring = cl.color;
+        ring.a = 0.10F + 0.35F * f;
+        // Three rings closing at different rates reads as depth; one reads as a
+        // circle being scaled.
+        for (int k = 0; k < 3; ++k) {
+          const float lag = 1.0F - static_cast<float>(k) * 0.16F;
+          const float rf = std::max(0.0F, (f - static_cast<float>(k) * 0.12F) * lag);
+          Color c = ring;
+          c.a *= (1.0F - static_cast<float>(k) * 0.28F);
+          b.circle(x, y, 0.30F + 1.15F * (1.0F - rf), c);
+        }
+        // A crosshair so the eye has something to converge on, not just a
+        // shrinking outline.
+        Color tick = cl.color;
+        tick.a = 0.30F * f;
+        const float arm = 0.16F + 0.30F * (1.0F - f);
+        b.rectTopLeft(x - arm, y - 0.012F, arm * 2.0F, 0.024F, tick);
+        b.rectTopLeft(x - 0.012F, y - arm, 0.024F, arm * 2.0F, tick);
+        // The bolt itself is a bright pip at the centre so the ring reads as
+        // aiming AT something rather than as a free-floating circle.
+        Color pip = cl.color;
+        pip.a = 0.55F * f;
+        b.circle(x, y, 0.10F, pip);
+        continue;
+      }
+
+      // Fades over the linger, and a bolt that has run out of jumps is dimmer
+      // than one that is still travelling. The fade is quadratic so it drops off
+      // gently and then goes quickly -- linear made the last third of a bolt look
+      // like it was being switched off.
+      const float left = std::clamp(cl.linger / kChainLinger, 0.0F, 1.0F);
+      const float alive =
+          cl.jumpsDone >= cl.maxJumps ? (left * left) * 0.65F : 1.0F;
+      // The drop grows into existence over kChainStrike, so it arrives rather
+      // than appearing. A bolt that is still travelling keeps the full width.
+      const float born = cl.jumpsDone == 0 ? std::clamp(cl.strike, 0.0F, 1.0F) : 1.0F;
+      // A bolt that has not moved yet is still a bolt that came from the sky:
+      // draw the vertical drop above the first target.
+      if (cl.jumpsDone == 0) {
+        const float topY = y - kChainSkyDrop;
+        // The drop reaches further down as it lands, so it reads as falling
+        // rather than as a fixed decoration that switched on.
+        const float reach = topY + (y - topY) * born;
+        const int steps = 9;
+        for (int k = 0; k <= steps; ++k) {
+          const float f = static_cast<float>(k) / static_cast<float>(steps);
+          const float jx = boltJitter(static_cast<unsigned>(e) + static_cast<unsigned>(k)) *
+                            0.16F * (1.0F - f);
+          const float bxx = x + jx;
+          const float byy = topY + (reach - topY) * f;
+          Color glow = cl.color;
+          glow.a = 0.30F * alive;
+          Color core = cl.color;
+          core.a = alive;
+          b.circle(bxx, byy, 0.17F, glow);
+          b.circle(bxx, byy, 0.07F, core);
+        }
+        // Ground flash where it lands, so the strike has a visible impact point.
+        // It only blooms once the drop has actually reached the ground.
+        Color flash = cl.color;
+        flash.a = 0.22F * alive * born;
+        for (int ringI = 1; ringI <= 2; ++ringI) {
+          b.circle(x, y, 0.18F * static_cast<float>(ringI) + 0.10F, flash);
+        }
+      } else {
+        // Enemy-to-enemy arc. The bolt's previous tick position is where the
+        // last hop ended, so the last hop's segment is drawn here. This is also
+        // why updateChainLightning writes t.px/t.py: before that they stayed at
+        // zero and the renderer drew every arc flying in from the world origin.
+        const float ax = t.px;
+        const float ay = t.py;
+        const float dx = x - ax;
+        const float dy = y - ay;
+        const float len = std::sqrt(dx * dx + dy * dy);
+        if (len > 0.05F) {
+          const float ux = dx / len;
+          const float uy = dy / len;
+          // Perpendicular, so the wobble bows out of the line rather than
+          // stretching it.
+          const float px = -uy;
+          const float py = ux;
+          const int steps = 10;
+          for (int k = 0; k <= steps; ++k) {
+            const float f = static_cast<float>(k) / static_cast<float>(steps);
+            // Zero at both ends, biggest mid-span: a bolt that leaves and
+            // arrives at a point, not one that has kinks at the enemies.
+            const float bow = std::sin(f * kPi) * 0.30F;
+            const float j = boltJitter(static_cast<unsigned>(e) * 31U +
+                                        static_cast<unsigned>(cl.jumpsDone) * 7U +
+                                        static_cast<unsigned>(k)) * bow;
+            const float bx = ax + dx * f + px * j;
+            const float by = ay + dy * f + py * j;
+            Color glow = cl.color;
+            glow.a = 0.26F * alive;
+            Color core = cl.color;
+            core.a = 0.9F * alive;
+            b.circle(bx, by, 0.16F, glow);
+            b.circle(bx, by, 0.065F, core);
+          }
+        }
+      }
+      b.circle(x, y, 0.22F, Color{cl.color.r, cl.color.g, cl.color.b, 0.40F * alive});
+      b.circle(x, y, 0.11F, Color{cl.color.r, cl.color.g, cl.color.b, alive});
+    }
+  }
+
+  // Travelling waves (Sunder / Tidal Lash): a crescent, drawn as a real arc.
+  //
+  // This used to be a blob smeared BACKWARD from a bright point, which is
+  // asymmetric about the direction of travel -- it looked like a comet, not like
+  // a wave, and it was the single clearest thing saying "these two weapons are the
+  // same". The shape now is sampled across the arc from one horn to the other,
+  // each sample pushed back by a PARABOLA in the cross-axis coordinate, so the
+  // nose leads at the wave's actual position and the two horns trail evenly
+  // behind it. Mirror the picture and it is unchanged, which is what symmetry
+  // means here. `spread` is what makes the Sundering Core's wide slow wall and the
+  // Tidal Lash's narrow fast rake read as different objects rather than the same
+  // one with a different speed.
+  {
+    auto view = registry_.view<Transform, WaveEffect, Radius>();
+    for (const auto e : view) {
+      const auto& t = view.get<Transform>(e);
+      const auto& wv = view.get<WaveEffect>(e);
+      const float x = t.px + (t.x - t.px) * lerp;
+      const float y = t.py + (t.y - t.py) * lerp;
+      const float fade = std::clamp(wv.life * 2.0F, 0.0F, 1.0F);
+      // Depth of the arc is the same as the damage band's depth, so the drawn
+      // crescent and the hit box are the same object.
+      const float depth = wv.width;
+      const float spread = std::clamp(wv.spread, 0.15F, kPi);
+      constexpr int kSamples = 11;  // odd, so there is a sample exactly on the nose
+      for (int k = 0; k < kSamples; ++k) {
+        const float u = static_cast<float>(k) / static_cast<float>(kSamples - 1) * 2.0F - 1.0F;
+        // u = 0 is the nose; |u| = 1 are the horns. Parabolic in u, so the shape
+        // is symmetric about u = 0 by construction rather than by hand.
+        const float back = -depth * (1.0F - u * u);
+        const float a = wv.angle + u * spread;
+        const float bx = x + std::cos(a) * back;
+        const float by = y + std::sin(a) * back;
+        // Brightest along the leading arc, fading toward the horns: the fade is a
+        // function of |u|, so it is symmetric too.
+        const float edge = std::abs(u);
+        Color c = wv.color;
+        c.a = (1.0F - edge * 0.75F) * 0.6F * fade;
+        b.circle(bx, by, depth * 0.30F * (1.0F - edge * 0.45F), c);
+      }
+      // A single hot point on the nose, so the direction of travel is readable
+      // at a glance even while the crescent is faint.
+      Color tip = wv.color;
+      tip.a = 0.95F * fade;
+      b.circle(x, y, depth * 0.20F, tip);
     }
   }
 
@@ -7201,6 +9558,22 @@ void Game::render(core::render::Batcher& b, float alpha) {
            label);
   }
 
+  // The manual hint, in the same left-hand key column as the heal indicator --
+  // which is the one place on screen that is already "things you can press". F1 is
+  // a real key and nobody guesses it, but the old version was 1.5x grey text in
+  // the bottom-right corner, fighting the [Q] QUIT line for space on a narrow
+  // window and vanishing against a bright background. It is a touch larger, full
+  // contrast, and on a panel so it reads at any size -- still a small hint, not a
+  // banner, because the manual being findable is not worth a permanent corner of
+  // the screen.
+  if (!manualOpen_) {
+    const std::string hint = "[F1] MANUAL";
+    const float hintScale = 1.7F;
+    const float hintW = b.textWidth(hintScale, hint);
+    b.rectTopLeft(8.0F, 84.0F, hintW + 14.0F, 22.0F, Color{0.06F, 0.07F, 0.10F, 0.72F});
+    b.text(15.0F, 87.0F, hintScale, Color{0.78F, 0.82F, 0.92F, 1.0F}, hint);
+  }
+
   // XP bar (top edge) + level.
   const float xpFrac = xpNext_ > 0.0F ? std::min(1.0F, xp_ / xpNext_) : 0.0F;
   b.rectTopLeft(0.0F, 0.0F, px, 8.0F, Color{0.08F, 0.08F, 0.12F, 1.0F});
@@ -7276,7 +9649,12 @@ void Game::render(core::render::Batcher& b, float alpha) {
     const Color tierGlow = tierBanner_[0] == 'O' ? Color{0.85F, 0.45F, 1.0F, 1.0F}
                                                : Color{1.0F, 0.55F, 0.25F, 1.0F};
     // Fade in over the first 0.3 s, hold, then fade out over the last second.
-    const float a = std::min(1.0F, (4.0F - tierBannerT_) / 0.3F) *
+    // The fade-in is measured from the banner's OWN lifetime, not from a 4.0
+    // literal duplicated here. Both current sources happen to be <= 4.0s so
+    // there is no live bug today, but the two copies were free to disagree and
+    // a longer banner would have produced a negative alpha -- an invisible text
+    // draw rather than a visible failure.
+    const float a = std::min(1.0F, (kTierBannerLife - tierBannerT_) / 0.3F) *
                     std::min(1.0F, tierBannerT_ / 1.0F);
     Color fade = tierGlow;
     fade.a = a;
@@ -7303,25 +9681,85 @@ void Game::render(core::render::Batcher& b, float alpha) {
     const Color teal{0.4F, 0.9F, 0.9F, 1.0F};
     const Color violet{0.8F, 0.55F, 1.0F, 1.0F};
 
+    // The range is built from the real card count. Hardcoding "/4" meant a
+    // 5-card row (or the moment extraChoice ever gains a second stack) said
+    // "CHOOSE 1/2/3/4" while a fifth key was sitting there working.
+    const auto chooseRange = [](std::size_t count) {
+      std::string s = "CHOOSE 1";
+      for (std::size_t i = 2; i <= count; ++i) s += "/" + std::to_string(i);
+      return s;
+    };
     const std::string title = choosingStarter_ ? "CHOOSE A STARTING WEAPON"
                               : milestoneOffer_ ? "MILESTONE! CHOOSE 1/2"
-                              : choices_.size() > 3 ? "LEVEL UP! CHOOSE 1/2/3/4"
-                                                     : "LEVEL UP! CHOOSE 1/2/3";
+                              : "LEVEL UP! " + chooseRange(choices_.size());
     b.text(px * 0.5F - b.textWidth(4.0F, title) * 0.5F, py * 0.16F, 4.0F,
            (milestoneOffer_ && !choosingStarter_) ? violet : gold, title);
 
     const std::size_t n = choices_.size();
+    // Fallbacks for the "no choices at all" case, which buildChoices makes
+    // impossible (it always appends a Skip card when the pool is empty) and a
+    // test now pins. They are here because the arithmetic below divides by n:
+    // a renderer that divides by a size it has not checked will happily draw
+    // cards at NaN positions if a future path ever reaches LevelUp with an
+    // empty row.
+    float cardH = 176.0F;
+    float cardTop = py * 0.32F;
+    float bodyTop = 86.0F;
+    int bodyLines = 4;
     if (n > 0) {
       const float gap = 24.0F;
-      float cardW = std::min(340.0F, (px - gap * static_cast<float>(n - 1) - 40.0F) /
-                                         static_cast<float>(n));
-      cardW = std::max(200.0F, cardW);
-      const float cardH = 176.0F;
+      const float avail = (px - gap * static_cast<float>(n - 1) - 40.0F) /
+                          static_cast<float>(n);
+      // Clamp the WIDTH rather than the count: a 5-card row must still fit the
+      // screen, so a minimum card width can never push the row off the right.
+      const float cardW = std::clamp(avail, 200.0F, 400.0F);
+      const CardTextLayout lay = cardTextLayout(cardW);
+      // The row is as tall as its TALLEST body, not a fixed height: a 3-card
+      // row of one-liners should not be a metre of empty panel, and a 5-card
+      // row of two-liners should not be a truncated wall of text. Every card in
+      // the row gets the same height so the footers line up.
+      const auto lineCount = [&](const Choice& c) {
+        std::string_view desc = "Every upgrade you can use is already maxed.";
+        if (c.kind == Choice::Kind::Upgrade) {
+          desc = content_.upgrades[static_cast<std::size_t>(c.index)].desc;
+        } else if (c.kind == Choice::Kind::Weapon) {
+          desc = content_.weapons[static_cast<std::size_t>(c.index)].desc;
+        }
+        return wrapToWidth(desc, lay.width, lay.scale, lay.indent, lay.contScale).size();
+      };
+      // A card's title can need two lines in a narrow card, and when it does the
+      // description has to start lower or the two blocks overlap. The row uses
+      // one body offset for every card so the descriptions still line up, so
+      // this is the TALLEST title in the row, not each card's own.
+      const auto nameLines = [&](const Choice& c) -> std::size_t {
+        if (c.kind == Choice::Kind::Upgrade) {
+          return cardNameLayout(content_.upgrades[static_cast<std::size_t>(c.index)].name,
+                                lay.width)
+              .lines.size();
+        }
+        if (c.kind == Choice::Kind::Weapon) {
+          return cardNameLayout(content_.weapons[static_cast<std::size_t>(c.index)].name,
+                                lay.width)
+              .lines.size();
+        }
+        return 1; // the Skip card's "NOTHING LEFT" always fits
+      };
+      std::size_t tallest = 1;
+      std::size_t tallestName = 1;
+      for (const auto& c : choices_) {
+        tallest = std::max(tallest, lineCount(c));
+        tallestName = std::max(tallestName, nameLines(c));
+      }
+      const LevelUpRow row = levelUpRowLayout(px, py, n, tallest, tallestName);
+      cardH = row.cardH;
+      bodyTop = row.bodyTop;
+      cardTop = row.top;
+      bodyLines = row.bodyLines;
       const float totalW = static_cast<float>(n) * cardW + static_cast<float>(n - 1) * gap;
       float x = px * 0.5F - totalW * 0.5F;
       for (std::size_t i = 0; i < n; ++i) {
         const auto& choice = choices_[i];
-        const float y = py * 0.32F;
+        const float y = cardTop;
         b.rectTopLeft(x, y, cardW, cardH, Color{0.12F, 0.10F, 0.16F, 0.95F});
 
         Color accent = gold;
@@ -7338,26 +9776,24 @@ void Game::render(core::render::Batcher& b, float alpha) {
 
         if (choice.kind == Choice::Kind::Skip) {
           b.text(x + 16.0F, y + 52.0F, 2.3F, white, "NOTHING LEFT");
-          renderWrappedText(b, x + 16.0F, y + 80.0F, 1.7F,
+          renderWrappedText(b, x + 16.0F, y + bodyTop, lay,
                             Color{0.85F, 0.85F, 0.9F, 1.0F},
-                            "Every upgrade you can use is already maxed.", cardW - 32.0F, 14.0F);
+                            "Every upgrade you can use is already maxed.", bodyLines);
           b.text(x + 16.0F, y + cardH - 30.0F, 1.5F, accent, "PRESS 1 TO CONTINUE");
         } else if (choice.kind == Choice::Kind::Upgrade) {
           const auto& def = content_.upgrades[static_cast<std::size_t>(choice.index)];
-          b.text(x + 16.0F, y + 52.0F, 2.3F, white, def.name);
-          renderWrappedText(b, x + 16.0F, y + 80.0F, 1.7F,
-                            Color{0.85F, 0.85F, 0.9F, 1.0F}, def.desc,
-                            cardW - 32.0F, 14.0F);
+          drawCardName(b, def.name, x + 16.0F, y + 52.0F, lay.width, accent, white);
+          renderWrappedText(b, x + 16.0F, y + bodyTop, lay,
+                            Color{0.85F, 0.85F, 0.9F, 1.0F}, def.desc, bodyLines);
           const std::string stacks =
               "STACKS " + std::to_string(upgradeStacks(static_cast<std::size_t>(choice.index))) +
               "/" + std::to_string(def.maxStacks);
           b.text(x + 16.0F, y + cardH - 30.0F, 1.5F, Color{0.6F, 0.6F, 0.7F, 1.0F}, stacks);
         } else {
           const auto& def = content_.weapons[static_cast<std::size_t>(choice.index)];
-          b.text(x + 16.0F, y + 52.0F, 2.3F, white, def.name);
-          renderWrappedText(b, x + 16.0F, y + 80.0F, 1.7F,
-                            Color{0.85F, 0.85F, 0.9F, 1.0F}, def.desc,
-                            cardW - 32.0F, 14.0F);
+          drawCardName(b, def.name, x + 16.0F, y + 52.0F, lay.width, accent, white);
+          renderWrappedText(b, x + 16.0F, y + bodyTop, lay,
+                            Color{0.85F, 0.85F, 0.9F, 1.0F}, def.desc, bodyLines);
           const std::string tag =
               def.prereqs.empty()
                   ? "NEW WEAPON"
@@ -7370,12 +9806,15 @@ void Game::render(core::render::Batcher& b, float alpha) {
     }
 
     // Reroll hint (R is always the reroll key on level-up) showing how many
-    // rerolls are still available this level.
+    // rerolls are still available this level. Anchored to the bottom of the
+    // card row rather than a fixed screen fraction, so a tall 5-card row
+    // cannot grow up and swallow it.
     const int rerollsLeft = 1 + stats_.rerollCharges - rerollsUsed_;
     const std::string hint = rerollsLeft > 0
                                  ? "[R] REROLL x" + std::to_string(rerollsLeft)
                                  : "[R] REROLL NONE LEFT";
-    b.text(px * 0.5F - b.textWidth(2.0F, hint) * 0.5F, py * 0.66F, 2.0F,
+    const float hintY = n > 0 ? cardTop + cardH + 24.0F : py * 0.66F;
+    b.text(px * 0.5F - b.textWidth(2.0F, hint) * 0.5F, hintY, 2.0F,
            rerollsLeft > 0 ? Color{0.7F, 0.7F, 0.8F, 1.0F}
                            : Color{0.45F, 0.45F, 0.5F, 1.0F},
            hint);
@@ -7390,13 +9829,14 @@ void Game::render(core::render::Batcher& b, float alpha) {
     } else {
       renderPlayerStats(b, px, py);
     }
-  }
-
-  // Manual hint on the character sheet: F1 is a real key and nobody guesses it.
-  if (!manualOpen_ && (state_ == RunState::Playing || state_ == RunState::Paused)) {
-    const std::string hint = "[F1] MANUAL";
-    b.text(px - b.textWidth(1.5F, hint) - 14.0F, py - 40.0F, 1.5F,
-           Color{0.5F, 0.55F, 0.65F, 1.0F}, hint);
+    // The way out. Drawn on the pause screen and nowhere else, because that is
+    // the only place it is legal from: a run you cannot leave is a run you can
+    // only end by dying, and the player should not have to work that out.
+    const std::string quit = quitArmed_ ? "[Q] PRESS AGAIN TO QUIT TO MENU"
+                                        : "[Q] QUIT TO MENU";
+    const Color quitCol = quitArmed_ ? Color{1.0F, 0.45F, 0.4F, 1.0F}
+                                      : Color{0.6F, 0.62F, 0.7F, 1.0F};
+    b.text(px * 0.5F - b.textWidth(2.0F, quit) * 0.5F, py - 40.0F, 2.0F, quitCol, quit);
   }
 
   // Game over overlay.
@@ -7426,24 +9866,45 @@ void Game::render(core::render::Batcher& b, float alpha) {
     const std::string title =
         "WEAPON TEST " + std::to_string(testWeaponIdx_ + 1) + "/" +
         std::to_string(content_.weapons.size()) + " - " + wname + wtag;
-    b.text(px * 0.5F - b.textWidth(3.0F, title) * 0.5F, py * 0.70F, 3.0F, gold, title);
+    // The item picker is a full-height panel that used to be drawn AFTER this
+    // header, so it covered the weapon name completely -- and the name is the
+    // one thing the picker itself does not show, since [1]/[2] (the keys that
+    // change weapon) are dead while the list is open. When the picker is up the
+    // header moves above its top edge instead.
+    const float headerDrop = testShopOpen_ ? -0.30F : 0.0F;
+    b.text(px * 0.5F - b.textWidth(3.0F, title) * 0.5F, py * 0.70F + headerDrop, 3.0F, gold,
+           title);
     const std::string boost = testBoosted_ ? "BOOST ON" : "BOOST OFF";
     const std::string waves = wavesEnabled_ ? "WAVES ON" : "WAVES OFF";
     const std::string god = testInvuln_ ? "GOD ON" : "GOD OFF";
     const std::string clock = "CLOCK X" + std::to_string(testTimeScale_);
     const std::string status = boost + "   " + waves + "   " + god + "   " + clock;
-    b.text(px * 0.5F - b.textWidth(2.0F, status) * 0.5F, py * 0.74F, 2.0F,
+    b.text(px * 0.5F - b.textWidth(2.0F, status) * 0.5F, py * 0.74F + headerDrop, 2.0F,
            Color{0.75F, 0.85F, 1.0F, 1.0F}, status);
-    // Split over two rows so the whole keymap fits even in a narrow window.
+    // The keymap is filtered by what actually works right now. The 1-5 keys and
+    // X all drive the world, and the world is only driven while Playing, so
+    // advertising the full keymap over the pause sheet listed six keys that
+    // silently did nothing.
     const Color key{0.8F, 0.8F, 0.85F, 1.0F};
-    const std::string rowA =
-        "[1] PREV   [2] NEXT   [3] MAX BUILD   [4] WAVES   [5] CLOSE";
-    b.text(px * 0.5F - b.textWidth(1.6F, rowA) * 0.5F, py * 0.775F, 1.6F, key, rowA);
-    const std::string rowB =
-        "[E] ITEMS   [I] GOD   [F] CLOCK   [X] KILL   [R] MAX ALL";
-    b.text(px * 0.5F - b.textWidth(1.6F, rowB) * 0.5F, py * 0.805F, 1.6F, key, rowB);
+    const Color deadKey{0.8F, 0.8F, 0.85F, 0.35F};
+    const bool live = state_ == RunState::Playing;
+    if (live) {
+      const std::string rowA =
+          "[1] PREV   [2] NEXT   [3] MAX BUILD   [4] WAVES   [5] CLOSE";
+      b.text(px * 0.5F - b.textWidth(1.6F, rowA) * 0.5F, py * 0.775F + headerDrop, 1.6F, key,
+             rowA);
+    } else {
+      const std::string rowA = "PAUSED - [ESC] RESUME TO USE [1]-[5] AND [X]";
+      b.text(px * 0.5F - b.textWidth(1.6F, rowA) * 0.5F, py * 0.775F + headerDrop, 1.6F,
+             deadKey, rowA);
+    }
+    // E, I, F and R stay live on every screen, so they are never greyed.
+    const std::string rowB = live ? "[E] ITEMS   [I] GOD   [F] CLOCK   [X] KILL   [R] MAX ALL"
+                                 : "[E] ITEMS   [I] GOD   [F] CLOCK   [R] MAX ALL";
+    b.text(px * 0.5F - b.textWidth(1.6F, rowB) * 0.5F, py * 0.805F + headerDrop, 1.6F, key,
+           rowB);
     const std::string noteA = "NO XP - NO SKINS - LEAVING THE SANDBOX ENDS THE RUN";
-    b.text(px * 0.5F - b.textWidth(1.4F, noteA) * 0.5F, py * 0.84F, 1.4F,
+    b.text(px * 0.5F - b.textWidth(1.4F, noteA) * 0.5F, py * 0.84F + headerDrop, 1.4F,
            Color{0.95F, 0.55F, 0.45F, 1.0F}, noteA);
     if (testShopOpen_) renderTestShop(b, px, py);
   }

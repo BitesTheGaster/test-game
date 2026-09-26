@@ -261,12 +261,14 @@ chunk of HP five seconds later and the shield cards read as dead picks.
     the swing is centered on the target itself, so everything around that
     target takes the hit. A target-centered ring — visually and mechanically a
     world apart from the flame's forward-pointing cone.
-  - The **Barbed Whip** (and its evolution, the **Tidal Lash**) instead lashes
-    the arc **in front of the player**: the swing is centered 1.8–2.2 units
-    along the aim line and only covers `sweep_angle` of it, so it hits what
-    you are facing whether or not anything is standing there — and it still
-    swings at empty air. A whip is the answer to a horde that is already on
-    top of you; a scythe is the answer to one that is standing around a brute.
+  - The **Barbed Whip** instead lashes the arc **in front of the player**: the
+    swing is centered 1.8–2.2 units along the aim line and only covers
+    `sweep_angle` of it, so it hits what you are facing whether or not anything
+    is standing there — and it still swings at empty air. A whip is the answer
+    to a horde that is already on top of you; a scythe is the answer to one that
+    is standing around a brute. (Its evolution, the **Tidal Lash**, is not a
+    whip at all any more — see the two-wave-weapons bullet under
+    [Evolutions & super evolutions](#evolutions--super-evolutions-ab-c).)
 - The **Grave Bell** plants a **beacon behind your target** and does no damage
   on impact at all. Its whole value is what it does afterwards: everything
   inside `lure_reach` is dragged toward the core every tick (easing off at the
@@ -319,8 +321,8 @@ lure cores and the Overload.
 
 ### Evolutions & super evolutions (A + B = C)
 
-The roster is **32 weapons**: **18** that can be rolled as ordinary weapon
-cards, **10** two-ingredient evolutions and **4** three-ingredient supers.
+The roster is **33 weapons**: **18** that can be rolled as ordinary weapon
+cards, **11** two-ingredient evolutions and **4** three-ingredient supers.
 Weapons can require other weapons. When you own **all** prerequisites, the
 result becomes the **highest-priority** weapon offer, replacing the random
 weapon grant:
@@ -331,12 +333,51 @@ weapon grant:
   Halo**: Throwing Dagger + Solar Lance), `blizzard` (**Blizzard Rail**: Rail
   Rifle + Frost Shards), `siege` (**Ashfall**: Siege Mortar + Grave Bell),
   `chaos` (**Chaos Sphere**: Pinball Puck + Void Orb), `sunder` (**Sundering
-  Core**: Shock Core + Soul Scythe) and `tidewhip` (**Tidal Lash**: Barbed Whip
-  + Storm Shuriken). Radiant Halo spawns **persistent beams that orbit you**,
-  reaping everything they sweep through — the beam's damage re-expressed as an
+  Core**: Shock Core + Soul Scythe), `tidewhip` (**Tidal Lash**: Barbed Whip
+  + Storm Shuriken) and `rimewake` (**Hoarfrost Wake**: Frost Shards + Void
+  Orb). Radiant Halo spawns **persistent beams that orbit you**, reaping
+  everything they sweep through — the beam's damage re-expressed as an
   always-on ring rather than a brief flash. `chaos` is deliberately *not* the
   Void Orb's eternal bounce: it burns out after ~14 ricochets, which is what
   makes "one more bounce" a real decision.
+
+  Three of them are worth calling out because the *merge* is the mechanic, not
+  the numbers:
+
+  - **Storm Caller** (Wand + Crossbow) throws a bolt that **bends**. The
+    Crossbow pierces four bodies in a straight line, so the last one it touches
+    is the far end of the crowd; the Wand always hits what it is aimed at. A
+    bolt that spends the same budget on **direction** instead of reach gets
+    both — it keeps the punch-through, and it keeps finding somebody for as
+    long as there is somebody left. The bend is a *course*, not a kick: it holds
+    the new heading and steers toward it at `reaim_turn` until it arrives, so
+    the number on the card is how sharply the thing corners. It is also the one
+    rule in the pool no other weapon has, which is why it is a `projectile` and
+    not a fourth chain weapon.
+  - **Sundering Core** and **Tidal Lash** are the same `wave` entity pointed
+    two opposite ways, and the field that tells them apart on screen is
+    `wave_spread` — how far the crescent's horns open.
+
+    | | Sundering Core | Tidal Lash |
+    |---|---|---|
+    | Shape | one **wide, slow, deep** crescent (spread 1.25) — a **wall** | three **narrow, fast, shallow** ones (spread 0.55, 1.1 rad apart) — a **rake** |
+    | Reach / cadence | 9.0 units, 1.6 s | 5.5 units, 0.55 s |
+    | On a hit | **shoves along its own heading** | **herds across the fan** (`wave_hook_pull`) |
+    | Card | makes the one crescent **wider** | adds a **fourth arc** and a stronger herd |
+
+    The shove is a wall going away from you, clearing the ground in front. The
+    herd is a funnel: each arc pushes what it catches about 66° **off its own
+    heading**, toward where the next arc is going, so the three arcs hand the
+    same catch down the line instead of each one clearing a lane of its own. The
+    Tidal Lash's description had been promising exactly that for a full pass
+    before `WaveEffect` had a field for it, which is the sort of thing nobody
+    catches by reading the numbers back out of the TOML.
+  - **Hoarfrost Wake** is the only weapon whose shards **carry an aura**: while
+    a shard is in the air it drags a bubble of slow and grind around itself, so
+    the weapon is a *corridor you walk into* rather than a line of hits. Chill
+    is a status the shard leaves on what it went through; an aura is a thing it
+    carries with it. The two are different mechanics and the evolution needed
+    the second one.
 - **Three-ingredient super evolutions** (tag `SUPER EVOLUTION! (A+B+C)`):
   `vortex` (**Void Gyre**: Throwing Dagger + Soul Scythe + Void Orb),
   `prism` (**Prism Array**: Ember Sprayer + Solar Lance + Heavy Crossbow),
@@ -391,15 +432,25 @@ question.
 
 ## Level-ups
 
-XP per level: `12 + 9·(level−1) + 2.6·(level−1)·level`. Overflow XP carries into
+XP per level: `10 + 6.5·(level−1) + 1.55·(level−1)·level`. Overflow XP carries into
 the next level; if it purchases another level immediately, another card choice
 queues. Picked-up XP is scaled by the **XP multiplier** (`xpMul`): Scholar and
 Lorekeeper cards add `+12%` and `+30%` respectively, stacking additively.
 
 **This curve is the pacing of the game.** Level-ups are picks, and picks are the
-only thing that makes a run interesting, so it is deliberately steep: level 32
-costs ~33 000 XP and level 64 ~246 000. With the old, much cheaper curve a build
-was maxed out about four minutes in and everything after that was an empty walk.
+only thing that makes a run interesting, so the shape is a rising quadratic:
+level 32 costs ~20 000 XP and level 64 ~149 000, and every level costs more than
+the last.
+
+The *rate* is the other half of the argument. This curve used to be about 1.6x
+steeper than it is now, on the reasoning that a build maxed out in four minutes
+makes the rest of the run an empty walk. That was half right and it overshot: a
+curve steep enough to keep feeding picks at minute twenty is also a curve that
+leaves the player behind for the whole first half of the run, because the fight
+is on before the build is. Being under-levelled is not a slow start, it is a
+dead run — the player never gets the tools that answer what is hitting them.
+So the whole curve came down by ~0.62x (level 16 costs 3.0k instead of 4.8k) and
+the difficulty ramps came down with it; see [Difficulty ramp](#difficulty-ramp).
 
 ### Choice generation
 
@@ -461,7 +512,7 @@ once. See [`content.md`](content.md) for the exact list; the rules they bend:
 | Deep Freeze | Stasis: +1 s of duration, and the slowed world drops another 0.08× |
 | Cascade | Every ability also fires a 40% Overload at the same spot |
 
-**Weapon uniques** — **every one of the 32 weapons** has an exclusive treasure
+**Weapon uniques** — **every one of the 33 weapons** has an exclusive treasure
 card, offered only while that weapon is equipped (the card carries
 `weapon = "<id>"`), so the pool stays relevant to your loadout:
 
@@ -486,12 +537,13 @@ card, offered only while that weapon is equipped (the card carries
 | Blizzard Rail | White Squall | +4 jumps and no damage decay |
 | Ashfall | Molten Crater | The burning ground is 80% hotter, 25% wider and lasts much longer |
 | Chaos Sphere | Detonation Chain | Every bounce splashes area damage around the hit |
-| Sundering Core | Event Collapse | Ring expands faster, wider, and hits harder |
-| Tidal Lash | Undertow | A 35% wider lash that flings 40% harder and reaches further |
+| Sundering Core | Fault Line | The crescent widens into a wall, reaches further, and hits harder |
+| Tidal Lash | Undertow | A fourth arc, thrown wider, herding its catch harder into the next |
 | **Radiant Halo** | Corona Mantle | Beams shove for 6, 40% wider, 15% longer, +20% damage |
 | **Void Gyre** | Black Gyre | 45% harder pull, 30% further reach, fatter core, denser ticks |
 | **Prism Array** | Total Internal Reflection | One more independent beam, 40% longer ricochet, +15% range |
 | **Frost Shards** | Rime Lances | +4 pierce and 40% longer flight, at 80% damage each |
+| **Hoarfrost Wake** | Deep Freeze | One more shard, 55% more aura, a deeper chill inside it |
 | **Siege Mortar** | Siege Doctrine | A 3-shell salvo on a double fuse, 35% wider blasts, 20% slower |
 | **Pinball Puck** | Silver Skewer | +10 bounces, no damage decay, 30% longer reach per hop |
 | **Jackhammer Drill** | Overdrive Bore | 60% wider bite, 40% longer reach, strikes far faster |
@@ -568,7 +620,7 @@ real build by testing.
 | Key | Action |
 |-----|--------|
 | `T` | Toggle test mode on/off (also works from a level-up screen) |
-| `1` / `2` | Previous / next weapon — **all 32 including evolutions and supers** (`storm`, `nova`, `inferno`, `pulsar`, `halo`, `blizzard`, `siege`, `chaos`, `sunder`, `tidewhip`, `vortex`, `prism`, `seraph`, `eventhorizon`) |
+| `1` / `2` | Previous / next weapon — **all 33 including evolutions and supers** (`storm`, `nova`, `inferno`, `pulsar`, `halo`, `blizzard`, `siege`, `chaos`, `sunder`, `tidewhip`, `rimewake`, `vortex`, `prism`, `seraph`, `eventhorizon`) |
 | `3` | Apply a **max build** boost: +100% damage, +4 projectiles, +3 pierce, +80% fire rate. Toggling it off keeps your item picks — it only undoes the boost |
 | `4` | Toggle enemy waves (fodder bats spawn so every weapon has a target) |
 | `5` | Exit back to the untouched run |
@@ -694,13 +746,21 @@ a second at the player, which no build can answer and which just ends the run
 early. Five packs a second keeps the screen full while still being something
 you can fight your way out of.
 
-- Enemy HP also scales globally. Up to the 6-minute mark it is multiplied by
-  `1 + t/70`; **after 6 minutes the ramp steepens** (`+ (t−360)/45`), so the
-  late game escalates faster. Capped at ×30.
-- Enemy **move speed** drifts up over the run (`1 + t/600` → `×1.6` at 6 min),
-  and **after 6 minutes it too accelerates** (`+ (t−360)/300`, capped at
-  ×2.4) so late waves stay threatening even for a leveled arsenal.
-- Enemy **contact damage** creeps up as `1 + t/1500`, so late hits land harder.
+- Enemy HP also scales globally. Up to the 7-minute mark it is multiplied by
+  `1 + t/95`; **after 7 minutes the ramp steepens** (`+ (t−420)/60`), so the
+  late game escalates faster. Capped at ×22.
+- Enemy **move speed** drifts up over the run (`1 + t/720` → `×1.58` at 7 min),
+  and **after 7 minutes it too accelerates** (`+ (t−420)/360`, capped at
+  ×2.15) so late waves stay threatening even for a leveled arsenal.
+- Enemy **contact damage** creeps up as `1 + t/2000`, so late hits land harder.
+
+Every one of these three is lower than it was, and the knee moved a minute
+later. The reason is the same as the XP curve: **the HP ramp is the one piece of
+difficulty the player has no answer to.** A build that is three picks behind
+cannot outshoot a ×12 enemy, so a steep ramp is not a harder game, it is a run
+where the player's choices stop mattering. The shape is intact — still rising,
+still steepening after the knee — it just no longer outruns the build. At ten
+minutes the old curve put ordinary bats on ×11.5 HP; it is now ×8.4.
 - Enemy **defense** grows over time (see below) so late enemies shrug off a
   slice of every hit.
 - Up to **8000 enemies** can be alive at once; the cap protects the frame
@@ -714,20 +774,29 @@ top of the traits they roll:
 
 | Roll | Becomes | Gate | HP | Touch | Speed | XP |
 |------|---------|------|----|-------|-------|----|
-| t ≥ 45 s | Elite (tier 1) | on the clock | ×4 | ×1.5 | ×1.15 | ×3 |
-| t ≥ 90 s | Champion (tier 2) | **once elites are routine** | ×7 | ×2.5 | ×1.3 | ×5 |
-| t ≥ 240 s | Overlord (tier 3) | **once champions are routine** | ×14 | ×4 | ×1.5 | ×10 |
+| t ≥ 90 s | Elite (tier 1) | on the clock | ×3.5–6.5 | ×1.25 | ×1.08 | ×3 |
+| t ≥ 90 s | Champion (tier 2) | **once elites are routine** | ×15–55 | ×1.9 | ×1.18 | ×5 |
+| t ≥ 240 s | Overlord (tier 3) | **once champions are routine** | ×70–450 | ×2.8 | ×1.3 | ×10 |
 
-Elites open on a timer (5% per spawn, creeping to 15%). **Champions and
+Elites open on a timer (2.5% per spawn, creeping to 10%). **Champions and
 overlords are not on a clock at all** — they answer to how well the player is
 doing. See [Adaptive tribunal director](#adaptive-tribunal-director).
+
+HP is a range rolled per spawn, so two elites of the same type are visibly
+different sizes of problem. **XP is deliberately not nerfed with the rest of
+them**: an elite is a reward before it is a threat, and if killing one were
+worse value than killing three pieces of trash the player would be right to
+walk past it.
 
 - Tougher tiers are **larger** (elite ×1.35, champion ×1.6, overlord ×2.0).
 - Strength is shown by a **coloured outline** around the enemy — elite **gold**,
   champion **orange**, overlord **violet** — replacing the old glow and
   floating name tags. They always show an enlarged HP bar.
 - **Trait count** grows with tier and time: an elite rolls **exactly one**
-  trait, a champion **2** (+1 after 4 min), an overlord **4** (+1 after 8 min).
+  trait, a champion **2** (+1 after 5 min), an overlord **4** (+1 after 10 min).
+  A champion with three traits at the four-minute mark is not a champion, it is a
+  boss wearing a champion's label, and nothing the player picked yet was an
+  answer to it.
 - Every elite-and-above also has **stronger defenses and resistances**: their
   defense, lifesteal resistance and knockback resistance all scale with tier
   (see below). The `resistant` trait pushes those even higher.
@@ -772,7 +841,10 @@ score* rises by 1.0 per elite killed (1.25 per champion) and bleeds away at
 - Opening a tier announces it with a **HUD banner** (`CHAMPION TRIBUNAL OPEN`),
   and the bestiary shows each gate's live progress as a percentage.
 - The tiers' **power is unchanged**: only their timing follows the player.
-- Elites stay on the clock, so a fresh run still meets its first one at 45 s.
+- Elites stay on the clock, so a fresh run still meets its first one at 90 s —
+  late enough that the player has a handful of picks against it. The first
+  elite used to land at 45 s, before the third pick, which made the run's first
+  real decision "do I play around the thing that is about to end me".
 
 ### Enemy defense & resistances
 
@@ -780,15 +852,23 @@ Enemies run through the **same flat+percent defense curve as the player**
 (`mitigateDamage`) and gain defense as the run goes on:
 
 ```text
-defense   = max(0, t − 30) / 25 · tierMul     # tierMul: 1 / 1.4 / 2.0 / 2.8
-lifestealRes = min(0.75, t/1200) + tierBonus + (resistant ? 0.5 : 0)
-knockbackRes = min(0.70, t/900)  + tierBonus + (resistant ? 0.5 : 0)
+defense   = max(0, t − 60) / 34 · tierMul     # tierMul: 1 / 1.25 / 1.7 / 2.2
+lifestealRes = min(0.60, t/1500) + tierBonus + (resistant ? 0.5 : 0)
+knockbackRes = min(0.55, t/900)  + tierBonus + (resistant ? 0.5 : 0)
 ```
 
-- The 30-second grace period keeps the opening minute free of mitigation.
+- The grace period is a full minute, and the ramp after it is a third slower.
+  Mitigation is a tax on **every hit, forever**, so it punishes a build that is
+  still coming together far more than it punishes a finished one: an enemy that
+  takes 10% off every swing from minute two is not a difficulty curve, it is an
+  invisible tax on the first ten picks.
 - **Knockback** from bombs, the scythe reap, inferno, Radiant Halo spokes
   and Repulsion Field retaliation is scaled by `1 − knockbackRes`, so
-  late/elite enemies get pushed around less and less. Every shove is stored as
+  late/elite enemies get pushed around less and less — the cap is 55%, reached
+  at 13:45, where it used to be 70% at 8:45. Knockback is a tax on the player's
+  *positioning* rather than on their damage, and at the old rate ordinary trash
+  stopped being pushable halfway through a run, which quietly turned "walk
+  backwards and kite" into "stand still and hope". Every shove is stored as
   a decaying impulse on the enemy (`kbX`/`kbY`, ×0.82 per tick) that is added
   on top of its steering velocity, so the push actually lands before the AI
   re-clamps its movement. **Impact** cards multiply the whole shove.

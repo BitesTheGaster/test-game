@@ -229,16 +229,23 @@ Batcher (core)  -> one @instanced draw call per pass
 - UI: XP bar, HP/shield bars, H-heal cooldown, level, timer, kill count, and
   the level-up / milestone / game-over overlays.
 - Overlays are drawn in a fixed order, and the **manual is last and opaque**:
-  `render()` handles the manual *before* `menuOpen_` in the same way `advance()`
-  does, so it is genuinely the topmost layer and covers the HUD, the pause
-  sheet, the bestiary and the sandbox alike.
+  it covers the HUD, the pause sheet, the bestiary and the sandbox alike.
+- The **main menu is an exception, and has to be**. `advance()` treats the manual
+  as the topmost modal, so from the menu it takes every keystroke — and if
+  `render()` returned early on `menuOpen_` without drawing it, the keys would be
+  live and the screen would never change. A modal that eats your input without
+  drawing is the worst of both, and from the menu there was also no way back:
+  the menu's own handler stops being called the moment the manual is open. So
+  the menu draws first and the manual over the top of it.
 
 ## Overlay precedence
 
 There are four things that can take the keyboard, and the order is fixed in
 `advance()`:
 
-1. **Manual** (`F1`) — topmost, opaque, eats the whole frame.
+1. **Manual** (`F1`) — topmost, opaque, eats the whole frame. Reachable from
+   the main menu (a MANUAL row, or F1) as well as from a run and the pause
+   sheet, and the page it was on survives a reset.
 2. **Main menu** — swallows input until START or QUIT.
 3. **Pause sheet** — a modal character sheet, with B toggling the bestiary.
 4. **Gameplay** — the only state in which the simulation advances at all.
@@ -261,10 +268,15 @@ flips manual pages at the same rate it moves menu rows.
 | `kShieldRegenDelayFloor` | 0.5 s | Floor on the delay, so no build makes the pool permanent |
 | `kContactIframes` | 0.18 s | Base invulnerability after being hit; scaled by `1 + defense/500` |
 | `kOrbitInnerMul` | 0.35 | Share of one blade's damage the orbit's interior whirl pays |
+| `kOrbitWindowHalf` | 0.42 rad | Half-width of the Blade Vortex's safe gap, measured from the first blade |
+| `WaveEffect::kHookAngle` | 1.15 rad | How far off its own heading a hooking wave pushes: ~66°, mostly across the fan, a little along it |
+| `kChainTelegraph` | 0.22 s | How long a chain bolt converges on its first target before it strikes |
+| `kChainStrike` | 0.09 s | Ramp of the bolt's brightness as it lands |
+| `kChainLinger` | 0.45 s | Quadratic fade of the arc after the last jump, so the bolt is never cut off mid-flash |
 | `kBaseAbilityCd` | 5 / 14 / 30 s | Phase Dash / Overload / Stasis cooldowns, before `abilityCdMul` |
-| `kEliteHpMin` / `kEliteHpMax` | 5 / 10 | Elite HP multiplier range (rolled per spawn) |
-| `kChampionHpMin` / `kChampionHpMax` | 25 / 100 | Champion HP multiplier range |
-| `kOverlordHpMin` / `kOverlordHpMax` | 125 / 1000 | Overlord HP multiplier range |
+| `kEliteHpMin` / `kEliteHpMax` | 3.5 / 6.5 | Elite HP multiplier range (rolled per spawn) |
+| `kChampionHpMin` / `kChampionHpMax` | 15 / 55 | Champion HP multiplier range |
+| `kOverlordHpMin` / `kOverlordHpMax` | 70 / 450 | Overlord HP multiplier range |
 | `kMaxEnemies` | — | Hard cap on live enemies (see `game.hpp`) |
 
 ## Testing

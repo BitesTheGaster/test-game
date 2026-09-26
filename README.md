@@ -2,9 +2,9 @@
 
 Vampire Survivors-like roguelike. C++20, SDL3 + OpenGL 3.3, CMake + vcpkg.
 
-Multi-weapon build-your-arsenal roguelike: 32 weapons (incl. 10 evolutions and
+Multi-weapon build-your-arsenal roguelike: 33 weapons (incl. 11 evolutions and
 4 three-weapon super evolutions), 18 enemy types with elite/champion/overlord
-traits, 178 upgrades (normal / unique / milestone), an opening **3-weapon pick**
+traits, 179 upgrades (normal / unique / milestone), an opening **3-weapon pick**
 instead of a fixed starter, three **active abilities** on `J` / `K` / `L` that
 are live from the first second and gated only by cooldown, a **momentum kill
 chain** that only pays while you are actively killing, an **adaptive tribunal
@@ -12,10 +12,11 @@ director** that opens champions when elites stop being a problem and overlords
 when champions do, regenerating shield + defense + lifesteal, an H-key heal,
 defense-scaled invulnerability frames, pierce that cancels AoE damage falloff,
 knockback with an Impact multiplier, an Esc **bestiary**, a difficulty ramp that
-accelerates after 6 minutes, an **in-game manual** on `F1`, and a **two-step
-reset** in the main menu.
+accelerates after 7 minutes, an **in-game manual** on `F1` (reachable from the
+main menu, a run, or the pause sheet), and a **two-step reset** in the main
+menu.
 
-Every one of the 32 weapons has at least one exclusive unique card, and a test
+Every one of the 33 weapons has at least one exclusive unique card, and a test
 fails the build if that stops being true — a weapon you can pick up and then
 never improve is a dead slot.
 
@@ -76,7 +77,7 @@ Run: `./build/debug/test-game`.
 | B           | While paused: toggle the **bestiary** (kills, stats, elite+ variants) |
 | R (after death) | Restart                              |
 | T           | Toggle **weapon test mode** (live run only) |
-| 1 / 2       | In test mode: previous / next weapon (all 32 incl. evolutions & supers) |
+| 1 / 2       | In test mode: previous / next weapon (all 33 incl. evolutions & supers) |
 | 3           | In test mode: apply a maxed-out build boost (damage/projectiles/pierce/fire rate) |
 | 4           | In test mode: toggle enemy waves |
 | 5           | In test mode: exit back to the run — **which ends the run** |

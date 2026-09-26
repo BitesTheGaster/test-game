@@ -41,6 +41,26 @@ std::string requireString(const toml::table& t, const char* key, const std::stri
   return *v;
 }
 
+// A string that will be DRAWN, so it also has to be spellable in the in-game
+// font: ASCII 32..96 with lowercase folded onto uppercase. Anything else -- a
+// typographic dash, a curly quote, an emoji -- does not fail, it silently draws
+// as '?', which is worse than a crash because the content looks fine in the
+// .toml and wrong on screen.
+//
+// This check used to run only over the manual pages, which left every weapon and
+// upgrade name and description unchecked. Four shipped descriptions carried an
+// em-dash and every player met four question marks on the level-up screen.
+std::string requireDrawableString(const toml::table& t, const char* key,
+                                  const std::string& where) {
+  std::string s = requireString(t, key, where);
+  if (!core::render::fontSupports(s)) {
+    throw std::runtime_error(where + ": field \"" + std::string(key) +
+                             "\" contains a character the in-game font cannot draw "
+                             "(allowed: ASCII 32..96): " + s);
+  }
+  return s;
+}
+
 float requireFloat(const toml::table& t, const char* key, const std::string& where) {
   const auto v = t[key].value<float>();
   if (!v) {
@@ -63,6 +83,7 @@ AttackType parseAttackType(const toml::table& t, const std::string& where) {
   if (s == "sweep") return AttackType::Sweep;
   if (s == "zone") return AttackType::Zone;
   if (s == "chain") return AttackType::Chain;
+  if (s == "wave") return AttackType::Wave;
   if (s == "nova") return AttackType::Nova;
   if (s == "inferno") return AttackType::Inferno;
   if (s == "pulsar") return AttackType::Pulsar;
@@ -129,8 +150,13 @@ Content loadContent(const std::filesystem::path& dir) {
       const std::string where = file.string();
       WeaponDef def;
       def.id = requireString(*t, "id", where);
-      def.name = requireString(*t, "name", where);
+      def.name = requireDrawableString(*t, "name", where);
       def.desc = (*t)["desc"].value<std::string>().value_or("Auto-fires at the nearest enemy.");
+      if (!core::render::fontSupports(def.desc)) {
+        throw std::runtime_error(where + ": weapon \"" + def.id +
+                                 "\" desc contains a character the in-game font "
+                                 "cannot draw (allowed: ASCII 32..96): " + def.desc);
+      }
       def.attackType = parseAttackType(*t, where);
       def.damage = requireFloat(*t, "damage", where);
       def.cooldown = requireFloat(*t, "cooldown", where);
@@ -159,17 +185,27 @@ Content loadContent(const std::filesystem::path& dir) {
       def.coneAngle = (*t)["cone_angle"].value_or(0.8F);
       def.coneRange = (*t)["cone_range"].value_or(2.5F);
       def.coneTickRate = (*t)["cone_tick_rate"].value_or(0.1F);
+      def.coneBite = (*t)["cone_bite"].value_or(0.0F);
+      def.coneBiteMax = (*t)["cone_bite_max"].value_or(4.0F);
+      def.coneEmberAt = (*t)["cone_ember_at"].value_or(0.0F);
+      def.coneEmberRadius = (*t)["cone_ember_radius"].value_or(1.0F);
+      def.coneEmberDuration = (*t)["cone_ember_duration"].value_or(2.5F);
 
       // Orbit
       def.orbitRadius = (*t)["orbit_radius"].value_or(1.2F);
       def.orbitSpeed = (*t)["orbit_speed"].value_or(2.0F);
       def.orbitCount = static_cast<int>((*t)["orbit_count"].value_or(2));
+      def.orbitWindow = (*t)["orbit_window"].value_or(false);
 
       // Bomb
       def.bombArcHeight = (*t)["bomb_arc_height"].value_or(2.0F);
       def.bombExplodeRadius = (*t)["bomb_explode_radius"].value_or(1.5F);
       def.bombKnockback = (*t)["bomb_knockback"].value_or(3.0F);
       def.bombFuse = (*t)["bomb_fuse"].value_or(0.0F);
+      def.bombAhead = (*t)["bomb_ahead"].value_or(0.0F);
+      def.bombOnTarget = (*t)["bomb_on_target"].value_or(false);
+      def.reaimRange = (*t)["reaim_range"].value_or(0.0F);
+      def.reaimTurn = (*t)["reaim_turn"].value_or(0.0F);
 
       // Boomerang
       def.boomerangRange = (*t)["boomerang_range"].value_or(4.0F);
@@ -180,20 +216,32 @@ Content loadContent(const std::filesystem::path& dir) {
       def.bounceRange = (*t)["bounce_range"].value_or(2.5F);
       def.bounceDamageMul = (*t)["bounce_damage_mul"].value_or(0.7F);
       def.bounceInfinite = (*t)["bounce_infinite"].value_or(false);
+      def.bounceSplits = static_cast<int>((*t)["bounce_splits"].value_or(0));
 
       // Beam
       def.beamRange = (*t)["beam_range"].value_or(8.0F);
       def.beamWidth = (*t)["beam_width"].value_or(0.3F);
       def.beamDuration = (*t)["beam_duration"].value_or(0.15F);
 
+      // Chill
+      def.chillMul = (*t)["chill_mul"].value_or(0.0F);
+      def.chillTime = (*t)["chill_time"].value_or(0.0F);
+      def.auraRadius = (*t)["aura_radius"].value_or(0.0F);
+      def.auraDps = (*t)["aura_dps"].value_or(0.0F);
+      def.auraTick = (*t)["aura_tick"].value_or(0.10F);
+      def.auraChillMul = (*t)["aura_chill_mul"].value_or(0.0F);
+      def.auraChillTime = (*t)["aura_chill_time"].value_or(0.0F);
+
       // Halo
       def.haloKnockback = (*t)["halo_knockback"].value_or(0.0F);
+      def.haloInner = (*t)["halo_inner"].value_or(0.0F);
 
       // Sweep
       def.sweepAngle = (*t)["sweep_angle"].value_or(3.14F);
       def.sweepRadius = (*t)["sweep_radius"].value_or(2.0F);
       def.sweepKnockback = (*t)["sweep_knockback"].value_or(2.0F);
       def.sweepLead = (*t)["sweep_lead"].value_or(0.0F);
+      def.sweepHook = (*t)["sweep_hook"].value_or(false);
 
       // Zone
       def.zoneRadius = (*t)["zone_radius"].value_or(1.2F);
@@ -205,12 +253,31 @@ Content loadContent(const std::filesystem::path& dir) {
       def.chainJumpRange = (*t)["chain_jump_range"].value_or(2.5F);
       def.chainMaxJumps = static_cast<int>((*t)["chain_max_jumps"].value_or(4));
       def.chainDamageMul = (*t)["chain_damage_mul"].value_or(0.6F);
+      def.chainShatter = static_cast<int>((*t)["chain_shatter"].value_or(0));
+      def.chainShatterSpeed = (*t)["chain_shatter_speed"].value_or(15.0F);
+      def.chainShatterSpread = (*t)["chain_shatter_spread"].value_or(0.55F);
+      def.infernoBindsToLure = (*t)["inferno_binds_to_lure"].value_or(false);
+
+      // Wave
+      def.waveSpeed = (*t)["wave_speed"].value_or(6.0F);
+      def.waveRange = (*t)["wave_range"].value_or(7.0F);
+      def.waveWidth = (*t)["wave_width"].value_or(2.2F);
+      def.waveKnockback = (*t)["wave_knockback"].value_or(4.0F);
+      def.waveDamageMul = (*t)["wave_damage_mul"].value_or(0.8F);
+      def.waveCount = static_cast<int>((*t)["wave_count"].value_or(1));
+      def.waveArcStep = (*t)["wave_arc_step"].value_or(0.0F);
+      def.waveHookPull = (*t)["wave_hook_pull"].value_or(0.0F);
+      def.waveSpread = (*t)["wave_spread"].value_or(0.9F);
 
       // Nova
       def.novaMaxRadius = (*t)["nova_max_radius"].value_or(4.0F);
       def.novaExpandSpeed = (*t)["nova_expand_speed"].value_or(3.0F);
       def.novaDamagePerTick = (*t)["nova_damage_per_tick"].value_or(25.0F);
       def.novaTickRate = (*t)["nova_tick_rate"].value_or(0.15F);
+      def.novaContract = (*t)["nova_contract"].value_or(false);
+      def.novaPull = (*t)["nova_pull"].value_or(0.0F);
+      def.novaBurstDamage = (*t)["nova_burst_damage"].value_or(0.0F);
+      def.novaEcho = (*t)["nova_echo"].value_or(0.0F);
 
       // Vortex
       def.vortexRadius = (*t)["vortex_radius"].value_or(1.3F);
@@ -219,6 +286,9 @@ Content loadContent(const std::filesystem::path& dir) {
       def.vortexOrbit = (*t)["vortex_orbit"].value_or(2.6F);
       def.vortexOrbitSpeed = (*t)["vortex_orbit_speed"].value_or(1.8F);
       def.vortexTickRate = (*t)["vortex_tick_rate"].value_or(0.1F);
+      def.vortexCollapseAt = (*t)["vortex_collapse_at"].value_or(0.0F);
+      def.vortexBurstDamage = (*t)["vortex_burst_damage"].value_or(0.0F);
+      def.vortexBurstRadius = (*t)["vortex_burst_radius"].value_or(0.0F);
 
       // Prism
       def.prismRange = (*t)["prism_range"].value_or(9.0F);
@@ -255,7 +325,7 @@ Content loadContent(const std::filesystem::path& dir) {
       const std::string where = file.string();
       EnemyDef def;
       def.id = requireString(*t, "id", where);
-      def.name = requireString(*t, "name", where);
+      def.name = requireDrawableString(*t, "name", where);
       def.hp = requireFloat(*t, "hp", where);
       def.speed = requireFloat(*t, "speed", where);
       def.touch = requireFloat(*t, "touch", where);
@@ -263,6 +333,25 @@ Content loadContent(const std::filesystem::path& dir) {
       def.xp = (*t)["xp"].value_or(1.0F);
       def.unlockAt = (*t)["unlock_at"].value_or(0.0F);
       def.weight = (*t)["weight"].value_or(1.0F);
+      def.speedRampMax = (*t)["speed_ramp"].value_or(0.0F);
+      def.fast = (*t)["fast"].value_or(false);
+      // A ramp that would push a type past twice its authored speed would make
+      // the late game unreadable, and a `fast` type with no ramp is a
+      // contradiction (slow, then suddenly quick with nothing in between). Both
+      // are almost certainly typos in the data rather than intent, so the
+      // loader refuses them instead of letting the roster drift.
+      if (def.speedRampMax < 0.0F) {
+        throw std::runtime_error(where + ": enemy \"" + def.id +
+                                 "\" has a negative speed_ramp");
+      }
+      if (def.speedRampMax > kSpeedRampCeiling) {
+        throw std::runtime_error(where + ": enemy \"" + def.id +
+                                 "\" has speed_ramp above the ceiling");
+      }
+      if (def.fast && def.speedRampMax <= 0.0F) {
+        throw std::runtime_error(where + ": enemy \"" + def.id +
+                                 "\" is flagged fast but has no speed_ramp");
+      }
       const auto* colorNode = t->get("color");
       if (colorNode == nullptr) {
         throw std::runtime_error(where + ": missing field \"color\"");
@@ -290,8 +379,8 @@ Content loadContent(const std::filesystem::path& dir) {
       const std::string where = file.string();
       UpgradeDef def;
       def.id = requireString(*t, "id", where);
-      def.name = requireString(*t, "name", where);
-      def.desc = requireString(*t, "desc", where);
+      def.name = requireDrawableString(*t, "name", where);
+      def.desc = requireDrawableString(*t, "desc", where);
       def.effect = requireString(*t, "effect", where);
       def.value = requireFloat(*t, "value", where);
       def.maxStacks = static_cast<int>((*t)["max_stacks"].value_or(5));

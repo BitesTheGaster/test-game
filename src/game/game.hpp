@@ -27,6 +27,93 @@ inline constexpr const char* kGameSubtitle = "";
 // the level-up card renderer and unit tests.
 std::vector<std::string> wrapWords(std::string_view str, std::size_t maxChars);
 
+// Word-wraps `str` for a proportional box instead of a character count: the
+// same greedy algorithm, but the limit is `maxWidth` screen pixels at `scale`
+// and every CONTINUATION line is indented by `indent` pixels and gets `indent`
+// fewer pixels to work with.
+//
+// The hanging indent is the point. Without one, a wrapped description is a
+// rectangle of text with no visual left edge for a continuation line, so the
+// eye has to re-read the row above to find where the sentence restarted; with
+// one, "where does this line begin" is answered by the indent itself.
+//
+// Pure layout, no Batcher: the arithmetic that decides what fits is the part
+// worth testing, and a test cannot build a GL context.
+//
+// `contScale` is the size the CONTINUATION lines will be drawn at; pass 0 when
+// they are the same size as the first. It is a separate argument because the
+// card sets its wrapped lines larger, and a wrap measured at the first line's
+// size would overflow the card by exactly the size of the bump.
+[[nodiscard]] std::vector<std::string> wrapToWidth(std::string_view str,
+                                                    float maxWidth, float scale,
+                                                    float indent,
+                                                    float contScale = 0.0F);
+
+// How the level-up card sets its body text, derived from the card width.
+//
+// The style is deliberately asymmetric: the FIRST line is body copy and the
+// wrapped lines after it are set larger and further apart. The first line
+// carries the gist -- "Shoots a bolt every 2s" -- and should be readable
+// instantly; the rest is the detail the player leans in for, and gets a heavier
+// voice to say so. Making all of it large was tried and it was the wrong
+// instinct: a wider scale shrinks the measure until a 5-card row is a dozen
+// characters per line, which is less readable, not more.
+//
+// Derived from the card width only for the TEXT BOX; the scale is a constant,
+// because the card being narrower already shortens the measure without any help.
+// See the comment on kCardDescScale for why the width-derivation was removed.
+struct CardTextLayout {
+  float width = 0.0F;   // usable text box width, padding already removed
+  float scale = 1.6F;   // first line
+  float contScale = 1.9F; // every line after the first
+  float lineH = 15.0F;  // first line's vertical advance
+  float contLineH = 22.0F; // every later line's advance
+  float indent = 32.0F; // hanging indent on continuation lines
+};
+
+[[nodiscard]] CardTextLayout cardTextLayout(float cardW);
+
+// Vertical space a body of `lines` lines takes. 1 line is a single body line; n
+// lines is the first line plus (n-1) larger ones.
+[[nodiscard]] float cardTextHeight(int lines, const CardTextLayout& lay);
+
+// How many lines of `lay` fit in `avail` pixels, which is what the renderer
+// clamps the wrap to. Exact inverse of cardTextHeight, not a division: the
+// continuation pitch is not the first line's pitch.
+[[nodiscard]] int cardTextLinesThatFit(float avail, const CardTextLayout& lay);
+
+// The level-up card's TITLE, as up to two lines.
+//
+// A single line cannot hold every shipped name: "Total Internal Reflection" is
+// 25 characters, which is 345px at 2.3 -- a 260px cell in a 4-card row and a
+// 196px cell in a 5-card one. Drawing it at a fixed 2.3 sliced it under the next
+// card's panel with no ellipsis; shrinking it to fit drove the scale below the
+// body's own, which stops the title reading as a title. So: keep 2.3 when the
+// name fits on one line, and otherwise wrap to two lines at 2.0, which still
+// holds 16 characters in the narrowest card the row can produce.
+//
+// Exposed as pure arithmetic so the "does every shipped name fit" rule is
+// testable without a GL context, and so the renderer and the test cannot
+// disagree about which names are too long.
+struct CardNameLayout {
+  float scale = 2.3F;   // 2.3 for a one-liner, 2.0 for a wrapped title
+  float lineH = 24.0F;  // vertical advance of the title block
+  // The title as it will actually be drawn, at most two lines. Carrying the
+  // lines rather than only their count means the renderer and the test read the
+  // same wrap instead of each calling wrapToWidth with its own arguments.
+  std::vector<std::string> lines{std::string{}};
+  // True when the wrap could not hold the whole name and the last line was cut
+  // short with an ellipsis. No shipped name does this at any reachable card
+  // width; a test says so, and the card tints the tail when it happens so the
+  // loss is visible rather than silent.
+  bool elided = false;
+  // How far the description has to start below the card's top edge, which grows
+  // by one line for a wrapped title.
+  [[nodiscard]] float blockH() const { return lineH * static_cast<float>(lines.size()); }
+  [[nodiscard]] bool wrapped() const { return lines.size() > 1; }
+};
+[[nodiscard]] CardNameLayout cardNameLayout(std::string_view name, float maxWidth);
+
 // Normalized input gathered by main() from SDL each frame.
 struct FrameInput {
   float moveX = 0.0F; // -1..1
@@ -63,6 +150,11 @@ struct FrameInput {
   // from the pause screen, because a manual you can only read at the start is a
   // manual nobody reads.
   bool manualToggle = false;
+  // Q: abandon the run and go back to the main menu. Only honoured on the pause
+  // screen, and only on the SECOND press inside the arming window — quitting a
+  // live run is the one irreversible thing the player can do by accident, so it
+  // gets the same two-step treatment as wiping progress.
+  bool quitRun = false;
 };
 
 // Attack-speed formula: the final delay between shots is
@@ -226,6 +318,10 @@ struct Choice {
 
 class Game {
 public:
+  // `content` is held BY REFERENCE and must outlive the Game. loadContent
+  // returns a Content by value, so `Game g{loadContent(dir), seed};` compiles
+  // and then reads freed memory on the first frame -- keep the Content in a
+  // named local.
   explicit Game(const Content& content, std::uint32_t seed = 1337);
 
   void reset();
@@ -321,6 +417,42 @@ public:
   // Page id shown right now, or "" when the build ships no manual.
   [[nodiscard]] std::string manualPageId() const;
 
+  // Manual page layout. Public so the "does every shipped page fit one screen"
+  // test reads the same numbers the renderer draws with, instead of duplicating
+  // them and silently going stale the next time the body is resized.
+  static constexpr float kManualBodyX = 250.0F;   // body left edge, clear of the rail
+  static constexpr float kManualBodyY = 74.0F;    // first body line
+  static constexpr float kManualBodyScale = 1.6F; // readable body size
+  static constexpr float kManualLineH = 15.0F;    // body line pitch
+  static constexpr float kManualBottomPad = 56.0F; // kept for the hint bar
+  static constexpr float kManualIndent = 18.0F;    // bullet / sub-line indent
+  // The smallest window the HUD is laid out for; the fit test measures against
+  // it because every other pixel literal in the renderer assumes it.
+  //
+  // kMinScreenHeight is a floor, not a target: the window is resizable and can be
+  // made shorter than this, which is why the level-up row clamps its own top
+  // against the real height rather than assuming a percentage. What it needs is
+  // the height at which the clamp STOPS being the thing doing the work, so a
+  // test can assert the row fits without it.
+  static constexpr float kRefScreenHeight = 720.0F;
+  static constexpr float kRefScreenWidth = 1280.0F;
+
+  // The level-up card row, as pure arithmetic, so the "it all fits on screen"
+  // rule is testable without a GL context. Mirrors the block in render() exactly;
+  // the renderer calls it, so the two cannot drift.
+  struct LevelUpRow {
+    float cardW = 0.0F;   // one card's width
+    float cardH = 0.0F;   // the row's shared height
+    float top = 0.0F;     // the row's top edge
+    float bodyTop = 0.0F; // where the description starts inside a card
+    float hintY = 0.0F;   // where the reroll hint sits
+    int bodyLines = 0;    // description lines the card will actually show
+    int nameLines = 1;    // title lines the tallest card needs
+  };
+  [[nodiscard]] static LevelUpRow levelUpRowLayout(float px, float py, std::size_t n,
+                                                   std::size_t tallestDescLines,
+                                                   std::size_t tallestNameLines);
+
   // --- Progress reset (main menu) --------------------------------------------
   // Wipes the attached profile back to first-launch defaults: default skin, no
   // outline, no earned unlocks, and repaints the player. Marks the profile
@@ -381,8 +513,70 @@ public:
   // ship fewer (today: 3 + 1); it can never ship more than this.
   static constexpr int kMaxSlotCards = kMaxWeapons - kBaseWeapons;
 
+  // --- Fast-enemy pacing ----------------------------------------------------
+  //
+  // Three numbers, one intent: a quick enemy should be something the run grows
+  // into, not something it starts with.
+  //
+  // kFastEnemyMinTime holds every `fast`-flagged archetype out of the spawn
+  // pool until this point even if its own unlock_at has passed. The opening
+  // four minutes are a warm-up you can learn the game in; the first genuinely
+  // quick enemy is then an escalation you can watch arrive.
+  static constexpr float kFastEnemyMinTime = 240.0F; // 4:00
+  // How long a per-type speed ramp (EnemyDef::speedRampMax) takes to saturate.
+  // A fast type is authored at its opening speed and reaches
+  // speed * (1 + speedRampMax) here, so the ramp exactly undoes the nerf by
+  // the time the run has taught the player to handle it.
+  static constexpr float kSpeedRampFullTime = 600.0F; // 10:00
+  // How long the elite "Fast" trait takes to reach its full bonus. A flat 1.7x
+  // from second one makes a 4-minute horde undodgeable, so the trait ramps:
+  // brisk early, genuinely fast late.
+  static constexpr float kFastTraitFullTime = 300.0F; // 5:00
+  static constexpr float kFastTraitMaxMul = 1.7F;
+
+  // --- Chain / bounce cascade bounds -----------------------------------------
+  //
+  // Both of these spawn extra entities from inside an update system, so both
+  // need a hard stop: a fork that can fork, or a fragment that can split, is
+  // exponential growth in entity count and will hang the game.
+  static constexpr int kMaxBounceSplitDepth = 3;
+  // Hard ceiling on a fragment's life. The cascade decays by depth and by
+  // bounce budget already; this is the third bound, and without it the ROOT
+  // orb's long life would keep the whole tree airborne and the cascade would
+  // read as slow multiplication rather than a burst that dies down.
+  static constexpr float kMaxSplitLife = 2.5F;
+  // How long a chain bolt hangs after its last jump, so a traversal that is over
+  // in a fraction of a second is at least visible before it disappears.
+  //
+  // 0.25 was too short to read: the whole bolt was gone inside a third of a
+  // second, before the player's eye had finished travelling to the enemy it had
+  // just hit. 0.45s is long enough to follow a five-hop arc without the effect
+  // feeling like it is sticking around.
+  static constexpr float kChainLinger = 0.45F;
+  // How long the bolt spends converging on its first target before anything
+  // damages. This is the whole "smooth" of the strike: a transparent ring on the
+  // target shrinks through this window and the bolt only lands when it closes.
+  static constexpr float kChainTelegraph = 0.22F;
+  // How long the sky drop takes to draw itself down, once the ring has closed.
+  static constexpr float kChainStrike = 0.09F;
+  // Gap between the arcs of a multi-arc wave shot, in seconds.
+  static constexpr float kWaveBurstGap = 0.08F;
+  // How fast a ricochet aims itself, in radians per second. A target inside
+  // bounceRange is a real ricochet and snaps the heading (this is the full turn);
+  // anything further away only nudges at kBounceReturnTurn, which keeps the arc
+  // reading as a puck searching for the next body rather than as a homing
+  // missile. A value of zero on the far case is the bug this replaced: the orb
+  // kept whatever heading it had, left the arena, and the player watched an empty
+  // screen for the rest of a multi-second life.
+  static constexpr float kBounceTurn = 6.2831853F;
+  static constexpr float kBounceReturnTurn = 2.5F;
+
   // Test/debug hooks.
   void grantXp(float amount);
+  // Test helper: how many cards the level-up screen is currently offering. The
+  // renderer divides by this, so "never zero" is a load-bearing rule rather than
+  // a cosmetic one.
+  [[nodiscard]] std::size_t testChoiceCount() const { return choices_.size(); }
   // Test helper: add weapon by index (bypasses normal level-up flow)
   void testAddWeapon(int defIndex) {
     starterChoicePending_ = false; // tests set up weapons directly
@@ -408,13 +602,24 @@ public:
     float coneAngle = 0;
     float coneRange = 0;
     float coneTickRate = 0;
+    float coneBite = 0;
+    float coneBiteMax = 0;
+    float coneEmberAt = 0;
+    float coneEmberRadius = 0;
+    float coneEmberDuration = 0;
     float orbitRadius = 0;
     float orbitSpeed = 0;
     int orbitCount = 0;
+    bool orbitWindow = false;
+    float waveSpread = 0;
     float bombArcHeight = 0;
     float bombExplodeRadius = 0;
     float bombKnockback = 0;
     float bombFuse = 0;
+    float bombAhead = 0;
+    bool bombOnTarget = false;
+    float reaimRange = 0;
+    float reaimTurn = 0;
     float boomerangRange = 0;
     float boomerangReturnSpeed = 0;
     int bounceCount = 0;
@@ -424,10 +629,21 @@ public:
     float beamRange = 0;
     float beamWidth = 0;
     float beamDuration = 0;
+    // Chill this weapon applies on hit, so the "did this card do anything" test
+    // covers it like every other identity parameter.
+    float chillMul = 0;
+    float chillTime = 0;
+    float auraRadius = 0;
+    float auraDps = 0;
+    float auraTick = 0;
+    float auraChillMul = 0;
+    float auraChillTime = 0;
     float haloKnockback = 0;
+    float haloInner = 0;
     float sweepAngle = 0;
     float sweepRadius = 0;
     float sweepKnockback = 0;
+    bool sweepHook = false;
     float zoneRadius = 0;
     float zoneDuration = 0;
     float zoneDps = 0;
@@ -435,10 +651,24 @@ public:
     float chainJumpRange = 0;
     int chainMaxJumps = 0;
     float chainDamageMul = 0;
+    int chainShatter = 0;
+    int bounceSplits = 0;
+    float waveSpeed = 0;
+    float waveRange = 0;
+    float waveWidth = 0;
+    float waveKnockback = 0;
+    float waveDamageMul = 0;
+    int waveCount = 0;
+    float waveArcStep = 0;
+    float waveHookPull = 0;
     float novaMaxRadius = 0;
     float novaExpandSpeed = 0;
     float novaDamagePerTick = 0;
     float novaTickRate = 0;
+    bool novaContract = false;
+    float novaPull = 0;
+    float novaBurstDamage = 0;
+    float novaEcho = 0;
     float area = 0;
     float strength = 0;
     bool homing = 0;
@@ -453,6 +683,9 @@ public:
     float vortexOrbit = 0;
     float vortexOrbitSpeed = 0;
     float vortexTickRate = 0;
+    float vortexCollapseAt = 0;
+    float vortexBurstDamage = 0;
+    float vortexBurstRadius = 0;
     float prismRange = 0;
     float prismWidth = 0;
     int prismMaxTargets = 0;
@@ -474,6 +707,11 @@ public:
   void testClearWeapons();
   // Test helper: place a stationary, high-HP enemy at a world position.
   void testSpawnEnemyAt(float x, float y);
+  // Test helper: remove every live enemy outright. There is no way to reach an
+  // empty arena through the damage path -- a body at zero HP is only reaped by
+  // the hit that killed it -- and "what does a projectile do when there is
+  // nothing left to aim at" is exactly the case worth testing.
+  void testDespawnEnemies();
   // Test helper: place an elite/champion/overlord enemy (tier 1..3) so tests
   // can inspect the guaranteed stat boosts, resistances and trait flags.
   // `def` selects the content enemy type (default: the first one).
@@ -566,6 +804,79 @@ public:
   // Test helper: contact radius of every live bounce projectile (the eternal
   // Void Orb grows its size with the projectile stat).
   [[nodiscard]] std::vector<float> testBounceRadii() const;
+  // Test helper: number of live chain bolts, live travelling waves and live
+  // bounce projectiles. These are the three things a chain/fork/split can spawn
+  // from inside an update system, so they are the numbers that decide whether a
+  // cascade is bounded.
+  [[nodiscard]] std::size_t testChainCount() const;
+  [[nodiscard]] std::size_t testWaveCount() const;
+  [[nodiscard]] std::size_t testBounceCount() const;
+  // Test helper: number of live straight Projectiles. The Blizzard Rail's shard
+  // fan is made of these (deliberately not bolts), so this is how a test sees
+  // the shatter.
+  [[nodiscard]] std::size_t testProjectileCount() const;
+  // Test helper: world position of every live arcing shell, flattened x,y pairs.
+  // A shell's landing point is the whole Siege Mortar: it is aimed at the front
+  // rank and detonates BEHIND it, so where the shell is going is the only way to
+  // see the difference from a bomb that lands where you pointed.
+  [[nodiscard]] std::vector<float> testBombPositions() const;
+  // Test helper: current radius of every live nova ring. A ring that expands
+  // starts near zero and grows; a contracting one starts at its maximum and
+  // shrinks to nothing, so the sequence is what proves the two are opposites
+  // rather than one bigger than the other.
+  [[nodiscard]] std::vector<float> testNovaRadii() const;
+  // Test helper: the inner dead-zone radius of every live halo spoke. Zero means
+  // the spoke reaches the player (a personal guard); a positive value means there
+  // is a ring of safe ground at their feet (a wall they keep things out of).
+  [[nodiscard]] std::vector<float> testHaloBeamInners() const;
+  // Test helper: the collapse charge of every live vortex well, in seconds, and
+  // its current orbit angle, flattened charge,angle pairs. A well that collapses
+  // wraps its charge and jumps its angle by half a turn; a well that does not
+  // (the Void Gyre) keeps its charge pinned at zero and its angle advancing
+  // smoothly, and that is the entire difference between the two weapons.
+  [[nodiscard]] std::vector<float> testVortexCharges() const;
+  // Test helper: the angle of the gap in a slot's blade ring, or -1 when the ring
+  // has no gap (no "Blade Vortex" card, or a single blade, where a gap would
+  // have nowhere to be). The gap is the only place the interior grind bites, so
+  // a test needs the angle to place a target in it deliberately.
+  [[nodiscard]] float testOrbitWindowAngle(int slot) const;
+  // Test helper: world position of every live BoomerangProjectile, flattened x,y
+  // pairs. The Pulsar's trail is a corridor along the blade's remembered path, so
+  // "was this target hit by the blade or by the scar it left" is a question about
+  // where the blade was, and this is the only way to ask it.
+  [[nodiscard]] std::vector<float> testBoomerangPositions() const;
+  // Test helper: current HP of the enemy whose centre is NEAREST to a point (-1 if
+  // there is no enemy). testEnemyHps() returns an unordered list, which is fine for
+  // sums and useless for "did the drill chew this one and not that one" -- and the
+  // whole point of the drill is which body it chose.
+  [[nodiscard]] float testEnemyHpNear(float x, float y) const;
+  // Test helper: how many live chain bolts are still converging (telegraph > 0)
+  // and how many have landed (telegraph == 0). The strike is in three beats, and
+  // "a bolt that has not damaged anything yet" has to be observable, or the
+  // wind-up is invisible to a test and therefore free to disappear.
+  [[nodiscard]] std::vector<int> testChainTelegraphs() const;
+  // Test helper: world position of every live travelling wave. A wave LEAVES the
+  // player, so this is what proves it is not just a nova pinned to the player.
+  [[nodiscard]] std::vector<float> testWavePositions() const;
+  // Test helper: world position of every live Enemy, flattened x,y pairs. Used to
+  // assert where knockback did and did not move a target.
+  [[nodiscard]] std::vector<float> testEnemyPositions() const;
+  // Test helper: world position of every live BounceProjectile, flattened x,y
+  // pairs. A ricochet that has nothing to hit should curve back toward the player
+  // rather than leave the arena, and this is the only way to see where it went.
+  [[nodiscard]] std::vector<float> testBouncePositions() const;
+  // Test helper: the speed multiplier and remaining time of every live Enemy's
+  // chill, flattened mul,time pairs. A multiplier of 1.0 means not chilled.
+  [[nodiscard]] std::vector<float> testEnemyChills() const;
+  // Test helper: run the simulation forward by `seconds` of fixed steps without
+  // rendering. Weapon fire and the effect update systems only run inside a
+  // step, so a test that wants to watch a bolt travel has to drive them itself.
+  void testAdvance(float seconds);
+  // Test helper: move the player. Anything whose rule is about DISTANCE THE
+  // PLAYER COVERS -- the Hearthfire trail lays its pools by how far the cone's
+  // tip has travelled, so a stationary player lays exactly one and a walking one
+  // lays a road -- is untestable without this.
+  void testSetPlayerPosition(float x, float y);
   // Test helper: the equipped weapon ids, oldest first (e.g. for test-mode
   // snapshot/restore assertions). Empty when no weapons are equipped.
   [[nodiscard]] std::vector<std::string> armedWeaponIds() const;
@@ -610,7 +921,7 @@ public:
   [[nodiscard]] std::uint8_t tierKillMask() const { return tierKillMask_; }
   // --- Adaptive tribunal director (test + HUD introspection) -----------------
   // True while a tier is allowed to spawn at all. Tier 0 always, tier 1 from
-  // 45s on, tier 2 once elites are routine, tier 3 once champions are.
+  // 90s on, tier 2 once elites are routine, tier 3 once champions are.
   [[nodiscard]] bool tierUnlocked(int tier) const;
   // Per-member spawn chance for a tier right now (0 while the tier is shut).
   [[nodiscard]] float tierSpawnChance(int tier) const;
@@ -637,6 +948,21 @@ public:
   // Full spawn-eligibility rule used by pickDef (unlocked AND not retired,
   // unless it is one of the 3 most recent types).
   [[nodiscard]] bool typeCanSpawn(int def) const;
+  // Run time before `def` becomes eligible at all: the later of its own
+  // unlock_at and, for a `fast` archetype, kFastEnemyMinTime. Public so a test
+  // can reason about the gate instead of duplicating the rule (and going stale
+  // the next time the floor moves).
+  [[nodiscard]] float typeLockedUntil(int def) const;
+  // Per-type speed ramp at the current run clock: 1.0 for a type that does not
+  // accelerate on its own, rising to 1 + speedRampMax at kSpeedRampFullTime.
+  [[nodiscard]] float typeSpeedRamp(int def) const;
+  // The elite "Fast" trait's speed multiplier at the current run clock: 1.0
+  // (no bonus) at the start, rising to kFastTraitMaxMul by kFastTraitFullTime.
+  [[nodiscard]] float fastTraitSpeedMul() const;
+  // The exact speed a fresh spawn of `def` gets right now (authored speed, then
+  // the per-type ramp, then the global difficulty ramp). One function so a test
+  // reads the real product instead of re-deriving the factors.
+  [[nodiscard]] float enemySpawnSpeed(int def) const;
   // Test helpers for the retirement rule.
   void testRetireType(int def) { retireEnemyType(def); }
   [[nodiscard]] bool testTypeRetired(int def) const { return typeRetired(def); }
@@ -711,18 +1037,70 @@ private:
     float coneRange = 2.5F;
     float coneTickRate = 0.1F;
     float coneTimer = 0.0F;        // for continuous cone damage
+    // --- The drill's bite -----------------------------------------------------
+    // The Ember Sprayer and the Jackhammer Drill were both "a cone", so they were
+    // the same weapon with different numbers: the drill was narrower, longer and
+    // ticked faster, which is not a different idea. `coneBite` is the difference.
+    // While it is non-zero the cone latches onto the nearest body in the arc,
+    // chews only that one, and its damage climbs by coneBite per consecutive tick
+    // (up to coneBiteMax times the base). The Sprayer washes a crowd evenly; the
+    // drill commits to one target and gets through its armour, which is a real
+    // answer to an elite and a real mistake against trash.
+    float coneBite = 0.0F;
+    float coneBiteMax = 4.0F;
+    // What the bit is currently buried in, and for how many consecutive ticks.
+    // Zero means "not latched", which is also the state after the latch target
+    // dies or walks out of the arc -- then it re-latches and the ramp restarts.
+    entt::entity coneLatch = entt::null;
+    int coneBiteTicks = 0;
+
+    // Hearthfire: the cone leaves burning ground behind it. A cone that only ever
+    // damages what is inside it this instant is a cone you must keep pointing at
+    // things; one that scorches where it has been is a trail you lay down and then
+    // walk away from. `coneEmberAt` is how far the tip must travel before it drops
+    // another pool -- 0 disables the rule entirely, which is what every cone except
+    // the upgraded Ember Sprayer wants.
+    float coneEmberAt = 0.0F;
+    float coneEmberRadius = 1.0F;
+    float coneEmberDuration = 2.5F;
+    // Distance already walked since the last pool. Kept as a walked distance
+    // rather than a timer so a fast player does not leave a thinner trail.
+    float coneEmberWalked = 0.0F;
+    // Where the tip was last time, so the walk is measured against the cone and
+    // not against the player's own movement (the player can turn in place and the
+    // tip still sweeps a long way).
+    float coneEmberLastX = 0.0F;
+    float coneEmberLastY = 0.0F;
+    // Live pools this weapon owns, so the cap can be enforced against its OWN
+    // pools rather than against every burning patch on the map.
+    int coneEmberLive = 0;
 
     // Orbit
     float orbitRadius = 1.2F;
     float orbitSpeed = 2.0F;
     int orbitCount = 2;
     float orbitAngle = 0.0F;       // current rotation angle
+    // Blade Vortex: the ring has one gap in it, and the interior grind only bites
+    // inside that gap. The gap therefore stops being a place to stand and becomes
+    // the place to stand, because it is the one spot in the ring where the horde
+    // that followed you in is actually being cut.
+    bool orbitWindow = false;
 
     // Bomb
     float bombArcHeight = 2.0F;
     float bombExplodeRadius = 1.5F;
     float bombKnockback = 3.0F;
     float bombFuse = 0.0F;
+    // Deliberate over-shoot: land this many units PAST the enemy nearest the aim
+    // line. The Runic Hammer blows up what you were aiming at; the Siege Mortar
+    // sails over the front rank and cooks the back of the horde.
+    float bombAhead = 0.0F;
+    // Land ON the body nearest the aim line instead of past it. The mirror of
+    // `bombAhead`, and the Runic Hammer's whole identity.
+    bool bombOnTarget = false;
+    // Re-aim: bend onto the next body on every hit, spending a pierce point.
+    float reaimRange = 0.0F;
+    float reaimTurn = 0.0F;
 
     // Boomerang
     float boomerangRange = 4.0F;
@@ -740,8 +1118,28 @@ private:
     float beamWidth = 0.3F;
     float beamDuration = 0.15F;
 
+    // Chill carried by this weapon's projectiles. Zero disables it. The Rime
+    // Lanes unique deepens and lengthens the chill rather than swapping it for
+    // bigger damage numbers, which is what the card used to do.
+    float chillMul = 0.0F;
+    float chillTime = 0.0F;
+    // The corona this weapon's shots drag through the air: radius, damage per
+    // second inside it, the tick that pays that damage out, and the (weaker)
+    // chill it applies. Chill itself is an on-HIT status, so it only ever reaches
+    // the bodies a shot went through; this is what reaches the ones it passed.
+    float auraRadius = 0.0F;
+    float auraDps = 0.0F;
+    float auraTick = 0.10F;
+    float auraChillMul = 0.0F;
+    float auraChillTime = 0.0F;
+
     // Halo (evolution)
     float haloKnockback = 0.0F;
+    // Dead zone at the player's feet, in world units. 0 = the spoke reaches the
+    // centre (a personal guard, the Radiant Halo). > 0 = it does not, so the
+    // weapon is a rotating wall with safe ground inside it rather than a bigger
+    // guard, which is what the Seraph Array's wings are.
+    float haloInner = 0.0F;
 
     // Sweep
     float sweepAngle = 3.14F;
@@ -758,12 +1156,69 @@ private:
     float chainJumpRange = 2.5F;
     int chainMaxJumps = 4;
     float chainDamageMul = 0.6F;
+    // How many EXTRA bolts branch off at each hop. 0 = a single linear arc
+    // (Tesla Coil). >0 = the bolt forks and the crowd gets lit up from several
+    // directions at once (Storm Caller). This, not the damage number, is what
+    // tells the two apart on screen.
+    // Flat shards thrown off on the first hit (Blizzard Rail): the slug comes
+    // apart instead of carrying on intact.
+    int chainShatter = 0;
+    float chainShatterSpeed = 15.0F;
+    float chainShatterSpread = 0.55F;
+
+    // Bounce: how many child orbs each bounce throws off. 0 = the puck stays a
+    // single puck (Pinball). >0 = it comes apart on every impact, so a single
+    // Chaos Orb fills the screen with ricocheting fragments (Chaos Orb).
+    int bounceSplits = 0;
+
+    // Wave (Sunder): a crescent that LEAVES the player and travels, unlike a
+    // nova which stays centred on the player and only grows. Damages each
+    // enemy once, and shoves it along the wave's direction of travel.
+    float waveSpeed = 6.0F;
+    float waveRange = 7.0F;
+    float waveWidth = 2.2F;
+    float waveKnockback = 4.0F;
+    float waveDamageMul = 0.8F;
+    // How many arcs a single shot throws, each rotated by waveArcStep. 1 = one
+    // crescent (a plain wave). >1 = the tide comes around you (Tidewhip).
+    int waveCount = 1;
+    float waveArcStep = 0.0F;
+    // How far the crescent's horns open, in radians. Both wave weapons are the
+    // same entity; this is the field that makes the Sundering Core read as a
+    // wide slow wall and the Tidal Lash as a narrow fast rake, and it is drawn
+    // (see the wave block in render()) rather than used for the hit box, which
+    // stays a symmetric band behind the leading edge.
+    float waveSpread = 0.9F;
+    // > 0 makes the arcs HERD their catch across the fan toward the next arc
+    // instead of shoving it down their own heading. 0 is the plain shove, which
+    // is the Sundering Core; the Tidal Lash is the one that hands its catch on.
+    float waveHookPull = 0.0F;
+    // Still-maturing bits of a multi-arc shot, so a 3-arc whip spreads over a
+    // beat instead of landing as one flat wall.
+    int waveBurstLeft = 0;
+    float waveBurstTimer = 0.0F;
+    float waveBurstAngle = 0.0F;
 
     // Nova (evolution)
     float novaMaxRadius = 4.0F;
     float novaExpandSpeed = 3.0F;
     float novaDamagePerTick = 25.0F;
     float novaTickRate = 0.15F;
+    // The contracting ring. Void Nova and Shock Core were both "a nova", so one
+    // was a strictly bigger version of the other. A contracting ring is cast at
+    // full radius, rushes the player, drags what it passes toward the centre, and
+    // detonates on arrival -- the inverse of the Shock Core, which is a wall
+    // expanding outward and shoving the horde into open ground.
+    bool novaContract = false;
+    float novaPull = 0.0F;
+    float novaBurstDamage = 0.0F;
+    // Discharge: a SECOND ring cast this many seconds after the first. The card's
+    // rule is that a pulse is now a double, not that the pulse is bigger -- the
+    // second ring lands after the first has thinned the pack, which is the whole
+    // reason to want it. 0 = one ring only.
+    float novaEcho = 0.0F;
+    int novaEchoesLeft = 0;
+    float novaEchoTimer = 0.0F;
     float novaRadius = 0.0F;       // current radius
     float novaTimer = 0.0F;        // tick timer
     bool novaActive = false;       // whether nova is expanding
@@ -778,6 +1233,10 @@ private:
     float cdBonus = 0.0F;
     // Sweep: the arc is centered this far in front of the player (scythe).
     float sweepLead = 0.0F;
+    // A hooked whip drags its catch in rather than shoving it out. Off by
+    // default, and only the two whip cards turn it on, so the Soul Scythe keeps
+    // being the one weapon whose knockback circle works exactly as its name says.
+    bool sweepHook = false;
     // Weapon-unique modifiers.
     float uniqueHeal = 0.0F; // scythe "Reaper's Harvest": heal HP per kill
     int beamSplit = 0;       // beam "Prism Lance": beam count multiplier
@@ -789,8 +1248,21 @@ private:
     float vortexOrbit = 2.6F;    // distance of the zone from the player
     float vortexOrbitSpeed = 1.8F;
     float vortexTickRate = 0.1F;
+    // How long a well has to swallow before it collapses. This is the difference
+    // between the two vortex weapons. The Void Gyre never collapses: it is a
+    // patient, permanent drag you can build a position around, and the damage is
+    // a steady drip. A collapsing well hoards, gathers, and pays out in one
+    // violent moment -- lumpier damage, but a threat you can read on a clock.
+    float vortexCollapseAt = 0.0F;
+    float vortexBurstDamage = 0.0F;
+    float vortexBurstRadius = 0.0F;
 
-    // Prism (evolution): one locked beam per projectile, up to a hard cap.
+    // Inferno: when true, the reap and the burning ground land on a planted
+  // Grave Bell instead of on the nearest enemy (Siege Mortar). This is the
+  // whole point of pairing a mortar with a lure: gather, then cook.
+  bool infernoBindsToLure = false;
+
+  // Prism (evolution): one locked beam per projectile, up to a hard cap.
     float prismRange = 9.0F;
     float prismWidth = 0.45F;
     int prismMaxTargets = 6;
@@ -836,6 +1308,21 @@ private:
   // when the test sandbox's difficulty clock is fast-forwarded.
   void fixedStep();
   void spawnWave();
+  // Spawns one travelling crescent (the Wave attack type, see components.hpp).
+  void spawnWaveCrescent(const WeaponSlot& w, float angle, float damage, int pierce);
+  // One nova ring. Every ring in the game is spawned here, which is what keeps
+  // the expanding Shock Core and the contracting Void Nova from drifting apart.
+  void spawnNovaRing(float x, float y, const WeaponSlot& w, int pierce);
+  // Spawns one chain bolt. `depth` > 0 means a fork thrown off a parent.
+  void spawnChainBolt(float x, float y, const WeaponSlot& w,
+                      std::uint32_t fromTarget);
+  // Throws the flat shard fan a shattering bolt pays out on its first hit.
+  void spawnChainShatter(const ChainLightning& cl, float x, float y, float heading,
+                         float damage);
+  // Throws the radial ice burst a frozen corpse pays out when it dies. Separate
+  // from the bolt shatter because it is a ring rather than a directed fan, and
+  // because it is the ice weapon's payoff rather than a chain weapon's trick.
+  void spawnShatterBurst(float x, float y, float damage);
   void processPendingSpawns();
   void fireWeapons();
   void movePlayer();
@@ -852,6 +1339,7 @@ private:
   void updateZoneEffects();
   void updateLures();
   void updateChainLightning();
+  void updateWaveEffects();
   void updateNovaRing();
   void updateEnemyShots();
   void updatePickups();
@@ -892,6 +1380,9 @@ private:
   // exempt from overlord retirement so the spawn pool never runs dry.
   void refreshRecentTypes();
   void applyEnemyDamage(entt::entity e, float dmg);
+  // Chill/status helper. `mul` < 1 is the speed the enemy is pinned to; the
+  // strongest chill in play wins and any chill refreshes the timer.
+  void applyChill(entt::entity e, float mul, float time);
   void killEnemy(entt::entity e);
   void chainBolt(float x, float y, float dmg);
   // Lifesteal now rolls on a KILL (not per hit) so a many-hit weapon cannot
@@ -913,6 +1404,11 @@ private:
   void damagePlayerDirect(float amount); // no thorns trigger (DoT auras)
   void spawnParticles(float x, float y, core::render::Color c, int count, float speed);
   void renderPlayerStats(core::render::Batcher& b, float px, float py);
+  // The level-up card's title, shrunk to the card rather than sliced by the next
+  // card's panel.
+  void drawCardName(core::render::Batcher& b, std::string_view name, float x, float y,
+                    float maxWidth, const core::render::Color& accent,
+                    const core::render::Color& fallback);
   // Main menu overlay: title, the five rows (START / SKIN / OUTLINE / MANUAL /
   // RESET PROGRESS / QUIT) and the live skin+outline preview.
   void renderMainMenu(core::render::Batcher& b, float px, float py);
@@ -1186,6 +1682,9 @@ private:
   bool quitRequested_ = false;
   // Armed by the first confirm on RESET PROGRESS; the wipe needs a second one.
   bool resetArmed_ = false;
+  // "Q was pressed once on the pause screen" — the first press arms the abandon,
+  // the second performs it. See the quitRun branch in advance().
+  bool quitArmed_ = false;
   // In-game manual overlay.
   bool manualOpen_ = false;
   std::size_t manualPage_ = 0;

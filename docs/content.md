@@ -10,8 +10,8 @@ Regenerate with:
 python3 tools/gendocs.py
 ```
 
-**Totals:** 32 weapons (18 base +
-10 evolutions +
+**Totals:** 33 weapons (18 base +
+11 evolutions +
 4 super evolutions),
 18 enemies, 11 in-game manual pages.
 
@@ -19,21 +19,21 @@ python3 tools/gendocs.py
 
 | Name | ID | Attack | Damage | Cooldown (s) | Projectiles | Proj. speed | Pierce | Spread (rad) | Starter | Traits | Description |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| Arcane Wand | wand | projectile | 8 | 0.5 | 1 | 14 | 0 | 0.1 | yes |  | Reliable magic bolts. The balanced baseline. |
+| Arcane Wand | wand | projectile | 9 | 0.34 | 1 | 20 | 0 | 0.1 | yes |  | Quick magic bolts. The baseline done properly: fast, flat, always hits. |
 | Throwing Dagger | dagger | orbit | 5 | 0.4 | 3 | 0 | 0 | 0 | yes |  | Orbiting knives that carve up anything close. |
 | Heavy Crossbow | crossbow | projectile | 20 | 2.2 | 1 | 22 | 4 | 0.18 | yes | homing | Slow, homing piercing bolt that punches through crowds. |
-| Ember Sprayer | flame | cone | 4 | 0.35 | 1 | 0 | 0 | 0 |  |  | Cone of fire — instant damage in a wide arc. |
+| Ember Sprayer | flame | cone | 4 | 0.35 | 1 | 0 | 0 | 0 |  |  | Cone of fire - instant damage in a wide arc. |
 | Runic Hammer | hammer | bomb | 45 | 1.8 | 1 | 8 | 0 | 0.3 |  |  | Arcing bomb with massive explosion and knockback. |
-| Storm Shuriken | shuriken | boomerang | 8 | 0.6 | 2 | 16 | 1 | 0.2 |  |  | Boomerang blades — hit going out AND coming back. |
+| Storm Shuriken | shuriken | boomerang | 8 | 0.6 | 2 | 16 | 1 | 0.2 |  |  | Boomerang blades - hit going out AND coming back. |
 | Void Orb | orb | bounce | 35 | 1.5 | 1 | 7 | 5 | 0 |  | eternal | One eternal orb that hunts forever. Projectiles grow it, not multiply. |
 | Soul Scythe | scythe | sweep | 55 | 1.3 | 1 | 0 | 0 | 0 |  |  | Reaps a full circle of death around its nearest prey. |
 | Solar Lance | beam | beam | 130 | 1.6 | 1 | 0 | 0 | 0 |  |  | Instant hitscan beam. Slow to swing, but it deletes a whole line at once. |
 | Rail Rifle | railgun | projectile | 78 | 1.8 | 1 | 40 | 6 | 0 |  |  | One hypervelocity slug. Slow to load, punches through an entire rank. |
-| Frost Shards | shard | projectile | 12 | 0.45 | 4 | 20 | 0 | 0.34 |  |  | A tight volley of fast shards that shreds whatever walks into it. |
-| Siege Mortar | mortar | bomb | 62 | 2.4 | 1 | 9 | 0 | 0.22 |  | fused | Lobs a shell over the crowd. It ignores whatever it flies over and cooks where it lands. |
+| Frost Shards | shard | projectile | 12 | 0.45 | 4 | 20 | 0 | 0.34 |  |  | A tight volley of fast shards that shreds and chills whatever walks into it. |
+| Siege Mortar | mortar | bomb | 62 | 2.4 | 1 | 9 | 0 | 0.22 |  | fused | Fires over the crowd. The shell sails past the front rank on purpose and cooks whatever is behind it. |
 | Pinball Puck | pinball | bounce | 20 | 1.6 | 1 | 13 | 2 | 0 |  |  | A white-hot puck that keeps ricocheting between bodies until it burns out. |
 | Grave Bell | lure | lure | 0 | 2.6 | 1 | 0 | 0 | 0 |  | taunt | Plants a bell that hauls the horde into its core. It fights from where it stands, not from where you stand. |
-| Jackhammer Drill | drill | cone | 7 | 0.55 | 1 | 0 | 0 | 0 |  |  | A narrow, extremely fast cone of steel. Point blank, nothing survives it. |
+| Jackhammer Drill | drill | cone | 7 | 0.55 | 1 | 0 | 0 | 0 |  |  | Bites one target and chews through it. The deeper it stays buried, the harder it bites - useless on a swarm, lethal on a heavy. |
 | Shock Core | shockcore | nova | 20 | 2.2 | 1 | 0 | 0 | 0 |  |  | A ring of pressure that blows itself outward from where you are standing. |
 | Barbed Whip | whip | sweep | 26 | 0.7 | 1 | 0 | 0 | 0 |  | lead-lash | Lashes the arc in front of you, whether or not anything is standing in it. |
 | Tesla Coil | tesla | chain | 11 | 0.65 | 1 | 0 | 0 | 0 |  |  | Lightning that keeps jumping. One target is never enough. |
@@ -42,25 +42,26 @@ python3 tools/gendocs.py
 
 | Name | ID | Attack | Requires | Damage | Cooldown (s) | Projectiles | Pierce | Area | Traits | Description |
 |---|---|---|---|---|---|---|---|---|---|---|
-| Storm Caller | storm | chain | wand + crossbow | 15 | 0.45 | 1 | 0 | 0 |  | Wand + Crossbow. Lightning chains between enemies. |
-| Void Nova | nova | nova | orb + hammer | 40 | 1.8 | 1 | 0 | 0 |  | Orb + Hammer. Expanding ring of destruction. |
+| Storm Caller | storm | projectile | wand + crossbow | 15 | 0.6 | 1 | 4 | 0 |  | Wand + Crossbow. The wand's bolt keeps the crossbow's punch: it drives into a body and bends onto the next one, so it never leaves the pack. |
+| Void Nova | nova | nova | orb + hammer | 40 | 1.8 | 1 | 0 | 0 |  | Orb + Hammer. A ring cast wide that rushes back in, dragging the horde to a knot, then detonates on top of them. |
 | Inferno | inferno | inferno | flame + scythe | 60 | 1.6 | 1 | 0 | 0 |  | Sprayer + Scythe. Reaps a circle and leaves burning ground. |
-| Pulsar | pulsar | pulsar | beam + shuriken | 12 | 0.9 | 1 | 2 | 0 |  | Shuriken + Lance. Light-chakram dragging a burning laser trail. |
+| Pulsar | pulsar | pulsar | beam + shuriken | 12 | 0.9 | 1 | 5 | 0 |  | Shuriken + Lance. A light-chakram that burns the WHOLE LINE it flies, out and back, not just the blade tip - it carves corridors. |
 | Radiant Halo | halo | halo | dagger + beam | 40 | 1 | 2 | 4 | 0 |  | Dagger + Lance. Blades of light orbit you, reaping all they touch. |
-| Blizzard Rail | blizzard | chain | railgun + shard | 22 | 0.5 | 1 | 0 | 0 |  | Rail Rifle + Frost Shards. One slug comes apart mid-flight into a storm of shards that keeps jumping. |
-| Ashfall | siege | inferno | mortar + lure | 72 | 1.8 | 1 | 0 | 0 |  | Siege Mortar + Grave Bell. The bell gathers the horde and the shells land inside the crowd it gathered. |
-| Chaos Sphere | chaos | bounce | pinball + orb | 30 | 1.6 | 1 | 8 | 0 |  | Pinball + Void Orb. A screaming orb that never stops bouncing, until it wears itself out. |
-| Sundering Core | sunder | nova | shockcore + scythe | 55 | 1.6 | 1 | 0 | 0 |  | Shock Core + Soul Scythe. A pressure ring wide enough to reach the far side of a horde, reaping everyone it crosses. |
-| Tidal Lash | tidewhip | sweep | whip + shuriken | 34 | 0.55 | 1 | 0 | 0 | lead-lash | Barbed Whip + Storm Shuriken. A wide, fast lash that flings everything it touches back into the crowd. |
+| Blizzard Rail | blizzard | chain | railgun + shard | 22 | 0.5 | 1 | 0 | 0 |  | Rail Rifle + Frost Shards. The slug shatters on contact into a fan of shards, each one hopping on its own. |
+| Ashfall | siege | inferno | mortar + lure | 72 | 1.8 | 1 | 0 | 0 |  | Siege Mortar + Grave Bell. The barrage falls on the BELL, so the horde it gathered is the horde it cooks. |
+| Chaos Sphere | chaos | bounce | pinball + orb | 30 | 1.6 | 1 | 8 | 0 |  | Pinball + Void Orb. It comes apart: each impact throws fragments, and each fragment breaks again. |
+| Sundering Core | sunder | wave | shockcore + scythe | 55 | 1.6 | 1 | 0 | 0 |  | Shock Core + Soul Scythe. One huge crescent tears out of you and keeps going, shoving the whole front rank downrange. |
+| Tidal Lash | tidewhip | wave | whip + shuriken | 34 | 0.55 | 1 | 0 | 0 | lead-lash | Barbed Whip + Storm Shuriken. Three narrow hooks come around in a fan, each one dragging its catch into the next. |
+| Hoarfrost Wake | rimewake | projectile | shard + orb | 9 | 0.55 | 3 | 3 | 0 |  | Frost Shards + Void Orb. The shards drag a freezing, grinding bubble behind them - everything the volley PASSES walks in slow and comes apart, hit or not. |
 
 ### Super evolutions (A + B + C)
 
 | Name | ID | Attack | Requires | Damage | Cooldown (s) | Projectiles | Pierce | Area | Traits | Description |
 |---|---|---|---|---|---|---|---|---|---|---|
 | Void Gyre | vortex | vortex | dagger + scythe + orb | 40 | 1 | 3 | 4 | 0 |  | Dagger + Scythe + Void Orb. Suction zones circle you and drag prey into their cores. More projectiles = more AND bigger zones (up to a cap). |
-| Prism Array | prism | prism | flame + beam + crossbow | 42 | 1.05 | 4 | 2 | 0 | ricochet | Sprayer + Lance + Crossbow. One locked beam per projectile, each on a different enemy — a crowd gets shredded from several angles at once. |
-| Seraph Array | seraph | halo | drill + crossbow + whip | 60 | 0.9 | 3 | 6 | 0 |  | Drill + Crossbow + Barbed Whip. Heavy wings of light walk a slow circle around you, cutting and shoving everything they cross. |
-| Event Horizon | eventhorizon | vortex | railgun + shockcore + flame | 48 | 1 | 4 | 6 | 0 |  | Rail Rifle + Shock Core + Ember Sprayer. Four gravity wells circle you, dragging the horde in and grinding it against the cores. |
+| Prism Array | prism | prism | flame + beam + crossbow | 42 | 1.05 | 4 | 2 | 0 | ricochet | Sprayer + Lance + Crossbow. One locked beam per projectile, each on a different enemy - a crowd gets shredded from several angles at once. |
+| Seraph Array | seraph | halo | drill + crossbow + whip | 60 | 0.9 | 3 | 6 | 0 |  | Drill + Crossbow + Barbed Whip. Heavy wings of light walk a slow circle around you - with a hole at your feet. They cut what they cross, not what hugs you. |
+| Event Horizon | eventhorizon | vortex | railgun + shockcore + flame | 48 | 1 | 4 | 6 | 0 |  | Rail Rifle + Shock Core + Ember Sprayer. Four wells circle you swallowing the horde, then COLLAPSE - each implosion is a blast and the well reopens somewhere else. |
 
 ---
 
@@ -68,24 +69,24 @@ python3 tools/gendocs.py
 
 | Name | ID | HP | Speed | Touch dmg | Radius | XP | Unlocks at (s) | Weight | Shape |
 |---|---|---|---|---|---|---|---|---|---|
-| Bat | bat | 8 | 4.2 | 5 | 0.3 | 1 | 0 | 6 | circle |
+| Bat | bat | 8 | 2.4 | 5 | 0.3 | 1 | 0 | 6 | circle |
 | Slime | slime | 16 | 1.5 | 6 | 0.4 | 1 | 8 | 5 | circle |
-| Spider | spider | 10 | 5 | 6 | 0.28 | 2 | 20 | 4 | rect |
+| Spider | spider | 10 | 2.9 | 6 | 0.28 | 2 | 240 | 4 | rect |
 | Zombie | zombie | 34 | 2.1 | 11 | 0.38 | 2 | 25 | 4 | rect |
-| Imp | imp | 14 | 5.8 | 8 | 0.26 | 2 | 35 | 4 | circle |
+| Imp | imp | 14 | 3.4 | 8 | 0.26 | 2 | 240 | 4 | circle |
 | Skeleton | skeleton | 28 | 3.4 | 9 | 0.34 | 3 | 45 | 4 | rect |
 | Chest Mimic | mimic | 70 | 3 | 14 | 0.42 | 5 | 60 | 3 | rect |
-| Wraith | wraith | 18 | 5.6 | 9 | 0.3 | 3 | 70 | 3 | circle |
+| Wraith | wraith | 18 | 3.2 | 9 | 0.3 | 3 | 240 | 3 | circle |
 | Ghost | ghost | 45 | 3 | 12 | 0.36 | 4 | 85 | 3 | circle |
-| Harpy | harpy | 55 | 5 | 14 | 0.34 | 5 | 100 | 3 | circle |
-| Charger | charger | 60 | 6.2 | 16 | 0.44 | 5 | 105 | 3 | rect |
+| Harpy | harpy | 55 | 2.9 | 14 | 0.34 | 5 | 300 | 3 | circle |
+| Charger | charger | 60 | 3.6 | 16 | 0.44 | 5 | 300 | 3 | rect |
 | Brute | brute | 140 | 1.6 | 22 | 0.62 | 8 | 120 | 2 | circle |
-| Stalker | stalker | 90 | 4.8 | 15 | 0.4 | 7 | 135 | 3 | circle |
+| Stalker | stalker | 90 | 2.8 | 15 | 0.4 | 7 | 300 | 3 | circle |
 | Abomination | abomination | 200 | 2.6 | 20 | 0.55 | 10 | 150 | 2 | circle |
 | Golem | golem | 320 | 1.2 | 30 | 0.75 | 14 | 160 | 2 | rect |
 | Juggernaut | juggernaut | 420 | 1.8 | 34 | 0.8 | 18 | 175 | 2 | rect |
-| Oracle | oracle | 160 | 4.4 | 24 | 0.46 | 14 | 190 | 2 | circle |
-| Reaper | reaper | 240 | 5.4 | 26 | 0.5 | 16 | 200 | 2 | circle |
+| Oracle | oracle | 160 | 2.6 | 24 | 0.46 | 14 | 300 | 2 | circle |
+| Reaper | reaper | 240 | 3.1 | 26 | 0.5 | 16 | 300 | 2 | circle |
 
 ---
 
@@ -230,8 +231,8 @@ python3 tools/gendocs.py
 | Echo Detonation | uw_orb_echo | w_unique_area | 1.5 | 1 | orb |  | Void Orb: every bounce splashes half damage around the hit |
 | Reaper's Harvest | uw_scythe_harvest | w_unique_harvest | 3 | 1 | scythe |  | Soul Scythe: sweeps restore 3 HP per kill |
 | Bloodthirst | uw_bloodthirst | momentum_bloodthirst | 1 | 1 |  |  | Kill chain: twice the stacks, twice the length, 3s longer before it goes cold |
-| Prism Lance | uw_beam_prism | w_unique_prism | 3 | 1 | beam |  | Solar Lance: three beams at once — forward, left and right |
-| Thunderlord | uw_storm_thunderlord | w_unique_thunderlord | 4 | 1 | storm |  | Storm Caller: +4 chain jumps and no damage decay |
+| Prism Lance | uw_beam_prism | w_unique_prism | 3 | 1 | beam |  | Solar Lance: three beams at once - forward, left and right |
+| Thunderlord | uw_storm_thunderlord | w_unique_reaim | 4 | 1 | storm |  | Storm Caller: bolts pierce 2 further, see further for the next body, and corner harder |
 | Supernova | uw_nova_supernova | w_unique_supernova | 1 | 1 | nova |  | Void Nova: ring expands faster, wider, and hits harder |
 | Everflame | uw_inferno_everflame | w_unique_everflame | 1 | 1 | inferno |  | Inferno: wider reap, burning ground lasts longer and burns harder |
 | Arc Saw | uw_pulsar_arcsaw | w_unique_arcsaw | 1 | 1 | pulsar |  | Pulsar: the laser trail is 80% wider and deals 35% more damage |
@@ -241,12 +242,12 @@ python3 tools/gendocs.py
 | White Squall | uw_blizzard_storm | w_unique_thunderlord | 4 | 1 | blizzard |  | Blizzard Rail: +4 jumps and no damage decay |
 | Molten Crater | uw_siege_molten | w_unique_molten | 1 | 1 | siege |  | Ashfall: the burning ground is 80% hotter, 25% wider and lasts much longer |
 | Detonation Chain | uw_chaos_echo | w_unique_area | 1.6 | 1 | chaos |  | Chaos Sphere: every bounce splashes area damage around the hit |
-| Event Collapse | uw_sunder_supernova | w_unique_supernova | 1 | 1 | sunder |  | Sundering Core: ring expands faster, wider, and hits harder |
-| Undertow | uw_tidewhip_lash | w_unique_lash | 1 | 1 | tidewhip |  | Tidal Lash: a 35% wider lash that flings 40% harder and reaches further |
+| Fault Line | uw_sunder_faultline | w_unique_faultline | 1 | 1 | sunder |  | Sundering Core: the crescent widens into a wall, reaches further, and hits harder |
+| Undertow | uw_tidewhip_lash | w_unique_lash | 1 | 1 | tidewhip |  | Tidal Lash: a fourth arc, thrown wider, herding its catch harder into the next |
 | Corona Mantle | uw_halo_corona | w_unique_corona | 1 | 1 | halo |  | Radiant Halo: beams shove for 6, 40% wider, 15% longer, +20% damage |
 | Black Gyre | uw_vortex_gyre | w_unique_gyre | 1 | 1 | vortex |  | Void Gyre: 45% harder pull, 30% further reach, fatter core, ticks faster |
 | Total Internal Reflection | uw_prism_refract | w_unique_refract | 1 | 1 | prism |  | Prism Array: one more independent beam, 40% longer ricochet, +15% range |
-| Rime Lances | uw_shard_rime | w_unique_rime | 1 | 1 | shard |  | Frost Shards: +4 pierce and 40% longer flight, at 80% damage each |
+| Rime Lances | uw_shard_rime | w_unique_rime | 1 | 1 | shard |  | Frost Shards: lances freeze what they pass through, +4 pierce, 40% longer flight |
 | Siege Doctrine | uw_mortar_doctrine | w_unique_siege_doctrine | 1 | 1 | mortar |  | Siege Mortar: a 3-shell salvo on a double fuse, 35% wider blasts, 20% slower |
 | Silver Skewer | uw_pinball_skewer | w_unique_skewer | 1 | 1 | pinball |  | Pinball Puck: +10 bounces, no damage decay, 30% longer reach per hop |
 | Overdrive Bore | uw_drill_bore | w_unique_bore | 1 | 1 | drill |  | Jackhammer Drill: 60% wider bite, 40% longer reach, strikes far faster |
@@ -260,6 +261,7 @@ python3 tools/gendocs.py
 | Phase Memory | u_ability_phase | ability_phase | 1 | 2 |  |  | Phase Dash: +1.2 distance and +0.2s of invulnerability on arrival |
 | Deep Freeze | u_ability_stasis | ability_stasis | 1 | 2 |  |  | Stasis: +1s of duration, and the slowed world drops another 0.08x |
 | Cascade | u_ability_echo | ability_echo | 0.4 | 1 |  |  | Every ability also fires a 40% Overload at the same spot |
+| Deep Freeze | uw_rimewake_deepfreeze | w_unique_deepfreeze | 1 | 1 | rimewake |  | Hoarfrost Wake: a wider second corona sweeps the lane, chill on hit deepens, 20% more shards |
 
 ### Milestones (every power-of-two level from 4 on)
 
@@ -284,7 +286,7 @@ python3 tools/gendocs.py
 | Starlight Ward | m128_starlight | shield_add | 500 | 1 |  | 128 | MILESTONE: +500 regenerating shield |
 | Overdrive | m128_overdrive | damage_mul | 2 | 1 |  | 128 | MILESTONE: +200% damage |
 
-**Totals:** 178 upgrades (109 normal, 51 unique, 18 milestones).
+**Totals:** 179 upgrades (109 normal, 52 unique, 18 milestones).
 
 
 ---

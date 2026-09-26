@@ -24,13 +24,18 @@
 [[weapon]]
 id = "wand"
 name = "Arcane Wand"
-desc = "Reliable magic bolts. The balanced baseline."
+desc = "Quick magic bolts. The baseline done properly: fast, flat, always hits."
 attack_type = "projectile"
-damage = 8.0
-cooldown = 0.50
+damage = 9.0
+# The Crossbow was strictly better at everything that mattered: 20 damage that
+# pierces four bodies, and homing so it never misses. A baseline the player can
+# see through is not a baseline, it is a trap. The Wand's answer is rate and
+# range rather than a bigger single hit, which is the one axis the Crossbow
+# cannot compete on.
+cooldown = 0.34
 projectiles = 1
-proj_speed = 14.0
-proj_life = 1.5
+proj_speed = 20.0
+proj_life = 1.2
 pierce = 0
 spread = 0.10
 proj_color = [1.0, 0.95, 0.55, 1.0]
@@ -73,7 +78,7 @@ homing = true
 [[weapon]]
 id = "flame"
 name = "Ember Sprayer"
-desc = "Cone of fire — instant damage in a wide arc."
+desc = "Cone of fire - instant damage in a wide arc."
 attack_type = "cone"
 damage = 4.0
 cooldown = 0.35
@@ -104,11 +109,18 @@ bomb_arc_height = 2.5
 bomb_explode_radius = 2.0
 bomb_knockback = 5.0
 bomb_fuse = 0.0
+# The shell lands ON whatever is nearest your aim line, and it has no fuse, so
+# it is a lob you throw at a thing rather than a shell you throw at a distance.
+# This is the Runic Hammer's whole identity and it used to be missing: the arc
+# alone decided where the shell came down, so "explodes on impact" was really
+# "explodes six units out, wherever that happens to be", and the Siege Mortar --
+# the same shell with `bomb_ahead` -- was a different weapon only on paper.
+bomb_on_target = true
 
 [[weapon]]
 id = "shuriken"
 name = "Storm Shuriken"
-desc = "Boomerang blades — hit going out AND coming back."
+desc = "Boomerang blades - hit going out AND coming back."
 attack_type = "boomerang"
 damage = 8.0
 cooldown = 0.60
@@ -197,7 +209,7 @@ proj_color = [1.0, 0.95, 0.7, 1.0]
 [[weapon]]
 id = "shard"
 name = "Frost Shards"
-desc = "A tight volley of fast shards that shreds whatever walks into it."
+desc = "A tight volley of fast shards that shreds and chills whatever walks into it."
 attack_type = "projectile"
 damage = 12.0
 cooldown = 0.45
@@ -207,11 +219,17 @@ proj_life = 1.2
 pierce = 0
 spread = 0.34
 proj_color = [0.70, 0.92, 1.0, 1.0]
+# The ice is ice. A 30% chill for 1.2s is barely a statline on its own; what it
+# buys is that the volley slows a whole group at once, so the shards land on
+# enemies that stayed in the pack instead of on the one that ran to the front.
+# Rime Lances deepens this to a real freeze.
+chill_mul = 0.70
+chill_time = 1.2
 
 [[weapon]]
 id = "mortar"
 name = "Siege Mortar"
-desc = "Lobs a shell over the crowd. It ignores whatever it flies over and cooks where it lands."
+desc = "Fires over the crowd. The shell sails past the front rank on purpose and cooks whatever is behind it."
 attack_type = "bomb"
 damage = 62.0
 cooldown = 2.40
@@ -227,6 +245,12 @@ bomb_explode_radius = 2.6
 bomb_knockback = 6.0
 # A fuse means no contact detonation: the shell arcs clean over the first rank.
 bomb_fuse = 0.35
+# The whole difference from the Runic Hammer, which is otherwise the same arcing
+# shell with a longer fuse and a wider blast: the shell finds whoever is nearest
+# its aim line and lands this far PAST them. A hammer blows up what you were
+# aiming at; a mortar fires THROUGH the thing in front of you. Without this the
+# two were the same weapon with two sets of numbers.
+bomb_ahead = 4.5
 
 [[weapon]]
 id = "pinball"
@@ -237,7 +261,10 @@ damage = 20.0
 cooldown = 1.60
 projectiles = 1
 proj_speed = 13.0
-proj_life = 7.0
+# Short life on purpose: a puck that has run out of things to hit should be
+# gone, not coasting. It also curves back toward the fight when nothing is in
+# ricochet range, so a short life costs it very little.
+proj_life = 3.5
 pierce = 2
 spread = 0.0
 proj_color = [0.95, 0.85, 0.5, 1.0]
@@ -270,7 +297,7 @@ lure_max_beacons = 2
 [[weapon]]
 id = "drill"
 name = "Jackhammer Drill"
-desc = "A narrow, extremely fast cone of steel. Point blank, nothing survives it."
+desc = "Bites one target and chews through it. The deeper it stays buried, the harder it bites - useless on a swarm, lethal on a heavy."
 attack_type = "cone"
 damage = 7.0
 cooldown = 0.55
@@ -283,6 +310,13 @@ proj_color = [0.88, 0.92, 1.0, 1.0]
 cone_angle = 0.45
 cone_range = 3.4
 cone_tick_rate = 0.05
+# It used to be "a cone", which is what the Ember Sprayer is - a narrower, longer,
+# faster-ticking one. That is the same weapon with different numbers. The bite is
+# the difference: the bit latches the nearest body in the arc and chews ONLY that
+# one, ramping to 3x over about a third of a second. The Sprayer washes a crowd
+# evenly and so is better at trash; the drill commits and gets through armour.
+cone_bite = 0.28
+cone_bite_max = 3.0
 
 [[weapon]]
 id = "shockcore"
@@ -343,25 +377,36 @@ chain_damage_mul = 0.6
 [[weapon]]
 id = "storm"
 name = "Storm Caller"
-desc = "Wand + Crossbow. Lightning chains between enemies."
-attack_type = "chain"
+desc = "Wand + Crossbow. The wand's bolt keeps the crossbow's punch: it drives into a body and bends onto the next one, so it never leaves the pack."
+attack_type = "projectile"
 damage = 15.0
-cooldown = 0.45
+cooldown = 0.60
 projectiles = 1
-proj_speed = 0.0
-proj_life = 0.0
-pierce = 0
+proj_speed = 24.0
+proj_life = 1.4
+# The crossbow's punch-through, spent on steering instead of reach. This is the
+# whole merge: the Crossbow pierces four bodies in a straight line and the last
+# one is the far end of the crowd, while the Wand always hits what it is aimed
+# at. A bolt that spends the same budget on DIRECTION gets both at once -- it
+# keeps the punch, and it keeps hitting as long as there is somebody left to
+# bend onto. The cost is the honest one: nothing here reaches further than a
+# straight bolt would, so on a lone target this is the worse weapon, and the
+# payoff only exists where the pack does.
+pierce = 4
 spread = 0.0
 proj_color = [0.55, 1.0, 1.0, 1.0]
 requires = ["wand", "crossbow"]
-chain_jump_range = 3.0
-chain_max_jumps = 5
-chain_damage_mul = 0.7
+# How far it can see for the next body from where it just landed, and how hard it
+# can bend in a single step. The turn is a LIMIT, not a snap to the new heading:
+# a perfect seeker would make the crossbow half of the pairing decorative, and a
+# body already peeling away can still get behind something.
+reaim_range = 4.2
+reaim_turn = 0.22
 
 [[weapon]]
 id = "nova"
 name = "Void Nova"
-desc = "Orb + Hammer. Expanding ring of destruction."
+desc = "Orb + Hammer. A ring cast wide that rushes back in, dragging the horde to a knot, then detonates on top of them."
 attack_type = "nova"
 damage = 40.0
 cooldown = 1.80
@@ -376,6 +421,14 @@ nova_max_radius = 5.0
 nova_expand_speed = 4.0
 nova_damage_per_tick = 35.0
 nova_tick_rate = 0.12
+# The Shock Core is a wall going OUT, shoving the crowd into open ground. This is
+# the exact inverse: cast at full radius, drag everything inward, and go off at
+# the centre. Without it the two were the same nova with a bigger number on it,
+# which is precisely what Void Nova was. The orb half of the pairing is the drag
+# and the hammer half is the burst.
+nova_contract = true
+nova_pull = 7.0
+nova_burst_damage = 90.0
 
 [[weapon]]
 id = "inferno"
@@ -401,20 +454,31 @@ zone_duration = 2.5
 [[weapon]]
 id = "pulsar"
 name = "Pulsar"
-desc = "Shuriken + Lance. Light-chakram dragging a burning laser trail."
+desc = "Shuriken + Lance. A light-chakram that burns the WHOLE LINE it flies, out and back, not just the blade tip - it carves corridors."
 attack_type = "pulsar"
 damage = 12.0
 cooldown = 0.90
 projectiles = 1
 proj_speed = 20.0
 proj_life = 2.0
-pierce = 2
+# The blade is a light chakram, not a throwing star: it goes THROUGH a rank rather
+# than stopping in it. This is the answer to the obvious question about this
+# weapon -- no, the point is not infinite pierce. The point is the trail (below),
+# and the blade's own pierce is only high enough that the chakram never gets
+# bogged down before its trail has done the work.
+pierce = 5
 spread = 0.12
 proj_color = [0.55, 1.0, 1.0, 1.0]
 requires = ["beam", "shuriken"]
 boomerang_range = 6.5
 boomerang_return_speed = 2.4
-beam_width = 0.5
+# Wide on purpose. The trail covers the blade's whole remembered path, so this is
+# literally the width of the corridor the weapon burns -- at 0.5 the corridor was
+# narrower than the blade's own reach and hit exactly what the blade already hit,
+# which is why the weapon looked like a prettier shuriken and not like anything.
+# 1.3 puts the scar's edge a clear half-unit outside anything the blade can touch
+# on its own, so the trail is visibly a thing that reaches further than the blade.
+beam_width = 1.3
 
 [[weapon]]
 id = "halo"
@@ -437,7 +501,7 @@ beam_width = 0.5
 [[weapon]]
 id = "blizzard"
 name = "Blizzard Rail"
-desc = "Rail Rifle + Frost Shards. One slug comes apart mid-flight into a storm of shards that keeps jumping."
+desc = "Rail Rifle + Frost Shards. The slug shatters on contact into a fan of shards, each one hopping on its own."
 attack_type = "chain"
 damage = 22.0
 cooldown = 0.50
@@ -449,13 +513,19 @@ spread = 0.0
 proj_color = [0.75, 0.95, 1.0, 1.0]
 requires = ["railgun", "shard"]
 chain_jump_range = 3.4
-chain_max_jumps = 7
+# The trunk is deliberately shorter than Storm Caller's, because the shards the
+# trunk throws do the spreading.
+chain_max_jumps = 4
 chain_damage_mul = 0.65
+# Shards thrown off the moment the slug connects. They are plain fast
+# projectiles, not bolts, so they hit in a straight line instead of arcing --
+# that is the read: the slug came apart, and the pieces fly flat.
+chain_shatter = 6
 
 [[weapon]]
 id = "siege"
 name = "Ashfall"
-desc = "Siege Mortar + Grave Bell. The bell gathers the horde and the shells land inside the crowd it gathered."
+desc = "Siege Mortar + Grave Bell. The barrage falls on the BELL, so the horde it gathered is the horde it cooks."
 attack_type = "inferno"
 damage = 72.0
 cooldown = 1.80
@@ -472,31 +542,43 @@ sweep_knockback = 5.0
 zone_radius = 2.4
 zone_dps = 34.0
 zone_duration = 3.0
+# The shells fall on the BELL, not on the nearest enemy. This is the whole
+# pairing: the Grave Bell hauls the horde into a knot and the barrage lands
+# inside that knot. With no bell standing it falls back to a plain reap.
+inferno_binds_to_lure = true
 
 [[weapon]]
 id = "chaos"
 name = "Chaos Sphere"
-desc = "Pinball + Void Orb. A screaming orb that never stops bouncing, until it wears itself out."
+desc = "Pinball + Void Orb. It comes apart: each impact throws fragments, and each fragment breaks again."
 attack_type = "bounce"
 damage = 30.0
 cooldown = 1.60
 projectiles = 1
 proj_speed = 17.0
-proj_life = 12.0
+# 4s, not the 12 this shipped with. A twelve-second root that ricochets off into
+# empty space is a dead projectile the player has to wait out, and the cascade is
+# already bounded by split depth and by a shorter life per generation, so the
+# long root bought nothing but dead air.
+proj_life = 4.0
 pierce = 8
 spread = 0.0
 proj_color = [0.80, 0.50, 1.0, 1.0]
 requires = ["pinball", "orb"]
-bounce_count = 14
+# Lower than the Pinball's own budget on purpose: the fragments are what does
+# the hitting, and the cascade is already bounded by depth (kMaxBounceSplitDepth)
+# and by a shorter life per generation.
+bounce_count = 7
 bounce_range = 3.8
 bounce_damage_mul = 0.9
 bounce_infinite = false
+bounce_splits = 2
 
 [[weapon]]
 id = "sunder"
 name = "Sundering Core"
-desc = "Shock Core + Soul Scythe. A pressure ring wide enough to reach the far side of a horde, reaping everyone it crosses."
-attack_type = "nova"
+desc = "Shock Core + Soul Scythe. One huge crescent tears out of you and keeps going, shoving the whole front rank downrange."
+attack_type = "wave"
 damage = 55.0
 cooldown = 1.60
 projectiles = 1
@@ -506,16 +588,26 @@ pierce = 0
 spread = 0.0
 proj_color = [0.70, 0.92, 1.0, 1.0]
 requires = ["shockcore", "scythe"]
-nova_max_radius = 6.5
-nova_expand_speed = 5.0
-nova_damage_per_tick = 40.0
-nova_tick_rate = 0.12
+# A wave, not a nova: the Shock Core's ring is pinned to the player and only
+# grows, so it hits the same crowd in the same order. This one leaves.
+#
+# And it is the CORRIDOR half of the pair, which is the only honest way for two
+# waves to not be the same weapon: wide horns, slow, deep, heavy, one per shot,
+# and it goes a long way. You line it up and it clears a lane.
+wave_speed = 7.5
+wave_range = 9.0
+wave_width = 3.4
+wave_knockback = 6.0
+wave_damage_mul = 0.85
+wave_count = 1
+wave_arc_step = 0.0
+wave_spread = 1.25
 
 [[weapon]]
 id = "tidewhip"
 name = "Tidal Lash"
-desc = "Barbed Whip + Storm Shuriken. A wide, fast lash that flings everything it touches back into the crowd."
-attack_type = "sweep"
+desc = "Barbed Whip + Storm Shuriken. Three narrow hooks come around in a fan, each one dragging its catch into the next."
+attack_type = "wave"
 damage = 34.0
 cooldown = 0.55
 projectiles = 1
@@ -525,9 +617,21 @@ pierce = 0
 spread = 0.0
 proj_color = [0.60, 0.95, 1.0, 1.0]
 requires = ["whip", "shuriken"]
-sweep_angle = 3.1
-sweep_radius = 3.4
-sweep_knockback = 5.0
+# The COVERAGE half of the pair, and the reason the two waves are not the same
+# weapon. Three arcs 1.1 rad apart, laid down one every kWaveBurstGap rather than
+# all at once -- otherwise this is just a wider slash, which is the whip with a
+# bigger number. Horns are much narrower than the Sundering Core's and it is
+# faster and shorter, so the two read as a hook and a wall rather than as two
+# crescents at different speeds.
+wave_speed = 9.0
+wave_range = 5.5
+wave_width = 2.6
+wave_knockback = 5.0
+wave_damage_mul = 0.7
+wave_count = 3
+wave_arc_step = 1.1
+wave_hook_pull = 0.85
+wave_spread = 0.55
 sweep_lead = 2.2
 
 # --- Super evolutions (A+B+C = super) ----------------------------------------
@@ -561,7 +665,7 @@ vortex_tick_rate = 0.1
 [[weapon]]
 id = "prism"
 name = "Prism Array"
-desc = "Sprayer + Lance + Crossbow. One locked beam per projectile, each on a different enemy — a crowd gets shredded from several angles at once."
+desc = "Sprayer + Lance + Crossbow. One locked beam per projectile, each on a different enemy - a crowd gets shredded from several angles at once."
 attack_type = "prism"
 damage = 42.0
 cooldown = 1.05
@@ -583,7 +687,7 @@ beam_duration = 0.18
 [[weapon]]
 id = "seraph"
 name = "Seraph Array"
-desc = "Drill + Crossbow + Barbed Whip. Heavy wings of light walk a slow circle around you, cutting and shoving everything they cross."
+desc = "Drill + Crossbow + Barbed Whip. Heavy wings of light walk a slow circle around you - with a hole at your feet. They cut what they cross, not what hugs you."
 attack_type = "halo"
 damage = 60.0
 cooldown = 0.90
@@ -598,11 +702,17 @@ orbit_speed = 3.1
 beam_range = 8.0
 beam_width = 0.62
 halo_knockback = 2.4
+# The whole difference from the Radiant Halo, which is otherwise the same weapon
+# with longer arms: these spokes do not start at you. There is a ring of safe
+# ground inside them, so this is a rotating wall you keep things OUT of rather
+# than a guard that keeps them off you. The hole is the price of the reach, and
+# it is why the Seraph is not simply a better halo.
+halo_inner = 2.2
 
 [[weapon]]
 id = "eventhorizon"
 name = "Event Horizon"
-desc = "Rail Rifle + Shock Core + Ember Sprayer. Four gravity wells circle you, dragging the horde in and grinding it against the cores."
+desc = "Rail Rifle + Shock Core + Ember Sprayer. Four wells circle you swallowing the horde, then COLLAPSE - each implosion is a blast and the well reopens somewhere else."
 attack_type = "vortex"
 damage = 48.0
 cooldown = 1.00
@@ -619,4 +729,47 @@ vortex_pull = 6.0
 vortex_orbit = 3.0
 vortex_orbit_speed = 1.9
 vortex_tick_rate = 0.10
+# This is the whole difference from the Void Gyre, which is the same well with a
+# larger number on it. The Gyre never ends: it is a patient permanent drag whose
+# damage is a steady drip, and you can build a position around it. These wells
+# hoard for three seconds and then implode - a lump of damage on a clock the
+# player can read, with the well reopening across the orbit so the knot it just
+# made is dragged toward a spot that is about to stop existing.
+vortex_collapse_at = 3.0
+vortex_burst_damage = 110.0
+vortex_burst_radius = 3.4
 
+[[weapon]]
+id = "rimewake"
+name = "Hoarfrost Wake"
+desc = "Frost Shards + Void Orb. The shards drag a freezing, grinding bubble behind them - everything the volley PASSES walks in slow and comes apart, hit or not."
+attack_type = "projectile"
+damage = 9.0
+cooldown = 0.55
+projectiles = 3
+proj_speed = 16.0
+proj_life = 1.6
+# It goes through, but it does not have to: the aura is the weapon, and the shard
+# is only the thing carrying it. Pierce is moderate on purpose -- a shard that
+# stopped at the first two bodies would spend half its flight buried inside the
+# pack, which is exactly where nobody needs slowing.
+pierce = 3
+spread = 0.30
+proj_color = [0.62, 0.86, 1.0, 1.0]
+requires = ["shard", "orb"]
+# The direct hit, kept. This is a Frost Shards build and it should still cut.
+chill_mul = 0.55
+chill_time = 1.4
+# The carried corona: the actual point of the evolution. Chill is an on-HIT
+# status, so Frost Shards only ever slowed the bodies a shard went through --
+# which meant it had to keep hitting to keep slowing, and the back of the horde
+# was never touched at all. This is the other kind of cold: a bubble that travels
+# with the shard and grinds and slows everything it passes, aimed at or not.
+aura_radius = 1.5
+aura_dps = 26.0
+aura_tick = 0.10
+# Weaker than a direct hit on purpose -- the aura cannot stop anything from being
+# behind the shard, it only makes everything it passes walk into the shard more
+# slowly. The direct hit is what actually kills.
+aura_chill_mul = 0.62
+aura_chill_time = 0.9

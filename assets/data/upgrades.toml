@@ -1010,7 +1010,7 @@ kind = "unique"
 [[upgrade]]
 id = "uw_beam_prism"
 name = "Prism Lance"
-desc = "Solar Lance: three beams at once — forward, left and right"
+desc = "Solar Lance: three beams at once - forward, left and right"
 effect = "w_unique_prism"
 value = 3
 max_stacks = 1
@@ -1020,8 +1020,8 @@ weapon = "beam"
 [[upgrade]]
 id = "uw_storm_thunderlord"
 name = "Thunderlord"
-desc = "Storm Caller: +4 chain jumps and no damage decay"
-effect = "w_unique_thunderlord"
+desc = "Storm Caller: bolts pierce 2 further, see further for the next body, and corner harder"
+effect = "w_unique_reaim"
 value = 4
 max_stacks = 1
 kind = "unique"
@@ -1118,10 +1118,10 @@ kind = "unique"
 weapon = "chaos"
 
 [[upgrade]]
-id = "uw_sunder_supernova"
-name = "Event Collapse"
-desc = "Sundering Core: ring expands faster, wider, and hits harder"
-effect = "w_unique_supernova"
+id = "uw_sunder_faultline"
+name = "Fault Line"
+desc = "Sundering Core: the crescent widens into a wall, reaches further, and hits harder"
+effect = "w_unique_faultline"
 value = 1
 max_stacks = 1
 kind = "unique"
@@ -1130,7 +1130,7 @@ weapon = "sunder"
 [[upgrade]]
 id = "uw_tidewhip_lash"
 name = "Undertow"
-desc = "Tidal Lash: a 35% wider lash that flings 40% harder and reaches further"
+desc = "Tidal Lash: a fourth arc, thrown wider, herding its catch harder into the next"
 effect = "w_unique_lash"
 value = 1
 max_stacks = 1
@@ -1180,7 +1180,7 @@ weapon = "prism"
 [[upgrade]]
 id = "uw_shard_rime"
 name = "Rime Lances"
-desc = "Frost Shards: +4 pierce and 40% longer flight, at 80% damage each"
+desc = "Frost Shards: lances freeze what they pass through, +4 pierce, 40% longer flight"
 effect = "w_unique_rime"
 value = 1
 max_stacks = 1
@@ -1685,3 +1685,20 @@ value = 2.0
 max_stacks = 1
 kind = "milestone"
 level = 128
+
+# --- Hoarfrost Wake ------------------------------------------------------------
+# The card's rule is that the AURA stops being a bubble around each shard and
+# becomes the corridor itself: a second, much wider shell of cold that follows the
+# volley at the edge of its own spread. Shards then only need to carry the
+# freezing, and the two together stop being "one shard with a halo" and start
+# being a lane that nothing walks down at full speed.
+
+[[upgrade]]
+id = "uw_rimewake_deepfreeze"
+name = "Deep Freeze"
+desc = "Hoarfrost Wake: a wider second corona sweeps the lane, chill on hit deepens, 20% more shards"
+effect = "w_unique_deepfreeze"
+value = 1
+max_stacks = 1
+kind = "unique"
+weapon = "rimewake"

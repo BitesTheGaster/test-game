@@ -109,6 +109,8 @@ game::FrameInput pollInput(bool& quit, float deltaSeconds, bool menuActive,
         case SDLK_K: in.abilityBurst = true; break;
         case SDLK_L: in.abilitySlow = true; break;
         case SDLK_B: in.bestiary = true; break;
+        // Q: abandon the run from the pause screen (press twice to confirm).
+        case SDLK_Q: in.quitRun = true; break;
         // Main menu navigation + confirm.  Directional presses are converted
         // to repeat events below; the edge is kept separate from the held
         // state so a quick tap cannot be lost between frames.

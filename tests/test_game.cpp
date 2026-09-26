@@ -10,12 +10,14 @@
 #include "core/sim/fixed_timestep.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 // --- Content loading ---------------------------------------------------------
@@ -160,20 +162,35 @@ TEST_CASE("attackCooldown: delay = base / (1 + additive fire-rate bonus)") {
 }
 
 TEST_CASE("xpForLevel grows monotonically") {
-  REQUIRE(game::xpForLevel(1) == Catch::Approx(12.0F));
+  REQUIRE(game::xpForLevel(1) == Catch::Approx(10.0F));
   float prev = 0.0F;
   for (int lvl = 1; lvl <= 20; ++lvl) {
     const float need = game::xpForLevel(lvl);
     REQUIRE(need > prev);
     prev = need;
   }
-  // Pacing guard: the curve has to stay steep enough that level-ups (which are
-  // the only source of build decisions) keep arriving for a whole run. A flat
-  // curve is what turns the game into a walk with nothing to pick. Reaching
-  // level 32 costs ~33k XP and level 64 ~246k, so a build is still filling out
-  // long after the first minute.
-  REQUIRE(game::xpForLevel(32) > 2500.0F);
-  REQUIRE(game::xpForLevel(64) > 10000.0F);
+  // Pacing guard, and it is two-sided on purpose.
+  //
+  // The lower bound: level 16 has to be reachable inside the first stretch of a
+  // run. Sixteen picks is roughly where a build stops being a starter and starts
+  // being an answer to something, and the HP ramp is the one piece of the
+  // difficulty the player cannot outshoot -- so a player who is still four picks
+  // behind at minute six is not having a slow start, they are having a dead run.
+  //
+  // The upper bound: the curve has to keep CLIMBING, or every later level costs
+  // the same and the run stops having a shape. Four times the cost at 64 as at
+  // 16 is a rising quadratic, not a flattened one.
+  REQUIRE(game::xpForLevel(16) < 600.0F);
+  REQUIRE(game::xpForLevel(64) > 6000.0F);
+  REQUIRE(game::xpForLevel(64) > 4.0F * game::xpForLevel(16));
+  // And the shape is a smooth acceleration, not a step: every level costs more
+  // than the one before by more than the one before it did.
+  float prevStep = 0.0F;
+  for (int lvl = 2; lvl <= 30; ++lvl) {
+    const float step = game::xpForLevel(lvl) - game::xpForLevel(lvl - 1);
+    REQUIRE(step > prevStep);
+    prevStep = step;
+  }
 }
 
 TEST_CASE("aoeFalloff drops per-target damage as a blast catches a crowd") {
@@ -239,8 +256,18 @@ TEST_CASE("enemy resistances scale with time, tier and the resistant trait") {
           game::enemyLifestealResistance(120.0F, 1, false));
   REQUIRE(game::enemyKnockbackResistance(120.0F, 1, true) >
           game::enemyKnockbackResistance(120.0F, 1, false));
-  // A 50% lifesteal resistance halves the player's chance.
-  REQUIRE(game::enemyLifestealResistance(600.0F, 0, false) == Catch::Approx(0.5F));
+  // The ramp reaches its cap and stops, and the cap is a cap the player can live
+  // with: 60% drain resistance, reached at 25 minutes. It was 75% at 20, which
+  // meant a lifesteal build was being taxed for most of a run for the sake of a
+  // number no player ever sees.
+  REQUIRE(game::enemyLifestealResistance(1500.0F, 0, false) == Catch::Approx(0.60F));
+  REQUIRE(game::enemyLifestealResistance(3000.0F, 0, false) == Catch::Approx(0.60F));
+  // A resistance that has not reached its cap is still rising, so it is a ramp
+  // and not a step.
+  REQUIRE(game::enemyLifestealResistance(600.0F, 0, false) ==
+          Catch::Approx(600.0F / 1500.0F).margin(0.001F));
+  REQUIRE(game::enemyLifestealResistance(300.0F, 0, false) <
+          game::enemyLifestealResistance(900.0F, 0, false));
 }
 
 TEST_CASE("traitsForTier gives elites exactly one bonus and stronger tiers more") {
@@ -420,8 +447,10 @@ TEST_CASE("An overlord retires its enemy type, but the 3 newest types stay eligi
   REQUIRE(g.testTypeIsRecent(recentType));
   // A retired recent type is exempt from the retirement filter, so it can
   // spawn as soon as its unlock time arrives. It is locked at t=0, so assert
-  // the unlock gate is the only thing blocking it.
-  const bool unlockedNow = content.enemies[static_cast<std::size_t>(recentType)].unlockAt <= 0.0F;
+  // the time gate is the only thing blocking it -- and read that gate through
+  // typeLockedUntil() rather than repeating the rule here, because a `fast`
+  // type's gate is the later of its own unlock_at and the global fast floor.
+  const bool unlockedNow = g.typeLockedUntil(recentType) <= 0.0F;
   REQUIRE(g.testTypeCanSpawn(recentType) == unlockedNow);
 
   // Retirement is per-run: a fresh Game starts with everything spawnable again.
@@ -517,7 +546,7 @@ TEST_CASE("Armor pierce reduces the defense an enemy actually applies") {
   }
 
   // Sanity: defense must be active at this point, otherwise the test proves
-  // nothing. enemyDefense is (t-30)/25 * tierMul; at t=120 champion (2.0x) => ~7.2.
+  // nothing. enemyDefense is (t-60)/34 * tierMul; at t=120 champion (1.7x) => ~3.
   REQUIRE(game::enemyDefense(plain.simTime(), 2) > 0.0F);
 
   plain.testSpawnTieredEnemyAt(5.0F, 0.0F, 2); // champion
@@ -914,11 +943,12 @@ TEST_CASE("Weapon attack types are loaded correctly") {
   // Evolutions
   const auto* storm = content.weapon("storm");
   REQUIRE(storm != nullptr);
-  REQUIRE(storm->attackType == game::AttackType::Chain);
-  REQUIRE(storm->chainMaxJumps > 0);
-  REQUIRE(storm->chainJumpRange > 0.0F);
-  REQUIRE(storm->chainDamageMul > 0.0F);
-  REQUIRE(storm->chainDamageMul < 1.0F);
+  // A re-aiming bolt, not an arc: see "Every reworked weapon has a rule the
+  // others do not have" for why this is no longer a chain weapon.
+  REQUIRE(storm->attackType == game::AttackType::Projectile);
+  REQUIRE(storm->reaimRange > 0.0F);
+  REQUIRE(storm->reaimTurn > 0.0F);
+  REQUIRE(storm->pierce > 0);
   REQUIRE(storm->prereqs.size() == 2);
   
   const auto* nova = content.weapon("nova");
@@ -1080,26 +1110,27 @@ TEST_CASE("Bomb explodes on landing and is always removed") {
   game::Game g{content, 456};
   g.testDisableWaves();
   g.testClearWeapons();
-  // One enemy far away: the bomb aims along +x but its fixed arc lands ~6.5
-  // units out, so it detonates by the LANDING rule (no contact impact).
+  // The hammer lands ON whatever is nearest its aim line, so this body at 30
+  // units is the target: the shell is solved to come down exactly on it, and the
+  // flight is long enough that the bomb is still in the air halfway through.
   g.testSpawnEnemyAt(30.0F, 0.0F);
   g.testAddWeapon(hammerIdx);
 
   game::FrameInput in{};
-  // Flight time is t = 2*sqrt(2*30*2.5)/30 ~= 0.82s => ~49 ticks.
-  for (int i = 0; i < 25; ++i) {
+  for (int i = 0; i < 12; ++i) {
     g.advance(1.0F / 60.0F, in);
   }
   REQUIRE(g.debugCounts().bombs == 1); // airborne mid-arc
 
-  for (int i = 0; i < 50; ++i) {
+  for (int i = 0; i < 90; ++i) {
     g.advance(1.0F / 60.0F, in);
   }
   // Bomb landed, exploded, and was destroyed — it never lingers invisible.
   REQUIRE(g.debugCounts().bombs == 0);
-  // The far-away enemy took nothing: the explosion happened at the landing
-  // spot, not teleported onto the enemy.
-  REQUIRE(g.testFirstEnemyHp() == Catch::Approx(100000.0F));
+  // And it landed ON the body rather than somewhere in the vicinity: the shell
+  // flies at whatever speed makes `land` take exactly as long as its arc, so a
+  // target at 30 units is hit as squarely as one at 3.
+  REQUIRE(g.testFirstEnemyHp() < 100000.0F);
 }
 
 TEST_CASE("Hammer pierce scales the explosion radius, not bomb life") {
@@ -1118,10 +1149,14 @@ TEST_CASE("Hammer pierce scales the explosion radius, not bomb life") {
     g.testDisableWaves();
     g.testClearWeapons();
     g.stats().pierceAdd = pierceAdd;
-    // Landing spot is x = speed * flightTime = 8 * 0.8165 ~= 6.53. Park the
-    // enemy 2.1 units past it: inside the boosted blast (2.0 * 1.3 = 2.6 for
-    // +2 pierce) but outside the base 2.0.
-    g.testSpawnEnemyAt(8.63F, 0.0F);
+    // The hammer answers the body nearest its aim line, so the shell is solved
+    // to come down on the one at 4.0. The bystander is parked 2.5 units further
+    // down that same line: outside the base 2.0 blast (2.0 + the 0.3 body = 2.3)
+    // and inside the boosted one (2.0 * 1.3 = 2.6, so 2.9 with the body). Pierce
+    // widening the blast is the whole claim; if it widened the flight instead, the
+    // bystander would be untouched at both settings.
+    g.testSpawnEnemyAt(4.0F, 0.0F);
+    g.testSpawnEnemyAt(6.5F, 0.0F);
     g.testAddWeapon(hammerIdx);
     game::FrameInput in{};
     for (int i = 0; i < 75; ++i) {
@@ -1132,11 +1167,15 @@ TEST_CASE("Hammer pierce scales the explosion radius, not bomb life") {
 
   {
     const auto base = run(0);
-    REQUIRE(base.testFirstEnemyHp() == Catch::Approx(100000.0F)); // out of blast
+    // The aimed body is hit either way, so the bystander is read by position.
+    REQUIRE(base.testEnemyHpNear(4.0F, 0.0F) < 100000.0F);
+    REQUIRE(base.testEnemyHpNear(6.5F, 0.0F) == Catch::Approx(100000.0F)); // out of blast
+    REQUIRE(base.debugCounts().bombs == 0);
   }
   {
     const auto boosted = run(2);
-    REQUIRE(boosted.testFirstEnemyHp() == Catch::Approx(100000.0F - 45.0F));
+    REQUIRE(boosted.testEnemyHpNear(4.0F, 0.0F) < 100000.0F);
+    REQUIRE(boosted.testEnemyHpNear(6.5F, 0.0F) < 100000.0F);
     REQUIRE(boosted.debugCounts().bombs == 0); // still "one boom, gone"
   }
 }
@@ -1844,7 +1883,7 @@ TEST_CASE("Every weapon creates its attack-type entities") {
       {"orb", &game::Game::DebugCounts::bounces},
       {"beam", &game::Game::DebugCounts::beams},
       {"scythe", &game::Game::DebugCounts::sweeps},
-      {"storm", &game::Game::DebugCounts::chains},
+      {"storm", &game::Game::DebugCounts::projectiles},
       {"nova", &game::Game::DebugCounts::novas},
       {"inferno", &game::Game::DebugCounts::sweeps},
       {"pulsar", &game::Game::DebugCounts::boomerangs},
@@ -2878,12 +2917,16 @@ TEST_CASE("Void Gyre drag and shove both shrink against enemy resistance") {
   REQUIRE(tough > soft + 0.3F);
 
   // The time-based ramp exists and reaches its cap: enemies get harder to
-  // displace as a run goes on, and old spawns are lifted with it.
+  // displace as a run goes on, and old spawns are lifted with it. The cap is
+  // 55%, not the old 70% -- knockback resistance is a tax on the player's
+  // positioning rather than on their damage, and at 70% ordinary trash stopped
+  // being pushable around the nine-minute mark, which quietly turned kiting into
+  // standing still.
   REQUIRE(game::enemyKnockbackResistance(0.0F, 0, false) == Catch::Approx(0.0F));
   REQUIRE(game::enemyKnockbackResistance(400.0F, 0, false) ==
-          Catch::Approx(400.0F / 750.0F).margin(0.001F));
-  REQUIRE(game::enemyKnockbackResistance(525.0F, 0, false) == Catch::Approx(0.7F));
-  REQUIRE(game::enemyKnockbackResistance(2000.0F, 0, false) == Catch::Approx(0.7F));
+          Catch::Approx(400.0F / 900.0F).margin(0.001F));
+  REQUIRE(game::enemyKnockbackResistance(900.0F, 0, false) == Catch::Approx(0.55F));
+  REQUIRE(game::enemyKnockbackResistance(2000.0F, 0, false) == Catch::Approx(0.55F));
   REQUIRE(game::enemyKnockbackResistance(2000.0F, 3, true) == Catch::Approx(1.0F));
 }
 
@@ -3158,7 +3201,7 @@ int weaponIndex(const game::Content& content, const char* id) {
 
 } // namespace
 
-TEST_CASE("The roster is 32 weapons: 18 base, 10 evolutions, 4 supers") {
+TEST_CASE("The roster is 33 weapons: 18 base, 11 evolutions, 4 supers") {
   const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
   int base = 0;
   int evo = 0;
@@ -3177,9 +3220,9 @@ TEST_CASE("The roster is 32 weapons: 18 base, 10 evolutions, 4 supers") {
   CAPTURE(evo);
   CAPTURE(super);
   REQUIRE(base == 18);
-  REQUIRE(evo == 10);
+  REQUIRE(evo == 11);
   REQUIRE(super == 4);
-  REQUIRE(content.weapons.size() == 32);
+  REQUIRE(content.weapons.size() == 33);
 
   // Every evolution's prerequisites actually exist, and a super really is
   // reachable (three base weapons, not two evolutions of each other).
@@ -3308,14 +3351,33 @@ TEST_CASE("Siege Mortar lobs over the horde and cooks where it lands") {
   const int mortar = weaponIndex(content, "mortar");
   REQUIRE(mortar >= 0);
 
+  // The shell is solved to land `bomb_ahead` past whoever is nearest its aim
+  // line, so the pair below is the whole rule: a body at 1.5 is the front rank
+  // and one at 6.0 is where the shell comes down (1.5 + 4.5).
+  const auto hps = [&] {
+    game::Game g{content, 204};
+    g.testDisableWaves();
+    g.testClearWeapons();
+    g.testAddWeapon(mortar);
+    g.testSpawnEnemyAt(1.5F, 0.0F);
+    g.testSpawnEnemyAt(6.0F, 0.0F);
+    game::FrameInput in{};
+    for (int i = 0; i < 90; ++i) g.advance(1.0F / 60.0F, in);
+    return std::pair<float, float>(g.testEnemyHpNear(1.5F, 0.0F),
+                                   g.testEnemyHpNear(6.0F, 0.0F));
+  }();
+  CAPTURE(hps.first);
+  CAPTURE(hps.second);
   // Right in the shell's flight path: a fused shell ignores what it flies over.
-  const float passed = hpAfterHit(content, mortar, 204, 1.5F, 0.0F, 90);
-  CAPTURE(passed);
-  REQUIRE(passed == Catch::Approx(100000.0F));
-  // Where the arc comes back down (~8 units out with proj_speed 9): cooked.
-  const float landed = hpAfterHit(content, mortar, 204, 8.3F, 0.0F, 90);
-  CAPTURE(landed);
-  REQUIRE(landed < 100000.0F);
+  REQUIRE(hps.first == Catch::Approx(100000.0F));
+  REQUIRE(hps.second < 100000.0F);
+
+  // And the flip side, which is what makes it a mortar rather than a hammer: on
+  // its own it MISSES. One body, overshot by the full four and a half units, is
+  // a weapon that does nothing to a lone target -- the crowd is the point.
+  const auto lone = hpAfterHit(content, mortar, 204, 1.5F, 0.0F, 90);
+  CAPTURE(lone);
+  REQUIRE(lone == Catch::Approx(100000.0F));
 }
 
 TEST_CASE("Grave Bell taunts prey into its core") {
@@ -3565,31 +3627,41 @@ TEST_CASE("The in-game manual is loaded, ordered and every glyph is drawable") {
 }
 
 TEST_CASE("The shipped manual fits one screen and never wraps off the right") {
-  // The renderer lays a page out at 1.6 scale on a 15 px line pitch, starting
-  // 74 px down, and keeps 56 px of bottom margin for the hint bar. Anything
-  // past that is clipped with a "...MORE, NEXT PAGE" marker, which would mean
-  // the reader is missing part of a topic with no way to scroll.
+  // The renderer lays a page out at kManualBodyScale on a kManualLineH pitch,
+  // starting kManualBodyY down, and keeps kManualBottomPad at the bottom for
+  // the hint bar. Anything past that is clipped with a "...MORE, NEXT PAGE"
+  // marker, which would mean the reader is missing part of a topic with no way
+  // to scroll.
+  //
+  // Every number comes from Game rather than being repeated here: this test used
+  // to carry its own copies, and when the body was resized they went stale and
+  // the assertion silently stopped meaning anything.
   const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
-  constexpr float kBodyY = 74.0F;
-  constexpr float kLineH = 15.0F;
-  constexpr float kBottomPad = 56.0F;
-  constexpr float kRefHeight = 720.0F; // the smallest window the HUD supports
-  constexpr float kBodyX = 250.0F;
-  constexpr float kScale = 1.6F;
   constexpr float kGlyph = 6.0F; // Batcher::textWidth == len * 6 * scale
-  const float maxLines = (kRefHeight - kBodyY - kBottomPad) / kLineH;
-  const float maxChars = (kRefHeight - kBodyX - 20.0F) / (kGlyph * kScale);
+  const float maxLines =
+      (game::Game::kRefScreenHeight - game::Game::kManualBodyY -
+       game::Game::kManualBottomPad) /
+      game::Game::kManualLineH;
+  // Width budget: from the body's left edge to the right margin, minus the
+  // indent the bullet and sub-line prefixes add.
+  const float maxPx = game::Game::kRefScreenWidth - game::Game::kManualBodyX - 20.0F;
+  const float maxChars = maxPx / (kGlyph * game::Game::kManualBodyScale);
+  const float maxIndentChars = (maxPx - game::Game::kManualIndent) /
+                               (kGlyph * game::Game::kManualBodyScale);
+  REQUIRE(maxChars > 20.0F); // a real bound, not a vacuous one
 
   for (const auto& page : content.manual) {
     CAPTURE(page.id);
     REQUIRE(static_cast<float>(page.lines.size()) <= maxLines);
-    // The marker prefixes ('>', '#', two spaces) are stripped before drawing,
-    // so they only ever make a line SHORTER on screen.
     for (const auto& raw : page.lines) {
       std::string_view v = raw;
+      // The marker prefixes ('>', '#', two spaces) are stripped before drawing,
+      // so they only ever make a line SHORTER on screen -- but the indenting
+      // branch moves the line RIGHT by kManualIndent, so it is charged for that.
+      const bool indented = v.size() >= 2 && v[0] == ' ' && v[1] == ' ';
       if (!v.empty() && (v.front() == '>' || v.front() == '#')) v.remove_prefix(1);
       if (v.size() >= 2 && v[0] == ' ' && v[1] == ' ') v.remove_prefix(2);
-      REQUIRE(static_cast<float>(v.size()) <= maxChars);
+      REQUIRE(static_cast<float>(v.size()) <= (indented ? maxIndentChars : maxChars));
     }
   }
 }
@@ -4154,4 +4226,2109 @@ TEST_CASE("A hand-edited slot card cannot push the arsenal past its array") {
   game::PlayerStats t{};
   for (int i = 0; i < 5; ++i) REQUIRE(game::applyUpgrade(t, "weapon_slot_add", -1.0F).valid);
   REQUIRE(t.weaponSlots == 0);
+}
+
+// --- Round 15: text layout -----------------------------------------------------
+
+TEST_CASE("Wrapped text hangs its continuation lines instead of running flush") {
+  // The reason this exists: a wrapped paragraph used to be a rectangle of text
+  // with no left edge on the continuation rows, so the eye had to re-read the
+  // row above to find where the sentence restarted. wrapToWidth charges the
+  // indent against the width of every line after the first, which is what makes
+  // the indent honest instead of decoration.
+  constexpr float kScale = 2.0F;
+  constexpr float kAdvance = 6.0F * kScale; // Batcher::textWidth
+  constexpr float kWidth = 240.0F;
+  constexpr float kIndent = 32.0F;
+
+  const auto lines = game::wrapToWidth("one two three four five six seven", kWidth,
+                                       kScale, kIndent);
+  REQUIRE(lines.size() > 1);
+
+  // The first line may use the whole box; every later one is `kIndent` narrower,
+  // so its character budget is strictly smaller.
+  const auto firstMax = static_cast<std::size_t>(kWidth / kAdvance);
+  const auto restMax = static_cast<std::size_t>((kWidth - kIndent) / kAdvance);
+  REQUIRE(firstMax > restMax);
+  REQUIRE(lines[0].size() <= firstMax);
+  for (std::size_t i = 1; i < lines.size(); ++i) {
+    REQUIRE(lines[i].size() <= restMax);
+  }
+
+  // No content is lost or duplicated by the wrap.
+  std::string joined;
+  for (const auto& l : lines) {
+    if (!joined.empty()) joined += ' ';
+    joined += l;
+  }
+  REQUIRE(joined == "one two three four five six seven");
+
+  // No indent: every line gets the full box, so the indent is what costs width
+  // and nothing else does.
+  const auto flat = game::wrapToWidth("one two three four five six seven", kWidth,
+                                      kScale, 0.0F);
+  for (const auto& l : flat) REQUIRE(l.size() <= firstMax);
+  REQUIRE(flat.size() <= lines.size());
+
+  // Degenerate boxes must not hang or crash.
+  REQUIRE(game::wrapToWidth("hello", 0.0F, kScale, kIndent).size() == 1);
+  REQUIRE(game::wrapToWidth("hello", -5.0F, kScale, kIndent).size() == 1);
+  REQUIRE(game::wrapToWidth("hello", kWidth, 0.0F, kIndent).size() == 1);
+  REQUIRE(game::wrapToWidth("", kWidth, kScale, kIndent).empty());
+  // An indent wider than the box still yields something drawable, not a
+  // negative character budget.
+  for (const auto& l : game::wrapToWidth("a b c d e f", kWidth, kScale, 1e6F)) {
+    REQUIRE_FALSE(l.empty());
+  }
+}
+
+TEST_CASE("Every card description fits the card, and no card text is silently lost") {
+  // Two separate promises, both of which used to be broken:
+  //  - the level-up card measured nothing, so a long description ran off the
+  //    bottom of the panel onto the reroll hint;
+  //  - the sandbox item list measured the description and simply DID NOT DRAW
+  //    IT if it was wider than half the panel, so most items showed as a bare
+  //    name with no explanation at all.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  REQUIRE_FALSE(content.upgrades.empty());
+  REQUIRE_FALSE(content.weapons.empty());
+
+  // Card body geometry. These come from game::cardTextLayout rather than being
+  // mirrored here, because the card sets its wrapped lines LARGER than the
+  // first -- a copy of the constants would quietly test the wrong layout the
+  // next time the style moved.
+  constexpr float kCardMinW = 200.0F;
+  constexpr float kCardMaxW = 400.0F;
+  constexpr float kGap = 24.0F;
+  // Where the description starts. 86 is a one-line title; a title that wraps to
+  // two lines pushes the body 24px further down, and because the card height is
+  // clamped at kCardMaxH that can COST a line rather than gain one. So the
+  // wrapped case is the pessimistic one and is the one that has to hold.
+  constexpr float kBodyTopShort = 86.0F;
+  constexpr float kBodyTopTall = 110.0F;
+  constexpr float kFooter = 30.0F;
+  constexpr float kCardMinH = 150.0F;
+  constexpr float kCardMaxH = 364.0F;
+  // How many lines the card actually shows for a body that wants `needed`.
+  // Takes the row's own card width: it used to be handed kCardMaxW, so it
+  // measured a 400px card while the renderer measures the row's real width. That
+  // is only harmless while the scale is pinned by its clamps -- un-pin it and
+  // this silently tests a layout nobody renders, which is the exact failure the
+  // comment above exists to prevent.
+  const auto capLines = [&](float cardW, std::size_t needed, float bodyTop) {
+    const auto lay = game::cardTextLayout(cardW);
+    const float h = std::clamp(bodyTop + game::cardTextHeight(static_cast<int>(needed), lay) +
+                                   kFooter,
+                               kCardMinH, kCardMaxH);
+    return static_cast<std::size_t>(game::cardTextLinesThatFit(h - bodyTop - kFooter, lay));
+  };
+  // The minimum card height has to hold at least one line of body, otherwise a
+  // short description would be clipped by the very clamp meant to protect it.
+  REQUIRE(capLines(kCardMaxW, 1, kBodyTopShort) >= 1);
+  REQUIRE(capLines(kCardMaxW, 2, kBodyTopShort) >= 2);
+  REQUIRE(capLines(kCardMaxW, 1, kBodyTopTall) >= 1);
+  REQUIRE(capLines(kCardMaxW, 2, kBodyTopTall) >= 2);
+
+  // The worst case is the widest card row the level-up screen can produce: 3
+  // cards is the normal case, 5 only with Gambler's Eye, and the row is
+  // centred so the narrowest is what decides whether text stays inside.
+  for (std::size_t n : {std::size_t{3}, std::size_t{4}, std::size_t{5}}) {
+    const float avail = (game::Game::kRefScreenWidth - kGap * static_cast<float>(n - 1) -
+                         40.0F) /
+                        static_cast<float>(n);
+    const float cardW = std::clamp(avail, kCardMinW, kCardMaxW);
+    // The row itself must fit the screen, or the last card is off the edge.
+    REQUIRE(static_cast<float>(n) * cardW + static_cast<float>(n - 1) * kGap <=
+            game::Game::kRefScreenWidth);
+    // The body scale is derived, not fixed, so the measure stays readable in
+    // every row, and the wrapped lines are set larger than the first.
+    const auto lay = game::cardTextLayout(cardW);
+    REQUIRE(lay.scale >= 1.3F);
+    REQUIRE(lay.contScale > lay.scale);
+    REQUIRE(lay.contLineH > lay.lineH);
+    // The renderer must not truncate below the fitted height, or a long
+    // description silently loses its last clause. capLines is monotone, so
+    // checking the ceiling holds every smaller case too.
+    REQUIRE(capLines(cardW, 10, kBodyTopShort) == 10); // every 4-card row fits in full
+    REQUIRE(capLines(cardW, 10, kBodyTopTall) == 10);  // ...even with a wrapped title
+    REQUIRE(capLines(cardW, 30, kBodyTopTall) >= 10);   // the ceiling absorbs a long card
+    for (const auto& u : content.upgrades) {
+      CAPTURE(u.id);
+      const auto lines = game::wrapToWidth(u.desc, lay.width, lay.scale, lay.indent,
+                                           lay.contScale);
+      // ...and no line is wider than its own budget. The continuation lines are
+      // bigger AND indented, so their budget is the tightest of the three and
+      // is the one that overflows if the wrap is measured at the wrong size.
+      const auto firstMax = static_cast<std::size_t>(lay.width / (6.0F * lay.scale));
+      REQUIRE(lines[0].size() <= firstMax);
+      for (std::size_t i = 1; i < lines.size(); ++i) {
+        REQUIRE(static_cast<float>(lines[i].size()) * 6.0F * lay.contScale <=
+                lay.width - lay.indent + 0.001F);
+      }
+    }
+  }
+
+  // The narrowest row the screen can produce is the real budget, so check the
+  // shipped content against THAT rather than the comfortable 3-card case. Any
+  // item that does not fit there is one the 5-card row will cut, and the cut
+  // is only acceptable while it stays a handful of long evolution blurbs.
+  {
+    std::vector<std::pair<std::string, std::string>> items;
+    for (const auto& u : content.upgrades) items.emplace_back(u.id, u.desc);
+    for (const auto& w : content.weapons) items.emplace_back(w.id, w.desc);
+
+    std::size_t worst = 0;
+    std::string worstId;
+    std::size_t over = 0;
+    for (const auto& n : {std::size_t{3}, std::size_t{4}, std::size_t{5}}) {
+      const float cardW =
+          std::clamp((game::Game::kRefScreenWidth - kGap * static_cast<float>(n - 1) -
+                      40.0F) / static_cast<float>(n),
+                     kCardMinW, kCardMaxW);
+      const auto lay = game::cardTextLayout(cardW);
+      const auto count = [&](std::string_view d) {
+        return game::wrapToWidth(d, lay.width, lay.scale, lay.indent, lay.contScale).size();
+      };
+      // The title is the tightest block in the narrowest card, so its own wrap
+      // is checked here too: at most two lines, nothing elided, nothing wider
+      // than the card.
+      for (const auto& it : items) {
+        CAPTURE(n);
+        CAPTURE(it.first);
+        const auto nameLay = game::cardNameLayout(it.first, lay.width);
+        REQUIRE_FALSE(nameLay.elided);
+        REQUIRE(nameLay.lines.size() <= 2);
+        for (const auto& l : nameLay.lines) {
+          REQUIRE(static_cast<float>(l.size()) * 6.0F * nameLay.scale <= lay.width);
+        }
+      }
+      // The worst case is the wrapped title: it costs a line, so it is the one
+      // that decides whether a 3- or 4-card row loses any of its text.
+      const std::size_t room = capLines(cardW, static_cast<std::size_t>(100), kBodyTopTall);
+      for (const auto& it : items) {
+        const std::size_t need = count(it.second);
+        if (n == 5) {
+          if (need > worst) {
+            worst = need;
+            worstId = it.first;
+          }
+          if (need > room) ++over;
+        } else {
+          // 3- and 4-card rows are the ones players actually see; none of them
+          // may lose a single character.
+          CAPTURE(n);
+          CAPTURE(it.first);
+          REQUIRE(need <= room);
+        }
+      }
+    }
+    CAPTURE(worstId);
+    CAPTURE(worst);
+    CAPTURE(over);
+    // Only the 5-card row may truncate, and only for a few very long blurbs.
+    REQUIRE(over <= 6);
+  }
+
+  // The sandbox hint box: a row that shows a hint at all must leave room for
+  // one, and long descriptions must be short enough to be truncated honestly
+  // (with a "+") rather than dropped.
+  constexpr float kHintScale = 1.2F;
+  const float panelW = std::min(720.0F, game::Game::kRefScreenWidth * 0.9F);
+  int withHint = 0;
+  for (const auto& u : content.upgrades) {
+    CAPTURE(u.id);
+    const float labelW = (static_cast<float>(u.name.size()) + 8.0F) * 6.0F * 1.6F;
+    const float hintBox = panelW - 48.0F - labelW;
+    if (hintBox > 60.0F) {
+      ++withHint;
+      const auto lines = game::wrapToWidth(u.desc, hintBox, kHintScale, 12.0F);
+      // Two lines at most; the third is the honest "+" truncation.
+      REQUIRE(lines.size() >= 1);
+    }
+  }
+  // Sanity: the vast majority of items really do get a hint drawn, which is the
+  // regression this whole change is about.
+  REQUIRE(withHint > static_cast<int>(content.upgrades.size()) / 2);
+}
+
+// --- Fast-enemy pacing --------------------------------------------------------
+
+TEST_CASE("Fast enemies are held back to 4-5 minutes, then ramp back up to speed") {
+  // The intent behind speed_ramp + fast: a quick enemy is something the run
+  // grows INTO. `speed` in the data is what the player meets; the ramp restores
+  // the intended top speed by 10:00, on the same clock the difficulty curve
+  // steepens on.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  REQUIRE(content.enemies.size() >= 18);
+
+  std::vector<std::size_t> fastTypes;
+  for (std::size_t i = 0; i < content.enemies.size(); ++i) {
+    if (content.enemies[i].fast) fastTypes.push_back(i);
+  }
+  REQUIRE(fastTypes.size() >= 6);
+  for (const auto i : fastTypes) {
+    CAPTURE(content.enemies[i].id);
+    // A fast type with no ramp would be slow and then suddenly quick, with
+    // nothing in between: the loader rejects that, and so does this.
+    REQUIRE(content.enemies[i].speedRampMax > 0.0F);
+    REQUIRE(content.enemies[i].speedRampMax <= game::kSpeedRampCeiling);
+  }
+
+  game::Game g{content, 4242};
+  g.testDisableWaves();
+
+  for (const auto i : fastTypes) {
+    CAPTURE(content.enemies[i].id);
+    // Locked at t=0 no matter what its own unlock_at says.
+    REQUIRE_FALSE(g.testTypeCanSpawn(static_cast<int>(i)));
+    REQUIRE(g.typeLockedUntil(static_cast<int>(i)) >= game::Game::kFastEnemyMinTime);
+    // And unlocked by the top of the requested window, so the floor is a floor
+    // and not a new hard gate that strands a type forever.
+    REQUIRE(g.typeLockedUntil(static_cast<int>(i)) <= 300.0F);
+  }
+
+  // The ramp: at t=0 the authored (slowed) speed, at kSpeedRampFullTime the
+  // authored speed plus the full ramp, and the global difficulty ramp on top of
+  // both -- so a late fast enemy is a real escalation and an early one is not.
+  for (const auto i : fastTypes) {
+    CAPTURE(content.enemies[i].id);
+    const auto idx = static_cast<int>(i);
+    const float base = content.enemies[i].speed;
+
+    g.testSetSimTime(0.0F);
+    const float atStart = g.enemySpawnSpeed(idx);
+    REQUIRE(g.typeSpeedRamp(idx) == Catch::Approx(1.0F));
+    // Global speed scale is 1.0 at t=0, so this is exactly the authored speed.
+    REQUIRE(atStart == Catch::Approx(base));
+
+    g.testSetSimTime(game::Game::kFastEnemyMinTime);
+    const float atGate = g.enemySpawnSpeed(idx);
+    REQUIRE(g.typeSpeedRamp(idx) > 1.0F);
+    REQUIRE(atGate > atStart); // it is already speeding up as it arrives
+
+    g.testSetSimTime(game::Game::kSpeedRampFullTime);
+    const float atFull = g.enemySpawnSpeed(idx);
+    REQUIRE(g.typeSpeedRamp(idx) == Catch::Approx(1.0F + content.enemies[i].speedRampMax));
+    // Never runs away: the per-type ramp is capped, so the late speed is the
+    // authored speed times a KNOWN multiple of the ramp, times the global curve
+    // (which is itself capped at 2.4 by currentScales). Asserting against the
+    // product rather than a bare ratio keeps the two ramps from being confused
+    // for one another.
+    REQUIRE(atFull <= base * (1.0F + content.enemies[i].speedRampMax) * 2.4F + 1e-3F);
+    REQUIRE(atFull > atStart); // still an escalation, just a bounded one
+
+    // Saturates: past the full time the ramp stops growing.
+    g.testSetSimTime(game::Game::kSpeedRampFullTime * 3.0F);
+    REQUIRE(g.typeSpeedRamp(idx) == Catch::Approx(1.0F + content.enemies[i].speedRampMax));
+  }
+}
+
+TEST_CASE("Nothing quick spawns before the fast floor, and the pool is never empty") {
+  // Two guarantees at once. The pacing rule must hold for the WHOLE roster, not
+  // just the types that were edited: whatever the data says, the first four
+  // minutes contain no `fast` archetype. And the gate must not accidentally
+  // starve the spawn pool -- a run that cannot spawn is a dead run.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+
+  game::Game g{content, 77};
+  g.testDisableWaves();
+  for (std::size_t i = 0; i < content.enemies.size(); ++i) {
+    if (!content.enemies[i].fast) continue;
+    REQUIRE_FALSE(g.testTypeCanSpawn(static_cast<int>(i)));
+  }
+
+  // The pool has a legal member at every moment of the opening, and holds a
+  // fast one once the floor passes.
+  auto eligibleCount = [&](float t) {
+    g.testSetSimTime(t);
+    int n = 0;
+    for (std::size_t i = 0; i < content.enemies.size(); ++i) {
+      if (g.testTypeCanSpawn(static_cast<int>(i))) ++n;
+    }
+    return n;
+  };
+  // At t=0 exactly one type is unlocked (the Bat is the only enemy with
+  // unlock_at 0), so the floor here is "never zero" for the whole opening and
+  // "a real choice" once the second wave of unlocks has landed.
+  REQUIRE(eligibleCount(0.0F) >= 1);
+  for (float t = 45.0F; t < game::Game::kFastEnemyMinTime; t += 15.0F) {
+    CAPTURE(t);
+    REQUIRE(eligibleCount(t) >= 4);
+  }
+  const int late = eligibleCount(game::Game::kFastEnemyMinTime + 1.0F);
+  const int early = eligibleCount(0.0F);
+  REQUIRE(late > early); // the fast roster actually joins in
+
+  // Every eligible type at the floor has a ramped speed, i.e. the fastest thing
+  // on screen at 4:00 is not a 4x charger.
+  g.testSetSimTime(game::Game::kFastEnemyMinTime + 1.0F);
+  float fastest = 0.0F;
+  std::string fastestId;
+  for (std::size_t i = 0; i < content.enemies.size(); ++i) {
+    if (!g.testTypeCanSpawn(static_cast<int>(i))) continue;
+    const float s = g.enemySpawnSpeed(static_cast<int>(i));
+    if (s > fastest) {
+      fastest = s;
+      fastestId = content.enemies[i].id;
+    }
+  }
+  CAPTURE(fastestId);
+  REQUIRE(fastest > 0.0F);
+  // The authored top speed of the fastest archetype, times the global ramp at
+  // 4:00 (1.4) -- a bound that would fail loudly if a speed were left un-nerfed.
+  REQUIRE(fastest <= 6.3F * 1.41F);
+}
+
+TEST_CASE("The elite Fast trait ramps instead of applying a flat speed bonus") {
+  // A flat 1.7x on every Fast elite means a 4-minute horde is undodgeable and
+  // the trait says nothing about when it is dangerous. It now grows to the full
+  // bonus by kFastTraitFullTime, so the trait is a clock as well as a stat.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 31};
+  g.testDisableWaves();
+
+  const auto shareAt = [&](float t) {
+    g.testSetSimTime(t);
+    return g.fastTraitSpeedMul();
+  };
+
+  const float early = shareAt(0.0F);
+  const float mid = shareAt(game::Game::kFastTraitFullTime * 0.5F);
+  const float late = shareAt(game::Game::kFastTraitFullTime);
+  const float later = shareAt(game::Game::kFastTraitFullTime * 4.0F);
+
+  CAPTURE(early);
+  CAPTURE(mid);
+  CAPTURE(late);
+  REQUIRE(early == Catch::Approx(1.0F)); // no bonus at all in the opening minute
+  REQUIRE(late == Catch::Approx(game::Game::kFastTraitMaxMul));
+  REQUIRE(mid > early);
+  REQUIRE(mid < late);
+  // Monotone and saturating: the trait never gets slower as the run goes on, and
+  // it never grows past its cap. Both are what make the trait readable.
+  REQUIRE(early <= mid);
+  REQUIRE(mid <= late);
+  REQUIRE(later == late);
+
+  // A tier-1 elite is also boosted by the tier itself, so the trait is a
+  // multiplier ON TOP of that, not a replacement for it.
+  REQUIRE(game::Game::kFastTraitMaxMul > 1.0F);
+}
+
+// --- Weapon originality: the reworked mechanics -----------------------------
+//
+// The rework exists to stop an evolution from being its parent with a bigger
+// number. These tests pin the RULES that make the reworked weapons different
+// things rather than bigger things, because "it forks" and "it shatters" and
+// "it comes apart" are claims that are only true while the code does them.
+
+namespace {
+
+// Index of a weapon in the content roster, or -1. The roster is data-driven and
+// its order is not part of any contract, so a test names what it wants.
+int weaponIndex(const game::Content& content, std::string_view id) {
+  for (std::size_t i = 0; i < content.weapons.size(); ++i) {
+    if (content.weapons[i].id == id) return static_cast<int>(i);
+  }
+  return -1;
+}
+
+// A game armed with exactly one weapon and no incoming spawns.
+struct SoloWeapon {
+  game::Content content;
+  game::Game g;
+  int slot = 0;
+  explicit SoloWeapon(std::string_view id, std::uint32_t seed = 7)
+      : content(game::loadContent(GAME_ASSETS_DIR "/data")),
+        g(content, seed) {
+    g.testDisableWaves();
+    slot = weaponIndex(content, id);
+  }
+  // Arms the weapon and makes the first shot land immediately, so a test does
+  // not have to wait out a cooldown to see the effect.
+  void arm() { g.testAddWeapon(slot); }
+};
+
+}  // namespace
+
+TEST_CASE("No evolution is a numbers-only copy of one of its parents") {
+  // The whole point of the rework: 9 of 10 evolutions used to run the exact
+  // AttackType of one of their parents with only the numbers changed, which
+  // made them reskins. What is left sharing an attack type with a parent is
+  // only allowed if its own description is about the numbers -- and even then
+  // there has to be at most a couple of them, or the rule stops meaning
+  // anything.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+
+  // Sharing an attack type with a parent is only a reskin if nothing else
+  // separates them, so the rule is narrower than "different type": it is
+  // "different type, or a rule the parent does not have". Two weapons running
+  // the same code with the same rules and only bigger numbers are the same
+  // weapon, and that is the thing worth failing a build over.
+  struct Differentiator {
+    // Does this weapon run a rule its parent does not?
+    bool hasOwnRule;
+    // What that rule is, for the failure message.
+    const char* why;
+  };
+  const auto rulesOf = [](const game::WeaponDef& w) -> Differentiator {
+    if (w.reaimRange > 0.0F) return {true, "bends onto the next body"};
+    if (w.chainShatter > 0) return {true, "shatters into shards"};
+    if (w.bounceSplits > 0) return {true, "splits on every impact"};
+    if (w.waveCount > 1 || w.waveArcStep > 0.0F) return {true, "throws several arcs"};
+    if (w.attackType == game::AttackType::Wave) return {true, "travels away from the player"};
+    // Rules added after this test was first written. Each is a mechanic, not a
+    // number: a weapon running the same code as its parent but with one of these
+    // on is a different weapon, which is exactly what the test is here to say.
+    if (w.coneBite > 0.0F) return {true, "bites one target and ramps"};
+    if (w.coneEmberAt > 0.0F) return {true, "leaves burning ground"};
+    if (w.bombAhead > 0.0F) return {true, "fires over the front rank"};
+    if (w.bombOnTarget) return {true, "lands on whatever it is aimed at"};
+    if (w.novaContract) return {true, "contracts inward and bursts"};
+    if (w.novaEcho > 0.0F) return {true, "fires a second, delayed ring"};
+    if (w.haloInner > 0.0F) return {true, "leaves a hole at its centre"};
+    if (w.vortexCollapseAt > 0.0F) return {true, "collapses and reopens"};
+    if (w.sweepHook) return {true, "drags its catch in"};
+    if (w.orbitWindow) return {true, "has a gap in the ring"};
+    if (w.auraRadius > 0.0F) return {true, "carries a chilling aura"};
+    return {false, "same attack, same rules"};
+  };
+
+  std::vector<std::string> reskins;
+  for (const auto& w : content.weapons) {
+    if (w.prereqs.empty()) continue; // a base weapon has no parents to copy
+    const auto mine = rulesOf(w);
+    for (const auto& parentId : w.prereqs) {
+      const auto* parent = content.weapon(parentId);
+      REQUIRE(parent != nullptr);
+      const auto theirs = rulesOf(*parent);
+      if (w.attackType == parent->attackType && !mine.hasOwnRule && !theirs.hasOwnRule) {
+        reskins.push_back(w.id + " copies " + parentId + " (" + mine.why + ")");
+      }
+    }
+  }
+  for (const auto& r : reskins) INFO(r);
+  REQUIRE(reskins.empty());
+}
+
+TEST_CASE("Every reworked weapon has a rule the others do not have") {
+  // A different AttackType alone is not enough -- two weapons can share a type
+  // and still differ by a rule, which is what the second half of this checks.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+
+  // The reworked four are each a different attack type from their parents, and
+  // the two remaining chain weapons are told apart by a rule, not a number.
+  REQUIRE(content.weapon("sunder")->attackType == game::AttackType::Wave);
+  REQUIRE(content.weapon("tidewhip")->attackType == game::AttackType::Wave);
+  REQUIRE(content.weapon("chaos")->attackType == game::AttackType::Bounce);
+  REQUIRE(content.weapon("blizzard")->attackType == game::AttackType::Chain);
+
+  // Tesla forks nothing and shatters nothing. Blizzard shatters. These are the
+  // rules, and they are what the cards promise.
+  REQUIRE(content.weapon("tesla")->chainShatter == 0);
+  REQUIRE(content.weapon("blizzard")->chainShatter > 0);
+
+  // The Storm Caller stopped being a chain weapon. A bolt that BENDS is a
+  // projectile, and running it through the chain system made it a second Tesla
+  // Coil with a number on it rather than a merge of the wand and the crossbow.
+  // Re-aiming is its rule, and nothing else in the game has it -- least of all
+  // the two weapons it is easy to confuse it with: the plain crossbow bolt that
+  // goes straight, and the tesla arc that jumps.
+  REQUIRE(content.weapon("storm")->attackType == game::AttackType::Projectile);
+  REQUIRE(content.weapon("storm")->reaimRange > 0.0F);
+  REQUIRE(content.weapon("storm")->reaimTurn > 0.0F);
+  REQUIRE(content.weapon("storm")->pierce > 0);
+  REQUIRE(content.weapon("crossbow")->reaimRange == 0.0F);
+  REQUIRE(content.weapon("wand")->reaimRange == 0.0F);
+  REQUIRE(content.weapon("tesla")->reaimRange == 0.0F);
+  REQUIRE(content.weapon("rimewake")->reaimRange == 0.0F);
+
+  // The Chaos Orb comes apart; the Pinball Puck and the eternal Void Orb do not.
+  REQUIRE(content.weapon("chaos")->bounceSplits > 0);
+  REQUIRE(content.weapon("pinball")->bounceSplits == 0);
+  REQUIRE(content.weapon("orb")->bounceSplits == 0);
+
+  // A wave that leaves the player (Tidewhip throws three of them) is a
+  // different thing from a nova that grows around them, so the two evolution
+  // slots are not interchangeable.
+  REQUIRE(content.weapon("tidewhip")->waveCount > 1);
+  REQUIRE(content.weapon("tidewhip")->waveArcStep > 0.0F);
+  REQUIRE(content.weapon("sunder")->waveCount == 1);
+  REQUIRE(content.weapon("sunder")->waveKnockback > 0.0F);
+}
+
+TEST_CASE("A wave leaves the player, shoves downrange, and hits each enemy once") {
+  // The Sunder's whole identity is that it is NOT a nova. A nova is pinned to
+  // the player and only grows, so it hits the same crowd in the same order; a
+  // wave travels. These three assertions are the difference.
+  SoloWeapon s("sunder");
+  REQUIRE(s.slot >= 0);
+  s.arm();
+
+  // A tight rank of stationary targets directly to the +x side of the origin.
+  for (int i = 0; i < 4; ++i) {
+    s.g.testSpawnEnemyAt(2.0F + static_cast<float>(i) * 1.2F, 0.0F);
+  }
+  const auto before = s.g.testEnemyPositions();
+  REQUIRE(before.size() == 8);
+
+  s.g.testAdvance(0.2F);
+  REQUIRE(s.g.testWaveCount() > 0);
+
+  // The wave is somewhere between the player and the far end of the rank: it
+  // travelled away from the player instead of sitting on top of them.
+  const auto pos = s.g.testWavePositions();
+  REQUIRE(pos.size() >= 2);
+  REQUIRE(pos[0] > 0.0F);
+  REQUIRE(pos[0] < 6.0F);
+
+  // The far end of the rank moved further +x than the near end, i.e. the shove
+  // was along the wave's direction of travel and not away from the player.
+  s.g.testAdvance(0.6F);
+  const auto after = s.g.testEnemyPositions();
+  REQUIRE(after.size() == before.size());
+  float nearPush = 0.0F;
+  float farPush = 0.0F;
+  for (std::size_t i = 0; i < after.size(); i += 2) {
+    const float push = after[i] - before[i];
+    if (i < 4) {
+      nearPush = push;
+    } else {
+      farPush += push;
+    }
+  }
+  farPush /= 2.0F;
+  CAPTURE(nearPush);
+  CAPTURE(farPush);
+  // Everything caught is pushed downrange (positive x).
+  REQUIRE(nearPush > 0.0F);
+  REQUIRE(farPush > 0.0F);
+  // And it is a push down the line, not a radial blast off the player: the far
+  // enemies are shoved at least as hard as the near ones.
+  REQUIRE(farPush >= nearPush * 0.8F);
+}
+
+TEST_CASE("A wave damages an enemy once, not once per tick") {
+  // A wave is a passing event. If it re-ticked, a target standing inside the
+  // band would be hit every frame for as long as the wave lingered, which would
+  // make a 0.5s wave worth ten times a 0.05s one for no reason.
+  SoloWeapon s("sunder");
+  REQUIRE(s.slot >= 0);
+  s.arm();
+  s.g.testSpawnEnemyAt(2.0F, 0.0F);
+  const float hp0 = s.g.testFirstEnemyHp();
+
+  // The whole window has to stay inside ONE shot. The weapon's cooldown is
+  // 1.6s, and a second wave passing through would land damage that has nothing
+  // to do with the "hits once" claim -- so 1.45s of advance, not 2s of it.
+  s.g.testAdvance(1.0F);
+  const float hp1 = s.g.testFirstEnemyHp();
+  // The wave has passed and gone: no more damage is landing.
+  s.g.testAdvance(0.4F);
+  const float hp2 = s.g.testFirstEnemyHp();
+  REQUIRE(hp1 < hp0);
+  REQUIRE(hp2 == Catch::Approx(hp1));
+  // And the total it dealt is a single hit's worth, not a stream: with base
+  // damage 55 and a 0.85 multiplier the one hit is well under the 100000 HP the
+  // test enemy carries, so a stream would show up as a much larger drop.
+  REQUIRE(hp0 - hp1 < 55.0F * 0.85F * 1.5F);
+}
+
+TEST_CASE("A re-aiming bolt bends onto the next body instead of sailing past it") {
+  // The Storm Caller's whole merge. The Crossbow pierces four bodies in a STRAIGHT
+  // line, so the last body it touches is the far end of the crowd and anything
+  // off that line is never in play; the Wand always hits what it is aimed at.
+  // Spending the reach on DIRECTION instead gets both: the bolt keeps the punch
+  // and keeps finding somebody.
+  //
+  // The crowd is therefore a CURVE and not a row. A row is the one layout where
+  // the two rules cannot tell each other apart -- a straight bolt walks the whole
+  // row and a bending one walks it too, so the test would be measuring the layout
+  // instead of the mechanic. A quarter-arc is the layout the mechanic exists for:
+  // only a bolt that turns at each body can stay on it.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  const auto* storm = content.weapon("storm");
+  REQUIRE(storm != nullptr);
+  REQUIRE(storm->reaimRange > 0.0F);
+  // It is a projectile now, not an arc, so the bending case and the straight case
+  // are the same code with one number changed.
+  REQUIRE(storm->attackType == game::AttackType::Projectile);
+  REQUIRE(content.weapon("crossbow")->reaimRange == 0.0F);
+
+  // A quarter arc: 2.2 units per hop, each hop turned about half a radian.
+  const std::array<std::pair<float, float>, 4> arc{{
+      {3.0F, 0.0F},
+      {4.35F, 1.75F},
+      {4.6F, 3.9F},
+      {3.7F, 5.9F},
+  }};
+
+  SoloWeapon s("storm", 11);
+  REQUIRE(s.slot >= 0);
+  s.arm();
+  for (const auto& [x, y] : arc) s.g.testSpawnEnemyAt(x, y);
+  // One window: the weapon fires on a 0.6s cadence, so a second bolt passing
+  // through would have nothing to do with the claim.
+  s.g.testAdvance(0.5F);
+  std::size_t stormHits = 0;
+  for (const float hp : s.g.testEnemyHps()) {
+    if (hp < 100000.0F) ++stormHits;
+  }
+  CAPTURE(stormHits);
+
+  // The Crossbow, which is the honest control: a piercing bolt with no re-aim,
+  // aimed the same way at the same crowd.
+  SoloWeapon straight("crossbow", 11);
+  REQUIRE(straight.slot >= 0);
+  straight.arm();
+  for (const auto& [x, y] : arc) straight.g.testSpawnEnemyAt(x, y);
+  straight.g.testAdvance(0.5F);
+  std::size_t straightHits = 0;
+  for (const float hp : straight.g.testEnemyHps()) {
+    if (hp < 100000.0F) ++straightHits;
+  }
+  CAPTURE(straightHits);
+
+  // The bolt that turns follows the crowd; the one that goes straight takes what
+  // happens to be on its line and leaves the rest of the arc standing there.
+  REQUIRE(stormHits >= 3);
+  REQUIRE(stormHits > straightHits);
+}
+
+TEST_CASE("A bend has its own budget, and pierce still means bodies") {
+  // The bend was originally paid out of the pierce, one point per turn. That is
+  // a tidy-sounding rule and it quietly lies: a pierce-4 bolt touched THREE
+  // bodies, so `pierce` meant a different number of bodies on this weapon than
+  // on the other thirty-two in the game. The budget is seeded from the pierce
+  // instead, so the statline means one thing everywhere -- and the test that
+  // matters is the ceiling, not the count.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  const auto* storm = content.weapon("storm");
+  REQUIRE(storm != nullptr);
+  const std::size_t maxBodies = static_cast<std::size_t>(storm->pierce) + 1;
+
+  SoloWeapon s("storm", 5);
+  REQUIRE(s.slot >= 0);
+  s.arm();
+  // A dense ball, so the bolt always has somebody to bend onto and the only
+  // thing that can stop it is the budget.
+  for (int i = 0; i < 14; ++i) {
+    const float a = static_cast<float>(i) * 2.399963F;
+    const float r = 0.4F + 0.12F * static_cast<float>(i % 4);
+    s.g.testSpawnEnemyAt(2.2F + r * std::cos(a), r * std::sin(a));
+  }
+  s.g.testAdvance(0.5F);
+
+  // One shot is one shot: however many were standing there, no more than the
+  // card's own pierce admits to were touched.
+  std::size_t hits = 0;
+  for (const float hp : s.g.testEnemyHps()) {
+    if (hp < 100000.0F) ++hits;
+  }
+  CAPTURE(hits);
+  CAPTURE(maxBodies);
+  REQUIRE(hits > 1);
+  REQUIRE(hits <= maxBodies);
+  // And it is not paid twice for the same body, which is the bug the memo in
+  // Projectile exists to prevent. Fourteen bodies in a ball, one shot, five
+  // bodies touched -- if the bolt were stalling inside the body it just bent
+  // off, the budget would be spent on two of them.
+  for (const float hp : s.g.testEnemyHps()) {
+    if (hp < 100000.0F) {
+      REQUIRE(100000.0F - hp == Catch::Approx(15.0F));
+    }
+  }
+}
+
+TEST_CASE("A shattering bolt throws one fan of shards, not one per jump") {
+  // The Blizzard Rail's desc used to promise a mid-flight shatter that did not
+  // exist. Now it does -- but it has to be a ONE-TIME event. Paying the fan out
+  // on every hop would turn a 4-jump bolt into 24 shards, which is both a
+  // different weapon and an entity-count hazard.
+  SoloWeapon s("blizzard", 5);
+  REQUIRE(s.slot >= 0);
+  s.arm();
+  for (int i = 0; i < 6; ++i) {
+    const float a = static_cast<float>(i) * 1.0F;
+    s.g.testSpawnEnemyAt(2.0F * std::cos(a), 2.0F * std::sin(a));
+  }
+
+  // The bolt spends kChainTelegraph converging on the first target before it
+  // damages anything, so "straight after the first hop" is now at least that far
+  // in -- plus the 0.05s inter-hop delay. Advancing past the wind-up is the point
+  // of the test: the fan must exist.
+  s.g.testAdvance(game::Game::kChainTelegraph + 0.1F);
+  const std::size_t shardsEarly = s.g.testProjectileCount();
+  CAPTURE(shardsEarly);
+  REQUIRE(shardsEarly > 0);
+
+  // The bolt keeps hopping afterwards, but the shard count does not keep
+  // growing with it. Four hops at a six-shard fan each would be 24 if the
+  // shatter were being paid out every time; one fan is 6, and they are already
+  // expiring, so the count stays near the first fan's size.
+  s.g.testAdvance(0.2F);
+  const std::size_t shardsMid = s.g.testProjectileCount();
+  CAPTURE(shardsMid);
+  REQUIRE(shardsMid <= shardsEarly + 2);
+
+  // The bolt's 4 jumps at 0.05s each plus the 0.45s linger is under a second,
+  // and the shards only live 0.55s -- but the WEAPON fires every 0.5s, so "no
+  // bolts left" would only be true by accident of the schedule. Compare against
+  // the next shot instead: the fan must clear rather than pile up.
+  s.g.testAdvance(0.4F);
+  const std::size_t shardsAfter = s.g.testProjectileCount();
+  CAPTURE(shardsAfter);
+  REQUIRE(shardsAfter <= shardsEarly);
+
+  // Steady state: however many volleys have gone by, there is never more than a
+  // couple of fans' worth of shards in the air at once. The chain bound is sized
+  // to include bolts still in their telegraph, which is why it is 4 and not
+  // "bolts that have already struck": a converging bolt is a real bolt occupying
+  // a real entity slot.
+  for (int i = 0; i < 20; ++i) {
+    s.g.testAdvance(0.5F);
+    REQUIRE(s.g.testProjectileCount() <= shardsEarly * 2);
+    REQUIRE(s.g.testChainCount() <= 4);
+  }
+}
+
+TEST_CASE("The two chain weapons are separated by a rule, not a number") {
+  // Tesla and the Blizzard Rail both throw an arc. What makes the Blizzard a
+  // different weapon is that its bolt comes apart on the landing, and what makes
+  // the Tesla a different weapon is that nothing else happens. If a card or a
+  // later edit gave the Tesla a shatter, the pair would collapse into one weapon
+  // with a bigger number on it -- which is the whole thing this test is for.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  REQUIRE(content.weapon("tesla")->chainShatter == 0);
+  REQUIRE(content.weapon("blizzard")->chainShatter > 0);
+  REQUIRE(content.weapon("blizzard")->attackType == game::AttackType::Chain);
+  REQUIRE(content.weapon("tesla")->attackType == game::AttackType::Chain);
+  // Only the Chaos Orb splits, and only on a bounded cascade.
+  REQUIRE(content.weapon("chaos")->bounceSplits > 0);
+  REQUIRE(content.weapon("chaos")->bounceSplits <= 2);
+  REQUIRE(game::Game::kMaxBounceSplitDepth > 0);
+}
+
+TEST_CASE("A splitting orb comes apart, and the cascade decays instead of exploding") {
+  // Chaos Orb vs Pinball Puck. The puck stays one puck; the orb multiplies. But
+  // "multiplies" has to mean "a bounded decaying cascade" -- a split that grows
+  // without limit deletes the game on its own.
+  SoloWeapon chaos("chaos", 9);
+  SoloWeapon pin("pinball", 9);
+  REQUIRE(chaos.slot >= 0);
+  REQUIRE(pin.slot >= 0);
+  chaos.arm();
+  pin.arm();
+
+  for (int i = 0; i < 6; ++i) {
+    const float a = static_cast<float>(i) * 1.0F;
+    chaos.g.testSpawnEnemyAt(2.5F * std::cos(a), 2.5F * std::sin(a));
+    pin.g.testSpawnEnemyAt(2.5F * std::cos(a), 2.5F * std::sin(a));
+  }
+
+  chaos.g.testAdvance(0.4F);
+  pin.g.testAdvance(0.4F);
+  const std::size_t chaosOrbs = chaos.g.testBounceCount();
+  const std::size_t pinOrbs = pin.g.testBounceCount();
+  CAPTURE(chaosOrbs);
+  CAPTURE(pinOrbs);
+  // Same room, same bounce budget geometry: the orb fills it, the puck does not.
+  REQUIRE(chaosOrbs > pinOrbs);
+  REQUIRE(pinOrbs == 1); // one puck, however many times it has bounced
+
+  // The cascade decays instead of accumulating. Note this cannot assert "zero
+  // orbs": the weapon fires every 1.6s, so there is always a fresh orb in
+  // flight. What it CAN assert is the ceiling -- no matter how many volleys have
+  // gone by, the room never holds more than a bounded few generations at once.
+  // 6 enemies, 2 splits, depth 3, so the worst case is 1+2+4+8 times however
+  // many orbs are in flight at once; a runaway would blow straight past it.
+  const std::size_t ceiling = 64;
+  for (int i = 0; i < 40; ++i) {
+    chaos.g.testAdvance(0.5F);
+    const std::size_t live = chaos.g.testBounceCount();
+    CAPTURE(live);
+    REQUIRE(live <= ceiling);
+  }
+  // And the fragments are gone once their parent is: a 12s orb that sheds
+  // 6.6s and then 3.6s generations must not leave a 12s tail behind, or the
+  // bound above would be doing all the work.
+  chaos.g.testClearWeapons();
+  chaos.g.testAdvance(30.0F);
+  REQUIRE(chaos.g.testBounceCount() == 0);
+}
+
+TEST_CASE("The multi-arc lash throws its arcs over a beat, not all at once") {
+  // Tidal Lash is three waves. Throwing them simultaneously would be one very
+  // wide slash, which is exactly the whip with a bigger number -- the reskin the
+  // rework exists to remove. The gap is what makes it read as a sweep.
+  SoloWeapon s("tidewhip", 13);
+  REQUIRE(s.slot >= 0);
+  s.arm();
+  for (int i = 0; i < 3; ++i) {
+    const float a = -0.6F + static_cast<float>(i) * 0.6F;
+    s.g.testSpawnEnemyAt(2.0F * std::cos(a), 2.0F * std::sin(a));
+  }
+
+  s.g.testAdvance(1.0F / 60.0F);
+  const std::size_t first = s.g.testWaveCount();
+  s.g.testAdvance(1.0F / 60.0F);
+  const std::size_t second = s.g.testWaveCount();
+  CAPTURE(first);
+  CAPTURE(second);
+  // The first arc is out on its own; the rest arrive over the following frames.
+  REQUIRE(first == 1);
+  REQUIRE(second >= first);
+
+  // One beat later the whole burst has landed, and there is not one wave per
+  // arc per second -- the burst is paced by kWaveBurstGap, not by the cooldown.
+  s.g.testAdvance(0.2F);
+  REQUIRE(s.g.testWaveCount() >= 1);
+  s.g.testAdvance(0.2F);
+  REQUIRE(s.g.testWaveCount() < 3 * 6);
+}
+
+
+TEST_CASE("Frost Shards chill what they hit, and the Rime unique deepens it") {
+  // The card used to read as a numbers-only "+4 pierce" with no status behind it,
+  // and the base weapon had no ice rule at all -- the shards were plain
+  // projectiles in a pale colour. Chill is the thing that makes an ice weapon an
+  // ice weapon: a volley that holds a group still is worth more than the same
+  // volley that does not.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  const auto shard = weaponIndex(content, "shard");
+  REQUIRE(shard >= 0);
+  const auto& def = content.weapons[static_cast<std::size_t>(shard)];
+  // The base weapon opts in by carrying the values; nothing global turns it on.
+  REQUIRE(def.chillMul > 0.0F);
+  REQUIRE(def.chillMul < 1.0F);
+  REQUIRE(def.chillTime > 0.0F);
+  // And only the ice carries it, so a test that spawns a fire weapon and finds a
+  // chill would mean the status is leaking into every hit path.
+  const auto flame = weaponIndex(content, "flame");
+  REQUIRE(flame >= 0);
+  REQUIRE(content.weapons[static_cast<std::size_t>(flame)].chillTime == 0.0F);
+
+  const auto slowest = [&content](std::string_view id) {
+    float m = 1.0F;
+    for (const auto& w : content.weapons) {
+      if (w.id == id && w.chillTime > 0.0F) m = std::min(m, w.chillMul);
+    }
+    return m;
+  };
+  REQUIRE(slowest("shard") > 0.0F);
+  REQUIRE(slowest("shard") < 1.0F);
+
+  // Behaviour: a live hit actually pins the target.
+  {
+    SoloWeapon s("shard");
+    REQUIRE(s.slot >= 0);
+    s.arm();
+    s.g.testSpawnEnemyAt(1.2F, 0.0F);
+    s.g.testAdvance(0.5F);
+    const auto chill = s.g.testEnemyChills();
+    CAPTURE(chill.size());
+    REQUIRE_FALSE(chill.empty());
+    // Reported as mul,time pairs; 1.0 means "not chilled".
+    REQUIRE(chill[0] < 1.0F);
+    REQUIRE(chill[1] > 0.0F);
+  }
+
+  // The unique is a real rule, not a bigger number: it must change the CHILL,
+  // because that is the only part of the card that is not a stat bump.
+  {
+    SoloWeapon s("shard");
+    REQUIRE(s.slot >= 0);
+    s.arm();
+    const auto before = s.g.testWeaponSnapshot(0).chillMul;
+    s.g.testAddWeaponUpgrade(0, "w_unique_rime", 1.0F);
+    const auto after = s.g.testWeaponSnapshot(0);
+    REQUIRE(after.chillMul < before);
+    REQUIRE(after.chillTime > s.g.testWeaponSnapshot(0).chillTime * 0.0F);
+  }
+}
+
+TEST_CASE("A ricochet with nothing left to hit curves back instead of leaving the arena") {
+  // The complaint this pins: a bouncing orb ricochets off into empty space and
+  // the player waits out the rest of its life watching nothing happen. The old
+  // code only re-aimed on the frame it HIT something, so an orb crossing open
+  // ground kept whatever heading it had and left the map: 45 units out and
+  // climbing after four seconds, with the player watching an empty screen.
+  //
+  // The purest form of the bug is a room with nothing left in it, which is set
+  // up honestly: spawn a body, let the shot go, then kill it.
+  SoloWeapon s("pinball", 11);
+  REQUIRE(s.slot >= 0);
+  s.arm();
+  s.g.testSpawnEnemyAt(3.0F, 0.0F);
+  s.g.testAdvance(0.05F);
+  REQUIRE(s.g.testBounceCount() >= 1);
+  s.g.testDespawnEnemies();
+  REQUIRE(s.g.testEnemyPositions().empty());
+
+  // The puck is now in an empty arena with the player at the origin. A puck
+  // that holds its heading leaves at 13 u/s and never returns; a puck that aims
+  // sweeps a circle about speed/turn-rate wide and comes back around.
+  float maxD = 0.0F;
+  float lastD = 0.0F;
+  for (int i = 0; i < 30; ++i) {
+    s.g.testAdvance(0.1F);
+    const auto pos = s.g.testBouncePositions();
+    for (std::size_t k = 0; k + 1 < pos.size(); k += 2) {
+      // The player sits at the origin, so distance is the radius.
+      const float d = std::sqrt(pos[k] * pos[k] + pos[k + 1] * pos[k + 1]);
+      maxD = std::max(maxD, d);
+      lastD = d;
+    }
+  }
+  CAPTURE(maxD);
+  CAPTURE(lastD);
+  REQUIRE(maxD < 12.0F);
+  // ...and it is still in the neighbourhood at the end rather than parked at
+  // maximum range with a life timer running down.
+  REQUIRE(lastD < 8.0F);
+}
+
+TEST_CASE("A ricochet that has run out of bodies retires instead of coasting") {
+  // The other half of the annoyance: even a puck that IS steering is dead weight
+  // once it has nothing left to hit, so its life is a short leash rather than the
+  // twelve seconds the Chaos Sphere shipped with.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  for (const char* id : {"pinball", "chaos"}) {
+    const auto idx = weaponIndex(content, id);
+    CAPTURE(id);
+    REQUIRE(idx >= 0);
+    const float life = content.weapons[static_cast<std::size_t>(idx)].projLife;
+    // Bounded and short. The cascade is already limited by split depth and by a
+    // shorter life per fragment generation, so a long root bought nothing except
+    // a projectile the player has to wait out.
+    REQUIRE(life > 0.0F);
+    REQUIRE(life <= 4.5F);
+  }
+}
+
+TEST_CASE("Q abandons a run from the pause screen, and only on the second press") {
+  // There was no way out of a live run at all short of dying, which makes a bad
+  // run a twenty-minute commitment you cannot walk away from. Quitting is the one
+  // irreversible thing the player can do by accident, so it is two-step.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g(content, 23);
+  g.testDisableWaves();
+  g.closeMenu();
+  g.testAddWeapon(weaponIndex(content, "wand"));
+
+  // From a live run, Q does nothing: it is only legal on the pause screen.
+  {
+    game::FrameInput in;
+    in.quitRun = true;
+    g.advance(0.016F, in);
+    CAPTURE(g.state());
+    REQUIRE(g.state() == game::RunState::Playing);
+    REQUIRE_FALSE(g.menuOpen());
+  }
+
+  // Paused: the first press arms, and the run is still there.
+  {
+    game::FrameInput in;
+    in.togglePause = true;
+    g.advance(0.016F, in);
+    REQUIRE(g.state() == game::RunState::Paused);
+    game::FrameInput q;
+    q.quitRun = true;
+    g.advance(0.016F, q);
+    REQUIRE(g.state() == game::RunState::Paused);
+    REQUIRE_FALSE(g.menuOpen());
+  }
+
+  // The second press inside the window actually leaves.
+  {
+    game::FrameInput q;
+    q.quitRun = true;
+    g.advance(0.016F, q);
+    REQUIRE(g.menuOpen());
+  }
+
+  // Leaving the sandbox is still a way out and must not require two presses --
+  // the sandbox is a debug tool, and its own overlay already says it ends the run.
+  {
+    game::Game g2(content, 23);
+    g2.testDisableWaves();
+    g2.closeMenu();
+    g2.enterTestMode();
+    REQUIRE(g2.testMode());
+    game::FrameInput t;
+    t.testModeToggle = true;
+    g2.advance(0.016F, t);
+    REQUIRE_FALSE(g2.testMode());
+  }
+}
+
+TEST_CASE("Every shipped name and description is spellable in the in-game font") {
+  // The font is ASCII 32..96 with lowercase folded onto uppercase, and anything
+  // outside it does not fail -- it draws as '?'. Four shipped descriptions carried
+  // a typographic em-dash, so every player met four question marks on the
+  // level-up screen while the .toml looked perfectly fine. The loader now throws
+  // on an undrawable weapon/upgrade/enemy string, and this test is the belt to
+  // that braces: it walks the loaded content rather than the files, so it also
+  // catches a default string or a hand-edited value.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  REQUIRE_FALSE(content.weapons.empty());
+  REQUIRE_FALSE(content.upgrades.empty());
+  REQUIRE_FALSE(content.enemies.empty());
+
+  std::size_t checked = 0;
+  for (const auto& w : content.weapons) {
+    CAPTURE(w.id);
+    CAPTURE(w.name);
+    REQUIRE(core::render::fontSupports(w.name));
+    REQUIRE(core::render::fontSupports(w.desc));
+    checked += 2;
+  }
+  for (const auto& u : content.upgrades) {
+    CAPTURE(u.id);
+    CAPTURE(u.name);
+    REQUIRE(core::render::fontSupports(u.name));
+    REQUIRE(core::render::fontSupports(u.desc));
+    checked += 2;
+  }
+  for (const auto& e : content.enemies) {
+    CAPTURE(e.id);
+    CAPTURE(e.name);
+    REQUIRE(core::render::fontSupports(e.name));
+    ++checked;
+  }
+  // Guard against the loop bodies drifting out of sync with the content.
+  REQUIRE(checked ==
+          content.weapons.size() * 2 + content.upgrades.size() * 2 + content.enemies.size());
+}
+
+TEST_CASE("Every card name fits the card it is drawn on, whole") {
+  // The card TITLE was drawn at a fixed 2.3 scale with no width check, so
+  // "Total Internal Reflection" (345px) ran under the next card's 95%-opaque
+  // panel in a 260px cell and was sliced with no ellipsis -- which reads as a
+  // misspelled word rather than a long name. This is the screen players read to
+  // choose a build, so the title fitting is not a detail.
+  //
+  // The fix is to wrap to two lines rather than shrink (shrinking to 1.7 put the
+  // title below the body's own scale, and 25 characters still did not fit the
+  // narrowest card). So the invariant is: never elided, never more than two
+  // lines, and every line inside the budget.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+
+  constexpr float kCardMinW = 200.0F;
+  constexpr float kCardMaxW = 400.0F;
+  constexpr float kGap = 24.0F;
+  constexpr float kPad = 16.0F;
+
+  // A short name is a single line at the comfortable size...
+  {
+    const auto lay = game::cardNameLayout("SHARD", 300.0F);
+    REQUIRE_FALSE(lay.wrapped());
+    REQUIRE(lay.scale == Catch::Approx(2.3F));
+    REQUIRE(lay.lines.size() == 1);
+    REQUIRE(lay.lines.front() == "SHARD");
+    REQUIRE_FALSE(lay.elided);
+  }
+  // ...and a long one wraps at the smaller size, whole.
+  {
+    const auto lay = game::cardNameLayout("TOTAL INTERNAL REFLECTION", 200.0F);
+    REQUIRE(lay.wrapped());
+    REQUIRE(lay.scale == Catch::Approx(2.0F));
+    REQUIRE(lay.lines.size() == 2);
+    REQUIRE_FALSE(lay.elided);
+    for (const auto& l : lay.lines) {
+      REQUIRE(static_cast<float>(l.size()) * 6.0F * lay.scale <= 200.0F);
+    }
+  }
+  // Three words at the narrowest card the row can produce: exactly the case that
+  // used to be sliced.
+  for (std::size_t n : {std::size_t{3}, std::size_t{4}, std::size_t{5}}) {
+    const float cardW =
+        std::clamp((game::Game::kRefScreenWidth - kGap * static_cast<float>(n - 1) - 40.0F) /
+                       static_cast<float>(n),
+                   kCardMinW, kCardMaxW);
+    const float budget = cardW - kPad * 2.0F;
+    for (const auto& u : content.upgrades) {
+      CAPTURE(n);
+      CAPTURE(u.id);
+      const auto lay = game::cardNameLayout(u.name, budget);
+      REQUIRE_FALSE(lay.elided);
+      REQUIRE(lay.lines.size() <= 2);
+      for (const auto& l : lay.lines) {
+        REQUIRE(static_cast<float>(l.size()) * 6.0F * lay.scale <= budget);
+      }
+    }
+    for (const auto& w : content.weapons) {
+      CAPTURE(n);
+      CAPTURE(w.id);
+      const auto lay = game::cardNameLayout(w.name, budget);
+      REQUIRE_FALSE(lay.elided);
+      REQUIRE(lay.lines.size() <= 2);
+      for (const auto& l : lay.lines) {
+        REQUIRE(static_cast<float>(l.size()) * 6.0F * lay.scale <= budget);
+      }
+    }
+  }
+}
+
+TEST_CASE("The level-up card row fits on screen at every height and width") {
+  // The card row was laid out at a fixed py * 0.32 with only its WIDTH ever
+  // checked. A resizable window has no minimum, so below about 500px tall the
+  // cards and the reroll hint below them ran off the bottom of the screen --
+  // the player is asked to press a number they cannot see. The top is now
+  // clamped against the real height.
+  //
+  // The horizontal side of the same rule is asserted too, because the width clamp
+  // is the other thing standing between a 5-card row and the right edge.
+  constexpr float kGap = 24.0F;
+  // The worst case: a 4-card row whose descriptions are long enough to hit the
+  // height ceiling, and whose titles wrap to two lines.
+  for (float py : {300.0F, 480.0F, 720.0F, 1080.0F, 1440.0F}) {
+    for (float px : {640.0F, 1024.0F, 1280.0F, 1920.0F}) {
+      for (std::size_t n : {std::size_t{1}, std::size_t{2}, std::size_t{3}, std::size_t{4},
+                            std::size_t{5}}) {
+        CAPTURE(px);
+        CAPTURE(py);
+        CAPTURE(n);
+        const auto row = game::Game::levelUpRowLayout(px, py, n, 10, 2);
+        // The row is horizontally centred, so the first card's left edge and the
+        // last card's right edge are the two things that can leave the screen.
+        const float totalW = static_cast<float>(n) * row.cardW +
+                             static_cast<float>(n - 1) * kGap;
+        const float left = px * 0.5F - totalW * 0.5F;
+        const float right = left + totalW;
+        REQUIRE(left >= -0.001F);
+        REQUIRE(right <= px + 0.001F);
+        // The card must be as tall as the space it was given, and the reroll hint
+        // sits 24px under it -- so on a window tall enough for the card, both the
+        // bottom edge and the hint have to be on screen.
+        REQUIRE(row.top >= 0.0F);
+        if (py >= 0.16F * py + 44.0F + row.cardH + 44.0F) {
+          REQUIRE(row.top + row.cardH <= py);
+          REQUIRE(row.hintY <= py);
+        }
+        // The title and the description must not overlap inside the card, and
+        // both must be inside it.
+        REQUIRE(row.bodyTop > static_cast<float>(row.nameLines) * 24.0F);
+        REQUIRE(row.bodyTop + 15.0F <= row.cardH);
+        REQUIRE(row.bodyLines >= 1);
+      }
+    }
+  }
+}
+
+TEST_CASE("A level-up always offers at least one choice") {
+  // The renderer divides by the card count, so an empty row would mean cards
+  // drawn at NaN positions. buildChoices has always appended a Skip card when
+  // the pool came up dry; this pins that, because the renderer's fallback branch
+  // is otherwise dead code whose deadness nobody would notice.
+  //
+  // The run is maxed out first, which is the case that actually produces the Skip
+  // card -- with upgrades left to take, a non-empty row proves nothing.
+  // Named local on purpose: Game holds a const Content&, and loadContent returns
+  // by value, so binding the temporary straight into the constructor leaves
+  // content_ dangling the moment the statement ends.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 4242};
+  g.testAddWeapon(0);
+  g.testMaxAllItems();
+  int levels = 0;
+  for (int i = 0; i < 200 && levels < 12; ++i) {
+    g.grantXp(5000.0F);
+    g.advance(1.0F / 60.0F, game::FrameInput{});
+    if (g.state() != game::RunState::LevelUp) continue;
+    ++levels;
+    REQUIRE(g.testChoiceCount() >= 1);
+    // Take whichever is offered and keep going; the point is that there is
+    // always something to take.
+    game::FrameInput in{};
+    in.choose1 = true;
+    g.advance(1.0F / 60.0F, in);
+  }
+  // If the loop never reached a level-up the test proved nothing.
+  REQUIRE(levels >= 12);
+}
+
+TEST_CASE("A chain bolt converges before it strikes, and outlives its last hop") {
+  // Two separate complaints, one test: the strike used to be a pop (the enemy's
+  // health was already moving before the player could tell what was about to
+  // happen) and the bolt used to vanish the instant it hit the last body in
+  // range. Both are about the same three beats.
+  SoloWeapon s("tesla", 3);
+  REQUIRE(s.slot >= 0);
+  s.arm();
+  // One target is enough to prove the wind-up: a bolt with a single victim
+  // dead-ends immediately, which is the case that used to skip the linger.
+  s.g.testSpawnEnemyAt(2.5F, 0.0F);
+  const float hpBefore = s.g.testFirstEnemyHp();
+
+  // Beat 1: the bolt exists and has not struck. Nothing has been damaged.
+  s.g.testAdvance(1.0F / 60.0F);
+  const auto converging = s.g.testChainTelegraphs();
+  REQUIRE(converging.size() == 1);
+  CAPTURE(converging.front());
+  REQUIRE(converging.front() > 0);
+  REQUIRE(s.g.testFirstEnemyHp() == Catch::Approx(hpBefore));
+
+  // Mid-wind-up it is still converging, and the timer is counting DOWN.
+  s.g.testAdvance(game::Game::kChainTelegraph * 0.5F);
+  const auto midway = s.g.testChainTelegraphs();
+  REQUIRE(midway.size() == 1);
+  CAPTURE(midway.front());
+  REQUIRE(midway.front() > 0);
+  REQUIRE(midway.front() < converging.front());
+  REQUIRE(s.g.testFirstEnemyHp() == Catch::Approx(hpBefore));
+
+  // Beat 2/3: after the window it lands, and the damage is real. The extra
+  // 0.1s is the 0.05s inter-hop delay, so the sample is unambiguously after the
+  // first hit rather than sitting exactly on it.
+  s.g.testAdvance(game::Game::kChainTelegraph + 0.1F);
+  const auto struck = s.g.testChainTelegraphs();
+  REQUIRE(struck.size() == 1);
+  CAPTURE(struck.front());
+  REQUIRE(struck.front() == -1);
+  REQUIRE(s.g.testFirstEnemyHp() < hpBefore);
+
+  // And it is STILL on screen. This is the half that was broken: the bolt had no
+  // target left, so it used to be destroyed on the spot instead of lingering.
+  REQUIRE(s.g.testChainCount() == 1);
+  REQUIRE(game::Game::kChainLinger >= 0.3F);
+
+  // It is gone only once the linger has actually run out. The weapon is silenced
+  // first: Tesla fires every 0.65s, so a live weapon would have put a second
+  // bolt on screen before the first had finished hanging, and the test would be
+  // measuring the fire rate rather than the linger.
+  s.g.testClearWeapons();
+  s.g.testAdvance(game::Game::kChainLinger + 0.1F);
+  REQUIRE(s.g.testChainCount() == 0);
+}
+
+// ============================================================================
+// Round 15: one test per weapon rework.
+//
+// Every one of these exists because the rework was a claim, not a rename. A
+// different AttackType is not evidence of a different weapon -- two weapons can
+// run the same code with only the numbers changed and the game will happily call
+// it an evolution. So each test states the MECHANIC, and the ones that can be
+// checked against a sibling weapon are checked against the sibling, because
+// "the drill only chews one body" means nothing until "the sprayer chews them
+// all" is in the same file.
+// ============================================================================
+
+TEST_CASE("The Jackhammer Drill commits to one body; the Sprayer washes the whole crowd") {
+  // The complaint was that the drill and the flamethrower were the same weapon.
+  // They are both `cone`, so the separation has to be a rule, and the rule is
+  // that the bit latches ONE body and ramps while it stays buried.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  REQUIRE(content.weapon("drill")->coneBite > 0.0F);
+  REQUIRE(content.weapon("flame")->coneBite == 0.0F);
+
+  // Two bodies inside the drill's arc, the near one first. Both are well inside
+  // cone_range and both sit on the aim line, so nothing about geometry favours
+  // one over the other except distance -- which is the latch rule.
+  SoloWeapon drill("drill");
+  REQUIRE(drill.slot >= 0);
+  drill.arm();
+  drill.g.testSpawnEnemyAt(1.6F, 0.0F);
+  drill.g.testSpawnEnemyAt(2.6F, 0.0F);
+  drill.g.testAdvance(0.30F);
+  const float drillNear = drill.g.testEnemyHpNear(1.6F, 0.0F);
+  const float drillFar = drill.g.testEnemyHpNear(2.6F, 0.0F);
+  CAPTURE(drillNear);
+  CAPTURE(drillFar);
+  // The near body is chewed; the far one is left completely alone.
+  REQUIRE(drillNear < 100000.0F);
+  REQUIRE(drillFar == Catch::Approx(100000.0F));
+
+  // The same two bodies against the Sprayer: both are washed. This is the half
+  // of the claim that makes it a pair of different weapons rather than one
+  // weapon with a filter.
+  SoloWeapon flame("flame");
+  REQUIRE(flame.slot >= 0);
+  flame.arm();
+  flame.g.testSpawnEnemyAt(1.6F, 0.0F);
+  flame.g.testSpawnEnemyAt(2.6F, 0.0F);
+  flame.g.testAdvance(0.30F);
+  const float flameNear = flame.g.testEnemyHpNear(1.6F, 0.0F);
+  const float flameFar = flame.g.testEnemyHpNear(2.6F, 0.0F);
+  CAPTURE(flameNear);
+  CAPTURE(flameFar);
+  REQUIRE(flameNear < 100000.0F);
+  REQUIRE(flameFar < 100000.0F);
+
+  // And the bite RAMPS, which is the other half of the drill's identity. Over
+  // 0.30s at a 0.05s tick the ramp is well past 1x, so the drill's damage on a
+  // single body beats the Sprayer's on that same body by more than the crowd
+  // falloff can explain.
+  REQUIRE(100000.0F - drillNear > 100000.0F - flameNear);
+}
+
+TEST_CASE("The Siege Mortar fires THROUGH the front rank; the Runic Hammer does not") {
+  // These two were the same arcing shell with a longer fuse and a wider blast.
+  // The mortar's rule is that it lands `bomb_ahead` PAST whoever is nearest its
+  // aim line, so the answer is asserted positionally: the body in front survives
+  // and the body behind it is the one that gets cooked.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  REQUIRE(content.weapon("mortar")->bombAhead > 0.0F);
+  REQUIRE(content.weapon("hammer")->bombAhead == 0.0F);
+
+  // The near body is what the player is aiming at (auto-target takes the
+  // nearest), so the aim line is unambiguous and the overshoot has something to
+  // overshoot.
+  SoloWeapon mortar("mortar");
+  REQUIRE(mortar.slot >= 0);
+  mortar.arm();
+  mortar.g.testSpawnEnemyAt(3.0F, 0.0F);
+  mortar.g.testSpawnEnemyAt(7.0F, 0.0F);
+  // Long enough for the fuse to expire and the shell to come down.
+  mortar.g.testAdvance(3.0F);
+  const float frontRank = mortar.g.testEnemyHpNear(3.0F, 0.0F);
+  const float backRank = mortar.g.testEnemyHpNear(7.0F, 0.0F);
+  CAPTURE(frontRank);
+  CAPTURE(backRank);
+  // It sailed over the thing in front of it.
+  REQUIRE(frontRank == Catch::Approx(100000.0F));
+  REQUIRE(backRank < 100000.0F);
+
+  // The hammer, same two bodies: it detonates on contact, so the front rank is
+  // what it answers and the body behind it is untouched.
+  SoloWeapon hammer("hammer");
+  REQUIRE(hammer.slot >= 0);
+  hammer.arm();
+  hammer.g.testSpawnEnemyAt(3.0F, 0.0F);
+  hammer.g.testSpawnEnemyAt(7.0F, 0.0F);
+  hammer.g.testAdvance(3.0F);
+  const float hammerFront = hammer.g.testEnemyHpNear(3.0F, 0.0F);
+  const float hammerBack = hammer.g.testEnemyHpNear(7.0F, 0.0F);
+  CAPTURE(hammerFront);
+  CAPTURE(hammerBack);
+  REQUIRE(hammerFront < 100000.0F);
+  REQUIRE(hammerBack == Catch::Approx(100000.0F));
+}
+
+TEST_CASE("The Void Nova is cast wide and rushes IN; the Shock Core only ever grows") {
+  // The complaint was that Void Nova was a bigger Shock Core. Both are
+  // `nova`, both are rings pinned to the player, so the separation has to be
+  // which way the radius moves -- and a test that cannot see the radius cannot
+  // tell the two apart at all.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  REQUIRE(content.weapon("nova")->novaContract);
+  REQUIRE(content.weapon("shockcore")->novaContract == false);
+
+  auto radiusTrace = [](std::string_view id) {
+    SoloWeapon s(id);
+    REQUIRE(s.slot >= 0);
+    s.arm();
+    // Something to aim at so the ring is cast, well outside the shock core's
+    // reach so it does not matter which end it starts at.
+    s.g.testSpawnEnemyAt(7.0F, 0.0F);
+    s.g.testAdvance(1.0F / 60.0F);
+    std::vector<float> radii;
+    for (int i = 0; i < 20; ++i) {
+      const auto r = s.g.testNovaRadii();
+      if (!r.empty()) radii.push_back(r.front());
+      s.g.testAdvance(1.0F / 60.0F);
+    }
+    return radii;
+  };
+
+  const auto contract = radiusTrace("nova");
+  const auto expand = radiusTrace("shockcore");
+  REQUIRE(contract.size() >= 4);
+  REQUIRE(expand.size() >= 4);
+  CAPTURE(contract.front());
+  CAPTURE(contract.back());
+  CAPTURE(expand.front());
+  CAPTURE(expand.back());
+  // A contracting ring STARTS at its maximum: that is the "cast wide" in the
+  // description, and it is the half that a bigger number on the shock core
+  // could never produce.
+  REQUIRE(contract.front() > contract.back());
+  REQUIRE(contract.front() > 1.0F);
+  // An expanding one starts at nothing and ends up out.
+  REQUIRE(expand.front() < expand.back());
+  REQUIRE(expand.back() > 1.0F);
+}
+
+TEST_CASE("The Seraph Array's wings leave a ring of safe ground at your feet") {
+  // "A better Halo" was the complaint, and reach alone is a better Halo. The
+  // rule is `halo_inner`: the spokes do not start at the player, so there is a
+  // hole at the centre. Reach is paid for with safety, which is a choice the
+  // plain Halo never asks you to make.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  REQUIRE(content.weapon("seraph")->haloInner > 0.0F);
+  REQUIRE(content.weapon("halo")->haloInner == 0.0F);
+
+  // One body practically under the player's feet. Nothing else is on screen, so
+  // auto-target aims at it and the spoke sweeps straight over where it stands.
+  SoloWeapon seraph("seraph");
+  REQUIRE(seraph.slot >= 0);
+  seraph.arm();
+  seraph.g.testSpawnEnemyAt(0.5F, 0.0F);
+  seraph.g.testAdvance(1.5F);
+  const float hugging = seraph.g.testEnemyHpNear(0.5F, 0.0F);
+  CAPTURE(hugging);
+  // The wings have swept over it many times and never once reached it.
+  REQUIRE(hugging == Catch::Approx(100000.0F));
+  // The hole is real and measurable, not just "smaller numbers".
+  const auto inners = seraph.g.testHaloBeamInners();
+  REQUIRE(!inners.empty());
+  for (const float in : inners) REQUIRE(in > 0.0F);
+
+  // The plain Halo, same body: its spokes start at the player, so it is a guard
+  // and it does hit.
+  SoloWeapon halo("halo");
+  REQUIRE(halo.slot >= 0);
+  halo.arm();
+  halo.g.testSpawnEnemyAt(0.5F, 0.0F);
+  halo.g.testAdvance(1.5F);
+  const float guarded = halo.g.testEnemyHpNear(0.5F, 0.0F);
+  CAPTURE(guarded);
+  REQUIRE(guarded < 100000.0F);
+  const auto plainInners = halo.g.testHaloBeamInners();
+  REQUIRE(!plainInners.empty());
+  for (const float in : plainInners) REQUIRE(in == Catch::Approx(0.0F));
+}
+
+TEST_CASE("The Event Horizon's wells hoard and implode; the Void Gyre's never end") {
+  // "The same weapon twice" was the complaint, and they are both `vortex` with
+  // the same orbiting wells. The difference is whether the well has an end: the
+  // Gyre is a patient permanent drag, and the Horizon hoards for three seconds
+  // and then detonates and reopens somewhere else on the orbit.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  REQUIRE(content.weapon("eventhorizon")->vortexCollapseAt > 0.0F);
+  REQUIRE(content.weapon("vortex")->vortexCollapseAt == 0.0F);
+
+  // Charge is the collapse clock. A collapsing well's charge climbs towards its
+  // threshold; a well that never collapses keeps its charge pinned at zero
+  // forever, which is the whole of the Gyre's identity.
+  auto chargeAfter = [](std::string_view id, float seconds) {
+    SoloWeapon s(id);
+    REQUIRE(s.slot >= 0);
+    s.arm();
+    s.g.testSpawnEnemyAt(6.0F, 0.0F);
+    s.g.testAdvance(seconds);
+    return s.g.testVortexCharges();
+  };
+
+  const auto horizonCharging = chargeAfter("eventhorizon", 1.0F);
+  const auto gyreCharging = chargeAfter("vortex", 1.0F);
+  REQUIRE(!horizonCharging.empty());
+  REQUIRE(!gyreCharging.empty());
+  // Flat charge,angle pairs: every even index is a charge.
+  for (std::size_t i = 0; i < horizonCharging.size(); i += 2) {
+    CAPTURE(horizonCharging[i]);
+    REQUIRE(horizonCharging[i] > 0.5F);
+  }
+  for (std::size_t i = 0; i < gyreCharging.size(); i += 2) {
+    CAPTURE(gyreCharging[i]);
+    REQUIRE(gyreCharging[i] == Catch::Approx(0.0F));
+  }
+
+  // Past the threshold the charge wraps, and that wrap is what says the well
+  // detonated and reopened: at 1.0s the charge is nearly full, and at 4.2s --
+  // just over one collapse cycle later -- the charge is young again.
+  const auto afterCycle = chargeAfter("eventhorizon", 4.2F);
+  REQUIRE(!afterCycle.empty());
+  float maxCharge = 0.0F;
+  for (std::size_t i = 0; i < afterCycle.size(); i += 2) {
+    maxCharge = std::max(maxCharge, afterCycle[i]);
+  }
+  CAPTURE(maxCharge);
+  REQUIRE(maxCharge < content.weapon("eventhorizon")->vortexCollapseAt);
+
+  // And the collapse has to be worth several seconds of the steady drip, or it
+  // is not an event -- it is a slightly louder tick. A body parked in the blast
+  // takes the lump; the assertion is only that it took a lot, which the constant
+  // damage of a well would not produce on its own in one and a bit seconds.
+  SoloWeapon horizon("eventhorizon");
+  REQUIRE(horizon.slot >= 0);
+  horizon.arm();
+  // Straight out along +x, which is where a well's orbit passes.
+  horizon.g.testSpawnEnemyAt(3.0F, 0.0F);
+  const float before = horizon.g.testFirstEnemyHp();
+  horizon.g.testAdvance(4.2F);
+  const float after = horizon.g.testFirstEnemyHp();
+  CAPTURE(after);
+  REQUIRE(before - after > content.weapon("eventhorizon")->vortexBurstDamage * 0.5F);
+}
+
+TEST_CASE("The two wave weapons are a corridor and a fan, not two crescents") {
+  // "The sprites are not symmetric and they are too similar" was the complaint,
+  // and the fix had to be structural rather than cosmetic. They share an entity
+  // and an AttackType, so the separation is in the data: the Sundering Core is
+  // ONE wide slow arc that goes a long way, the Tidal Lash is THREE narrow fast
+  // ones spread across a fan. Neither is reachable from the other's numbers.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  const auto* core = content.weapon("sunder");
+  const auto* lash = content.weapon("tidewhip");
+  REQUIRE(core != nullptr);
+  REQUIRE(lash != nullptr);
+
+  // Coverage vs corridor. The lash throws several arcs, fanned apart; the core
+  // throws exactly one.
+  REQUIRE(lash->waveCount > 1);
+  REQUIRE(lash->waveArcStep > 0.0F);
+  REQUIRE(core->waveCount == 1);
+  REQUIRE(core->waveArcStep == 0.0F);
+
+  // Horns: the core's open far wider than the lash's, which is the difference
+  // between a wall and a hook and is the whole of the visual complaint.
+  REQUIRE(core->waveSpread > lash->waveSpread);
+
+  // And the two profiles do not cross over: the core is the slower, longer,
+  // heavier shot and the lash is the faster, shorter one. If these ever swap,
+  // the names are lying.
+  REQUIRE(core->waveSpeed < lash->waveSpeed);
+  REQUIRE(core->waveRange > lash->waveRange);
+  REQUIRE(core->waveKnockback > lash->waveKnockback);
+}
+
+TEST_CASE("Hearthfire lays burning ground behind the Ember Sprayer's cone") {
+  // The card used to be "wider and longer", which is not a rule. The rule is
+  // that the cone leaves pools, dropped by DISTANCE the tip has travelled, so
+  // walking lays a trail and standing still does not stack a hundred pools on
+  // one tile.
+  SoloWeapon bare("flame");
+  REQUIRE(bare.slot >= 0);
+  bare.arm();
+  bare.g.testSpawnEnemyAt(2.0F, 0.0F);
+  bare.g.testAdvance(0.5F);
+  // Without the card the sprayer leaves nothing behind.
+  REQUIRE(bare.g.debugCounts().zones == 0);
+
+  SoloWeapon hearth("flame");
+  REQUIRE(hearth.slot >= 0);
+  hearth.arm();
+  // 0, not `hearth.slot`: that is the CONTENT index of the weapon, and the
+  // upgrade hook takes an EQUIPPED slot. With one weapon equipped they differ.
+  hearth.g.testAddWeaponUpgrade(0, "w_unique_hearthfire", 1.0F);
+  hearth.g.testSpawnEnemyAt(2.0F, 0.0F);
+  hearth.g.testAdvance(0.5F);
+  const auto zones = hearth.g.debugCounts().zones;
+  CAPTURE(zones);
+  REQUIRE(zones > 0);
+
+  // The cap is a real cap: the pools are dropped by DISTANCE the cone's tip has
+  // travelled, so walking lays a road and standing still lays nothing new. A
+  // screen of permanent flame is a different game rather than a stronger Ember
+  // Sprayer.
+  for (int i = 0; i < 40; ++i) {
+    hearth.g.testSetPlayerPosition(static_cast<float>(i) * 0.25F, 0.0F);
+    hearth.g.testAdvance(1.0F / 60.0F);
+  }
+  const auto whileWalking = hearth.g.debugCounts().zones;
+  CAPTURE(whileWalking);
+  REQUIRE(whileWalking > 0);
+  REQUIRE(whileWalking <= 6);
+
+  // And standing still on top of a live trail adds nothing: the pools already
+  // there burn out and nothing replaces them, because the tip has not moved.
+  hearth.g.testAdvance(4.0F);
+  const auto whileStill = hearth.g.debugCounts().zones;
+  CAPTURE(whileStill);
+  REQUIRE(whileStill == 0);
+}
+
+TEST_CASE("Discharge fires a second nova ring, and it is DELAYED, not doubled") {
+  // Two rings on the same frame would be one bigger ring wearing a costume.
+  // The echo is scheduled, so the second blast lands after the first has had
+  // time to open a gap in the pack -- which is the entire reason a double is
+  // worth having over one larger nova.
+  SoloWeapon bare("shockcore");
+  REQUIRE(bare.slot >= 0);
+  bare.arm();
+  bare.g.testSpawnEnemyAt(3.0F, 0.0F);
+  bare.g.testAdvance(1.0F / 60.0F);
+  // One ring per cast without the card, even a frame later.
+  bare.g.testAdvance(0.2F);
+  const auto plain = bare.g.testNovaRadii();
+  REQUIRE(plain.size() <= 1);
+
+  SoloWeapon echo("shockcore");
+  REQUIRE(echo.slot >= 0);
+  echo.arm();
+  echo.g.testAddWeaponUpgrade(0, "w_unique_discharge", 1.0F);
+  echo.g.testSpawnEnemyAt(3.0F, 0.0F);
+  echo.g.testAdvance(1.0F / 60.0F);
+  // A delay later there are two: the original, still growing, and the echo.
+  bool sawTwo = false;
+  bool sawTwoOnTheCastFrame = false;
+  for (int i = 0; i < 40 && !sawTwo; ++i) {
+    const auto radii = echo.g.testNovaRadii();
+    if (radii.size() >= 2) {
+      sawTwo = true;
+      sawTwoOnTheCastFrame = (i == 0);
+      // Two live rings, and they are NOT the same ring: the echo is younger, so
+      // it is smaller. A doubled ring would be two identical radii.
+      REQUIRE(radii[0] != radii[1]);
+    }
+    echo.g.testAdvance(1.0F / 60.0F);
+  }
+  REQUIRE(sawTwo);
+  // Not both on the frame the weapon fired -- that is the "one bigger ring"
+  // case, and it is the case the card is supposed to avoid.
+  REQUIRE_FALSE(sawTwoOnTheCastFrame);
+}
+
+TEST_CASE("A hooked whip drags its catch in instead of shoving it out") {
+  // The Barbed Whip's barbs were doing nothing: the weapon pushed and could
+  // therefore never START anything. The hook inverts the knockback, which is the
+  // only thing in the weapon's name that was not already accounted for. It is
+  // opt-in so the Soul Scythe -- whose whole job is a knockback circle -- is
+  // untouched.
+  // One frame only, and that is deliberate. The AI's separation term shoves a
+  // body away from the player at up to 4 u/s, which is almost exactly the size of
+  // a lash's knockback -- so over a quarter of a second the shove is buried and
+  // the two cases end up only a few centimetres apart, with separation winning in
+  // both. At the instant of the hit the knockback is at full strength and the
+  // direction is unambiguous, which is the thing being asserted: which way does
+  // this weapon push.
+  const auto lashOnce = [](bool hooked) {
+    game::Content content(game::loadContent(GAME_ASSETS_DIR "/data"));
+    game::Game g(content, 7);
+    g.testDisableWaves();
+    int def = -1;
+    for (std::size_t i = 0; i < content.weapons.size(); ++i) {
+      if (content.weapons[i].id == "whip") def = static_cast<int>(i);
+    }
+    REQUIRE(def >= 0);
+    g.testAddWeapon(def);
+    if (hooked) g.testAddWeaponUpgrade(0, "w_unique_chainlash", 1.0F);
+    g.testSpawnEnemyAt(2.0F, 0.0F);
+    const float before = g.testEnemyPositions()[0];
+    // Two steps, not one: the swing happens after the movement update in a step,
+    // so a shove lands in the position on the NEXT step. One step measures
+    // nothing at all.
+    g.testAdvance(2.0F / 60.0F);
+    const auto after = g.testEnemyPositions();
+    REQUIRE(after.size() == 2);
+    return std::pair<float, float>(before, after[0]);
+  };
+
+  const auto plain = lashOnce(false);
+  const auto hook = lashOnce(true);
+  CAPTURE(plain.first);
+  CAPTURE(plain.second);
+  CAPTURE(hook.first);
+  CAPTURE(hook.second);
+  // A plain lash SHOVES: the body is driven further out than it started.
+  REQUIRE(plain.second > plain.first);
+  // The same lash with the barbs actually barbed drives it back TOWARD the
+  // player, and leaves it nearer than the plain lash did.
+  REQUIRE(hook.second < hook.first);
+  REQUIRE(hook.second < plain.second);
+}
+
+TEST_CASE("Blade Vortex's gap is the only place the ring's interior bites") {
+  // The interior grind used to pay every enemy strictly inside the ring
+  // uniformly, which is a worse version of the ring: an everywhere-equal hazard
+  // the player cannot aim at or answer. With the gap, the safe angle becomes
+  // the killing angle, so a faster ring is worth something.
+  SoloWeapon bare("dagger");
+  REQUIRE(bare.slot >= 0);
+  bare.arm();
+  bare.g.testSpawnEnemyAt(6.0F, 0.0F);
+  bare.g.testAdvance(0.2F);
+  // No card, no gap to speak of.
+  REQUIRE(bare.g.testOrbitWindowAngle(0) == Catch::Approx(-1.0F));
+
+  SoloWeapon gap("dagger");
+  REQUIRE(gap.slot >= 0);
+  gap.arm();
+  gap.g.testAddWeaponUpgrade(0, "w_unique_vortex", 1.0F);
+  gap.g.testSpawnEnemyAt(6.0F, 0.0F);
+  gap.g.testAdvance(1.0F / 60.0F);
+  const float window = gap.g.testOrbitWindowAngle(0);
+  CAPTURE(window);
+  REQUIRE(window >= -0.5F);
+
+  // The ring is spinning, so the gap's angle is only knowable at the instant it
+  // is read. Read it, put one body in the gap and one diametrically opposite it
+  // at the same radius, and step a single frame: the gap is where the interior
+  // damage is paid.
+  SoloWeapon s("dagger");
+  REQUIRE(s.slot >= 0);
+  s.arm();
+  s.g.testAddWeaponUpgrade(0, "w_unique_vortex", 1.0F);
+  s.g.testSpawnEnemyAt(6.0F, 0.0F);
+  s.g.testAdvance(1.0F / 60.0F);
+  const float gapAngle = s.g.testOrbitWindowAngle(0);
+  REQUIRE(gapAngle > -0.5F);
+  const auto blades = s.g.testOrbitBladeGaps(0);
+  REQUIRE(!blades.empty());
+  // A target just inside the ring, in the gap, and its mirror image.
+  const float px = s.g.testPlayerX();
+  const float py = s.g.testPlayerY();
+  const float inR = 0.5F;
+  s.g.testSpawnEnemyAt(px + std::cos(gapAngle) * inR, py + std::sin(gapAngle) * inR);
+  s.g.testSpawnEnemyAt(px - std::cos(gapAngle) * inR, py - std::sin(gapAngle) * inR);
+  const float inGap = s.g.testEnemyHpNear(px + std::cos(gapAngle) * inR,
+                                           py + std::sin(gapAngle) * inR);
+  const float opposite = s.g.testEnemyHpNear(px - std::cos(gapAngle) * inR,
+                                             py - std::sin(gapAngle) * inR);
+  // The whirl is paid inside a step, so give it one. The ring turns 0.1 rad per
+  // step at this speed and the window is 0.84 rad wide, so the bodies are still
+  // where they were put; and separation only pushes them radially, so neither
+  // leaves the angle it was placed on.
+  s.g.testAdvance(1.0F / 60.0F);
+  const float inGapAfter = s.g.testEnemyHpNear(px + std::cos(gapAngle) * inR,
+                                                py + std::sin(gapAngle) * inR);
+  const float oppositeAfter = s.g.testEnemyHpNear(px - std::cos(gapAngle) * inR,
+                                                  py - std::sin(gapAngle) * inR);
+  CAPTURE(inGap);
+  CAPTURE(opposite);
+  CAPTURE(inGapAfter);
+  CAPTURE(oppositeAfter);
+  // Both are inside the ring, so without the wedge they would be paid equally.
+  // With it, the one in the gap is the one being cut.
+  REQUIRE(inGapAfter < 100000.0F);
+  REQUIRE(oppositeAfter == Catch::Approx(100000.0F));
+}
+
+TEST_CASE("The Pulsar's trail burns the whole line it flies, not the blade tip") {
+  // The complaint was "just prettier shuriken", and the reason was provable: at
+  // 60Hz and twenty units a second the per-frame segment is a third of a unit,
+  // which hits exactly what the blade's own contact test already hits. The trail
+  // now covers the blade's remembered path, so it is a corridor.
+  //
+  // The test is the version that cannot be faked: a body parked OFF the blade's
+  // flight line, inside the trail's width but outside the blade's contact
+  // radius. If that body loses health, the scar did it, not the blade.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  const auto* pulsar = content.weapon("pulsar");
+  REQUIRE(pulsar != nullptr);
+  // Blade contact radius is 0.14 and the test enemy is 0.3, so a body more than
+  // 0.44 off the line cannot be touched by the blade itself. The trail half
+  // width is beam_width/2; this requires the body to be inside that.
+  const float trailHalf = pulsar->beamWidth * 0.5F;
+  const float offset = trailHalf * 0.9F;
+  REQUIRE(offset > 0.44F);
+  REQUIRE(offset < trailHalf + 0.3F);
+
+  SoloWeapon s("pulsar");
+  REQUIRE(s.slot >= 0);
+  s.arm();
+  // The aim anchor is the NEAREST body, so it has to be nearer than the one
+  // being tested or the blade flies at the wrong line.
+  s.g.testSpawnEnemyAt(2.0F, 0.0F);
+  s.g.testSpawnEnemyAt(4.0F, offset);
+  const float victimX = 4.0F;
+  const float victimY = offset;
+  const float before = s.g.testEnemyHpNear(victimX, victimY);
+  s.g.testAdvance(1.2F);
+  const float after = s.g.testEnemyHpNear(victimX, victimY);
+  CAPTURE(before);
+  CAPTURE(after);
+  // It was never in contact with the blade and it is still hurt.
+  REQUIRE(before == Catch::Approx(100000.0F));
+  REQUIRE(after < 100000.0F);
+}
+
+TEST_CASE("The Hoarfrost Wake's aura slows and grinds what the volley only PASSES") {
+  // Chill is an on-HIT status, so Frost Shards only ever slowed the bodies a
+  // shard went through -- it had to keep hitting to keep slowing, and the back
+  // of the horde was never touched. The aura is the other kind of cold: it
+  // travels with the shard.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  const auto* wake = content.weapon("rimewake");
+  REQUIRE(wake != nullptr);
+  REQUIRE(wake->auraRadius > 0.0F);
+  REQUIRE(wake->auraChillTime > 0.0F);
+  // The pair is a real evolution of a real pair of parents.
+  REQUIRE(wake->prereqs.size() == 2);
+
+  // The victim sits off the flight line by more than the blade's contact reach
+  // and inside the corona, so the only thing that can touch it is the aura.
+  const float offset = wake->auraRadius * 0.6F;
+  REQUIRE(offset > 0.44F);
+  SoloWeapon s("rimewake");
+  REQUIRE(s.slot >= 0);
+  s.arm();
+  s.g.testSpawnEnemyAt(2.0F, 0.0F);                    // the aim anchor, nearest
+  s.g.testSpawnEnemyAt(4.0F, offset);                  // the body the shard misses
+  const float victimX = 4.0F;
+  const float victimY = offset;
+  const float hpBefore = s.g.testEnemyHpNear(victimX, victimY);
+  s.g.testAdvance(0.6F);
+  const float hpAfter = s.g.testEnemyHpNear(victimX, victimY);
+  CAPTURE(hpBefore);
+  CAPTURE(hpAfter);
+  REQUIRE(hpBefore == Catch::Approx(100000.0F));
+  // Grounded by the corona even though nothing ever went through it.
+  REQUIRE(hpAfter < 100000.0F);
+
+  // And chilled. The nearest enemy to the victim is the victim itself (it is
+  // alone out there), so the chill pair list is unambiguous.
+  s.g.testAdvance(0.2F);
+  const auto chills = s.g.testEnemyChills();
+  REQUIRE(!chills.empty());
+  bool anyChilled = false;
+  for (std::size_t i = 0; i < chills.size(); i += 2) {
+    CAPTURE(chills[i]);
+    if (chills[i] < 1.0F) anyChilled = true;
+  }
+  REQUIRE(anyChilled);
+
+  // The plain Frost Shards, same body, same off-line position: nothing at all
+  // happens, because there is no corona to reach it.
+  const float shardOffset = wake->auraRadius * 0.6F;
+  SoloWeapon shard("shard");
+  REQUIRE(shard.slot >= 0);
+  shard.arm();
+  shard.g.testSpawnEnemyAt(2.0F, 0.0F);
+  shard.g.testSpawnEnemyAt(4.0F, shardOffset);
+  const float shardBefore = shard.g.testEnemyHpNear(4.0F, shardOffset);
+  shard.g.testAdvance(0.6F);
+  const float shardAfter = shard.g.testEnemyHpNear(4.0F, shardOffset);
+  CAPTURE(shardBefore);
+  CAPTURE(shardAfter);
+  REQUIRE(shardBefore == Catch::Approx(100000.0F));
+  REQUIRE(shardAfter == Catch::Approx(100000.0F));
+}
+
+
+TEST_CASE("The difficulty pass: level-ups arrive sooner and elites arrive later") {
+  // One guard for the whole pass, because the numbers in it are the numbers a
+  // player feels. Individually they look like tuning; together they are the
+  // difference between a run that is under-levelled and a run that is not, and
+  // the only reason to write them down is so the next pass cannot quietly undo
+  // it one constant at a time.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+
+  // --- Elites wait, and are rarer once they arrive ---------------------------
+  // The first elite used to land at 0:45, before the player had a third pick.
+  // That is not an interruption, it is an ambush: the run's first real decision
+  // became "do I play around the thing that is about to end me", which is a
+  // decision about the game rather than about the build.
+  game::Game g{content, 3};
+  g.testDisableWaves();
+  REQUIRE_FALSE(g.tierUnlocked(1));
+  g.testSetSimTime(89.0F);
+  REQUIRE_FALSE(g.tierUnlocked(1));
+  g.testSetSimTime(90.0F);
+  REQUIRE(g.tierUnlocked(1));
+
+  // And rarer. At the old 15% ceiling one spawn in seven was an elite, which is
+  // a tax on the trash rather than an event.
+  REQUIRE(g.tierSpawnChance(1) < 0.06F);
+  g.testSetSimTime(2000.0F);
+  REQUIRE(g.tierSpawnChance(1) <= 0.10F);
+  // Still a ramp, not a constant: late in a run elites are commoner than early.
+  g.testSetSimTime(90.0F);
+  const float early = g.tierSpawnChance(1);
+  g.testSetSimTime(400.0F);
+  REQUIRE(g.tierSpawnChance(1) > early);
+
+  // --- The extra traits wait too ---------------------------------------------
+  // A champion with three traits at the four-minute mark is not a champion, it
+  // is a boss wearing a champion's label, and nothing the player picked yet was
+  // an answer to it.
+  REQUIRE(game::traitsForTier(2, 299.0F) == 2);
+  REQUIRE(game::traitsForTier(2, 300.0F) == 3);
+  REQUIRE(game::traitsForTier(3, 599.0F) == 4);
+  REQUIRE(game::traitsForTier(3, 600.0F) == 5);
+
+  // --- The enemy HP ramp is gentler, and capped lower ------------------------
+  // The HP ramp is the one piece of difficulty the player has no answer to: a
+  // build three picks behind cannot outshoot it, so a steep ramp is not a hard
+  // game, it is a run where the player's choices do not matter. Read through the
+  // real spawn path (testSpawnTieredEnemyAt applies the global scales), against
+  // the bat, which is the first thing the player ever sees shoot back.
+  const int bat = [&content] {
+    for (std::size_t i = 0; i < content.enemies.size(); ++i) {
+      if (content.enemies[i].id == "bat") return static_cast<int>(i);
+    }
+    return -1;
+  }();
+  REQUIRE(bat >= 0);
+  const float batBaseHp = content.enemies[static_cast<std::size_t>(bat)].hp;
+
+  const auto scaledHpAt = [&](float seconds) {
+    game::Game probe{content, 5};
+    probe.testDisableWaves();
+    probe.testSetSimTime(seconds);
+    probe.testSpawnTieredEnemyAt(4.0F, 0.0F, 0, 0, bat);
+    return probe.testFirstEnemyHp() / batBaseHp;
+  };
+  const float atStart = scaledHpAt(0.0F);
+  const float atFive = scaledHpAt(300.0F);
+  const float atTen = scaledHpAt(600.0F);
+  const float atTwenty = scaledHpAt(1200.0F);
+  const float atHour = scaledHpAt(3600.0F);
+  CAPTURE(atStart);
+  CAPTURE(atFive);
+  CAPTURE(atTen);
+  CAPTURE(atTwenty);
+  CAPTURE(atHour);
+  // Monotone, and starting from exactly the authored value.
+  REQUIRE(atStart == Catch::Approx(1.0F));
+  REQUIRE(atFive > atStart);
+  REQUIRE(atTen > atFive);
+  REQUIRE(atTwenty > atTen);
+  // The cap holds: the old one was 30x, which at twenty minutes was most of
+  // what a build could be worth.
+  REQUIRE(atHour <= 22.0F);
+  // And the ramp is real but shallower than it was. At ten minutes the old curve
+  // was 11.5x; a build that is still finishing its core damage and fire-rate
+  // cards at that point cannot answer 11.5x, so 8.4x is the difference between
+  // a fight and a wall.
+  REQUIRE(atTen < 9.0F);
+  // Not flat either. A ramp that stopped growing would be a different game.
+  REQUIRE(atTwenty > 2.0F * atStart);
+}
+
+TEST_CASE("A weapon's unique card can only move fields its own attack type reads") {
+  // The failure this exists to stop is not subtle, it is just invisible: a card
+  // sets `sweepHook` on a weapon that throws waves, the SLOT changes, the
+  // existing "the card did something" test passes, and the weapon behaves
+  // identically before and after. It survived that test for a full pass, and it
+  // survived because the test asked the wrong question -- "did the numbers on
+  // the card change?" instead of "did the WEAPON change?".
+  //
+  // So this asks the right one, from the other end: every `w_unique_*` effect
+  // declares which attack types it can actually act on, and a unique card may
+  // only ship on a weapon of one of them. A weapon changes its own attack type
+  // (the Storm Caller stopped being a chain weapon) and its card moves to a
+  // different row, or this fails and says so.
+  //
+  // The table is the design statement: which RULE belongs to which kind of
+  // weapon. Adding a new `w_unique_*` effect means adding a row, which is the
+  // point -- the alternative is finding out it is dead from a playtest.
+  struct EffectScope {
+    const char* effect;
+    std::vector<game::AttackType> types;
+    const char* why; // what the effect actually edits
+  };
+  const std::vector<EffectScope> scopes{
+      {"w_unique_homing", {game::AttackType::Projectile}, "homing"},
+      {"w_unique_area",
+       {game::AttackType::Projectile, game::AttackType::Boomerang,
+        game::AttackType::Bounce},
+       "splash radius"},
+      {"w_unique_rime", {game::AttackType::Projectile}, "chill and pierce"},
+      {"w_unique_deepfreeze", {game::AttackType::Projectile}, "the carried aura"},
+      {"w_unique_reaim", {game::AttackType::Projectile}, "pierce and the bend"},
+      {"w_unique_skewer", {game::AttackType::Bounce}, "ricochet count and range"},
+      {"w_unique_vortex", {game::AttackType::Orbit}, "the orbit ring"},
+      {"w_unique_hearthfire", {game::AttackType::Cone}, "cone shape and ember pools"},
+      {"w_unique_bore", {game::AttackType::Cone}, "the bite ramp"},
+      {"w_unique_cataclysm", {game::AttackType::Bomb}, "blast size and fuse"},
+      {"w_unique_siege_doctrine", {game::AttackType::Bomb}, "shells and overshoot"},
+      {"w_unique_harvest", {game::AttackType::Sweep}, "heal on kill"},
+      {"w_unique_chainlash", {game::AttackType::Sweep}, "the full circle and the hook"},
+      {"w_unique_lash", {game::AttackType::Wave}, "arc count and the herd"},
+      {"w_unique_faultline", {game::AttackType::Wave}, "the single wide crescent"},
+      {"w_unique_supernova", {game::AttackType::Nova}, "the ring"},
+      {"w_unique_discharge", {game::AttackType::Nova}, "the ring and the echo"},
+      {"w_unique_everflame", {game::AttackType::Inferno}, "the reap and the fire"},
+      {"w_unique_molten", {game::AttackType::Inferno}, "the burning ground"},
+      {"w_unique_gravitic", {game::AttackType::Chain}, "jump range and decay"},
+      {"w_unique_thunderlord", {game::AttackType::Chain}, "jump count and decay"},
+      {"w_unique_bell", {game::AttackType::Lure}, "the pull and the beacons"},
+      {"w_unique_gyre", {game::AttackType::Vortex}, "the suction"},
+      {"w_unique_singularity", {game::AttackType::Vortex}, "the suction and the collapse"},
+      {"w_unique_prism", {game::AttackType::Beam}, "the split"},
+      {"w_unique_refract", {game::AttackType::Prism}, "the target count"},
+      {"w_unique_arcsaw", {game::AttackType::Pulsar}, "the trail width"},
+      {"w_unique_corona", {game::AttackType::Halo}, "the spokes"},
+      {"w_unique_wingbeat", {game::AttackType::Halo}, "the spokes and the dead zone"},
+  };
+
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  const auto scopeOf = [&scopes](const std::string& effect) -> const EffectScope* {
+    for (const auto& sc : scopes) {
+      if (effect == sc.effect) return &sc;
+    }
+    return nullptr;
+  };
+  const auto allows = [](const EffectScope& sc, game::AttackType t) {
+    return std::find(sc.types.begin(), sc.types.end(), t) != sc.types.end();
+  };
+
+  // Every unique card that is scoped to a weapon must be one of the rules above,
+  // and its weapon must be a type that rule can act on.
+  std::size_t checked = 0;
+  for (const auto& u : content.upgrades) {
+    if (u.weapon.empty()) continue;
+    if (u.effect.rfind("w_unique_", 0) != 0) continue;
+    const auto* def = content.weapon(u.weapon);
+    REQUIRE(def != nullptr);
+    CAPTURE(u.id);
+    CAPTURE(u.weapon);
+    CAPTURE(u.effect);
+    const auto* sc = scopeOf(u.effect);
+    REQUIRE(sc != nullptr);
+    INFO("effect " << u.effect << " moves " << sc->why
+                  << ", which no " << static_cast<int>(def->attackType)
+                  << "-type weapon reads");
+    REQUIRE(allows(*sc, def->attackType));
+    ++checked;
+  }
+  // And the roster is fully covered: no unique card escaped the loop above, so
+  // the number here is the number of weapon-scoped unique cards in the game.
+  CAPTURE(checked);
+  REQUIRE(checked >= 29);
+}
+
+TEST_CASE("A hooking wave hands its catch across the fan, a plain one shoves it") {
+  // The Tidal Lash's description has said each arc "drags its catch into the
+  // next" for a full pass, and `WaveEffect` had no field for it: every wave
+  // shoved along its own heading, which is the Sundering Core's behaviour and
+  // the exact opposite of a funnel. With three arcs that meant three
+  // independent pushes, each sending bodies down a different line -- which is
+  // the one thing the Core already does, so the two wave weapons were a wall
+  // and three more walls.
+  //
+  // So this measures the net direction of the push, with the Core as the
+  // control. Both are aimed at a body due east, so the first arc of each goes
+  // due east: a plain shove sends the catch straight out, and a herd sends it
+  // across the fan. The fan turns counter-clockwise, so across means north.
+  //
+  // The Lash's three arcs push at +0, +1.15 and +2.30 rad, so its net is a mix
+  // of all three and the claim is about where the body ENDS UP, not about any
+  // one arc. The control is what makes that number mean anything: with the same
+  // body, the same aim and a third of the force, the Core's across-component is
+  // not smaller, it is zero.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  const auto* lash = content.weapon("tidewhip");
+  const auto* core = content.weapon("sunder");
+  REQUIRE(lash != nullptr);
+  REQUIRE(core != nullptr);
+  // The data has to say so, or the mechanic is not there to test.
+  REQUIRE(lash->waveHookPull > 0.0F);
+  REQUIRE(core->waveHookPull == 0.0F);
+  REQUIRE(lash->waveArcStep > 0.0F); // the herd follows the fan's own rotation
+  REQUIRE(lash->waveCount > 1);      // and there is a next arc to hand it to
+
+  // How far the single body ended up from where it started, split into the
+  // component along the first arc (east) and across it (north).
+  const auto shoveOf = [&content](std::string_view id) {
+    SoloWeapon s{std::string{id}, 31};
+    s.arm();
+    s.g.testSpawnEnemyAt(3.0F, 0.0F);
+    s.g.testSetFirstEnemyKnockbackRes(0.0F);
+    // Long enough for every arc of the shot to arrive and its push to decay.
+    s.g.testAdvance(0.8F);
+    const auto pos = s.g.testEnemyPositions();
+    REQUIRE(pos.size() >= 2);
+    return std::pair<float, float>{pos[0] - 3.0F, pos[1]};
+  };
+
+  const auto [lashAlong, lashAcross] = shoveOf("tidewhip");
+  const auto [coreAlong, coreAcross] = shoveOf("sunder");
+  CAPTURE(lashAlong);
+  CAPTURE(lashAcross);
+  CAPTURE(coreAlong);
+  CAPTURE(coreAcross);
+
+  // The control: a wave with no hook shoves along its own heading, so the body
+  // goes out and not sideways at all.
+  REQUIRE(coreAlong > 0.0F);
+  REQUIRE(std::abs(coreAcross) < 0.02F);
+
+  // And the Lash hands the same body across the fan instead. A third of the
+  // along-component is a wide margin against a control that is exactly zero,
+  // and below it the herd is not happening.
+  REQUIRE(lashAcross > 0.0F);
+  REQUIRE(lashAcross > 0.35F * lashAlong);
 }
