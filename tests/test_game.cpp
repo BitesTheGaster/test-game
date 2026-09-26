@@ -7271,3 +7271,61 @@ TEST_CASE("No card carries a fraction on an effect the game counts in whole numb
   // And the set is not empty, so a rename cannot turn this green by accident.
   REQUIRE(counts >= 8);
 }
+
+TEST_CASE("A chest names every card it handed over, not just the last one") {
+  // The player asked for this: a simple readout of what fell out of the box. The
+  // old toast was one line built from the LAST card of up to five, so a
+  // champion's hand of three upgrades arrived as three real changes to the run
+  // and one ambiguous sentence.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 5150};
+  g.enterTestMode();
+  g.testDisableWaves();
+  g.testClearWeapons();
+  // A real arsenal, so the weapon side of the pool is not the empty one that
+  // forces every card down the item path.
+  for (const char* id : {"dagger", "scythe", "orb", "bow", "whip"}) {
+    const int idx = g.testWeaponContentIndex(id);
+    if (idx >= 0) g.testAddWeapon(idx);
+  }
+  REQUIRE(g.testWeaponCount() > 1);
+
+  const int size = g.testSpawnChest(0.0F, 0.0F, 3, -1); // an overlord's box
+  REQUIRE(size == 5);
+  g.testOpenFirstChest();
+  const int given = g.testLastChestGrants();
+  CAPTURE(given);
+  REQUIRE(given >= 2);
+
+  // Exactly the cards that were granted, in the order they rolled, and every one
+  // of them a real card. An empty slot or a stale index would render as a blank
+  // line in the panel, which is worse than no panel.
+  REQUIRE(g.testChestRevealCount() == given);
+  REQUIRE(g.testChestRevealCount() <=
+          static_cast<int>(game::Game::kChestRevealMax));
+  for (int k = 0; k < g.testChestRevealCount(); ++k) {
+    const int idx = g.testChestReveal()[static_cast<std::size_t>(k)];
+    CAPTURE(k);
+    CAPTURE(idx);
+    REQUIRE(idx >= 0);
+    REQUIRE(idx < static_cast<int>(content.upgrades.size()));
+    const auto& u = content.upgrades[static_cast<std::size_t>(idx)];
+    // And it is a card the player can actually be shown: a named, described,
+    // non-milestone card. A milestone in a receipt would be a question the box
+    // has already answered without asking.
+    REQUIRE_FALSE(u.name.empty());
+    REQUIRE_FALSE(u.desc.empty());
+    REQUIRE(u.kind != "milestone");
+  }
+
+  // The panel belongs to ONE box. A box that can hand out nothing must not leave
+  // the previous box's cards on screen claiming to be its own.
+  //
+  // Two boxes are on the floor and testOpenFirstChest takes whichever the
+  // registry hands back first, so both are drained: each call consumes one box,
+  // and the last one to go is the empty one.
+  g.testSpawnChest(0.0F, 0.0F, 1, 0); // a box with nothing left to give
+  while (g.testChestCount() > 0) g.testOpenFirstChest();
+  REQUIRE(g.testLastChestGrants() == 0);
+  REQUIRE(g.testChestRevealCount() == 0);
+}

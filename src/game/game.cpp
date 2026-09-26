@@ -2621,7 +2621,9 @@ void Game::killEnemy(entt::entity e) {
     // unreliable -- which is worse than a slightly too generous one.
     spawnChest(t.x, t.y, static_cast<int>(tr->tier));
     lastChestTimer_ = std::max(lastChestTimer_, 1.4F);
-    lastChestGrants_ = 0;
+    // The box is on the FLOOR, not open: there is nothing to name yet, and the
+    // hint is its own one-line message rather than the panel.
+    clearChestReveal(static_cast<int>(tr->tier));
   }
   destroyQueue_.push_back(e);
   ++kills_;
@@ -4607,6 +4609,13 @@ int Game::openChest(int grants) {
     }
     if (applyUpgradeAt(card)) {
       ++given;
+      // The reveal panel names EVERY card the box gave, in the order it rolled
+      // them. Only the last one used to be recorded, which meant an overlord's
+      // five cards were five real upgrades and one ambiguous line of text.
+      if (static_cast<std::size_t>(chestRevealCount_) < kChestRevealMax) {
+        chestReveal_[static_cast<std::size_t>(chestRevealCount_)] = card;
+        ++chestRevealCount_;
+      }
       // The HUD wants to say what came out of the box.
       lastChestCard_ = card;
     }
@@ -4690,6 +4699,10 @@ void Game::updatePickups() {
       // out of the way. It is a pickup like any other so the player never has to
       // press a key for a reward.
       if (const auto* c = registry_.try_get<Chest>(e); c != nullptr) {
+        // Reset BEFORE the roll. The reveal belongs to one box, so a box that
+        // somehow hands out nothing must not leave the previous box's cards on
+        // screen claiming to be its own.
+        clearChestReveal(c->tier);
         const int given = openChest(c->grants);
         // A box with nothing left to give still opens, and says so, rather than
         // sitting on the floor forever waiting for a weapon to have a card again.
@@ -5981,6 +5994,18 @@ void Game::applyWeaponWide(WeaponSlot& w, std::string_view effect, float value) 
     w.novaPull *= 1.0F + value;
     w.vortexPull *= 1.0F + value;
   }
+}
+
+// Clears the chest reveal panel. Both the card list AND the "this box gave N
+// cards" counter go together, because the renderer's gate is two fields and
+// clearing only one of them is how a previous box's cards stay on screen
+// claiming to be a later box's -- or how an empty box leaves a stale count that
+// a test then reads as if it were fresh.
+void Game::clearChestReveal(int tier) {
+  chestRevealCount_ = 0;
+  chestRevealTier_ = tier;
+  lastChestCard_ = -1;
+  lastChestGrants_ = 0;
 }
 
 // Applies one upgrade card. Returns false when the effect is unknown or when a
@@ -7644,6 +7669,7 @@ void Game::testOpenFirstChest() {
   if (view.empty()) return;
   const entt::entity e = *view.begin();
   const auto& t = registry_.get<Transform>(e);
+  clearChestReveal(registry_.get<Chest>(e).tier);
   const int given = openChest(registry_.get<Chest>(e).grants);
   if (given > 0) {
     lastChestGrants_ = given;
@@ -9526,10 +9552,19 @@ void Game::render(core::render::Batcher& b, float alpha) {
   }
 
   // Chests. A plain dot would be mistaken for a fat XP orb, so the box is drawn
-  // as one: a dark square lid, a lighter body, and a ring of the tier's colour
-  // whose TICKS equal the number of weapons it will improve. A champion's box is
-  // literally bigger than an elite's, so the size of the reward is readable from
-  // across the screen before the player has to reach it.
+  // as one.
+  //
+  // Everything is centred on the same x and the lid and body are the same width.
+  // That is not a style choice so much as a correction: the box used to be a
+  // full-width dark lid floating a hair above a NARROWER coloured body, with a
+  // strap that stopped at the body's top and never crossed the lid -- so the lid
+  // read as a separate dark hat perched on a smaller crate, and the whole thing
+  // looked crooked. The player named it.
+  //
+  // So: one silhouette, symmetric about its own centre, in two shades of the
+  // tier's colour, with one strap running the full height and a latch where the
+  // two halves meet. A chest you can name is a chest you recognise at a glance,
+  // and the ticks orbiting it say how many cards are inside.
   {
     auto view = registry_.view<Transform, Sprite, Chest, Radius>();
     for (const auto e : view) {
@@ -9539,26 +9574,59 @@ void Game::render(core::render::Batcher& b, float alpha) {
       const auto& r = view.get<Radius>(e);
       const float x = t.px + (t.x - t.px) * lerp;
       const float y = t.py + (t.y - t.py) * lerp;
-      const float bob = 0.05F * std::sin(simTime_ * 4.0F);
+      const float bob = 0.04F * std::sin(simTime_ * 4.0F);
       // Halo on the ground, so a box on the far side of a pack still reads as
       // something to walk toward.
       Color glow = s.color;
       glow.a = 0.14F + 0.06F * std::sin(simTime_ * 4.0F);
       b.circle(x, y, r.r * 2.4F, glow);
+
+      // The two halves are cut from one width and one centre. Nothing here is
+      // allowed to be a different width from the piece below it, because that is
+      // exactly what made the old box lean.
       const float w = r.r * 2.0F;
-      Color lid{0.14F, 0.13F, 0.20F, 1.0F};
-      b.rect(x - w * 0.5F, y - w * 0.9F + bob, w, w * 0.45F, lid);
-      b.rect(x - w * 0.42F, y - w * 0.42F + bob, w * 0.84F, w * 0.84F, s.color);
-      Color band{0.16F, 0.15F, 0.22F, 1.0F};
-      b.rect(x - w * 0.10F, y - w * 0.42F + bob, w * 0.20F, w * 0.84F, band);
-      // One tick per weapon this box will improve.
+      const float bodyH = w * 0.52F;
+      const float lidH = w * 0.38F;
+      // The lid is a darker shade of the body's own colour, not a separate
+      // colour: two greys at different values read as two objects.
+      Color body = s.color;
+      body.r *= 0.62F;
+      body.g *= 0.62F;
+      body.b *= 0.62F;
+      Color lid = s.color;
+
+      // Bottom edge sits on the ground at the entity's own y, and the lid sits
+      // directly on the body with no gap and no overhang.
+      const float bodyY = y - bodyH * 0.5F + bob;
+      const float lidY = bodyY - lidH + bob;
+      b.rect(x - w * 0.5F, bodyY, w, bodyH, body);
+      b.rect(x - w * 0.5F, lidY, w, lidH, lid);
+      // Domed top, two steps of it, so the lid is not a plain brick. Symmetric
+      // by construction: both steps are centred and each is narrower than the
+      // one below.
+      const float domeH = lidH * 0.34F;
+      b.rect(x - w * 0.34F, lidY - domeH, w * 0.68F, domeH, lid);
+      b.rect(x - w * 0.16F, lidY - domeH * 2.0F, w * 0.32F, domeH, lid);
+
+      // One strap down the middle, running the WHOLE height including the dome,
+      // which is what ties the halves into one object instead of a hat on a
+      // crate. Dark, so it reads as a strap rather than as a third colour.
+      Color strap{0.13F, 0.12F, 0.18F, 1.0F};
+      const float strapW = w * 0.16F;
+      const float strapTop = lidY - domeH * 2.0F;
+      b.rect(x - strapW * 0.5F, strapTop, strapW, (y + bob) - strapTop, strap);
+      // Latch, sitting exactly on the seam between the lid and the body.
+      const float latch = w * 0.22F;
+      b.rect(x - latch * 0.5F, bodyY - bodyH - latch * 0.35F, latch, latch, strap);
+
+      // One tick per card this box will hand over, orbiting the whole silhouette.
       const int ticks = std::clamp(c.grants, 1, 5);
       for (int k = 0; k < ticks; ++k) {
         const float a = (static_cast<float>(k) / static_cast<float>(ticks)) * 2.0F * kPi +
                         simTime_ * 0.9F;
         Color tick = s.color;
         tick.a = 0.9F;
-        b.circle(x + std::cos(a) * r.r * 1.5F, y + std::sin(a) * r.r * 1.5F, 0.055F,
+        b.circle(x + std::cos(a) * r.r * 1.6F, y + std::sin(a) * r.r * 1.6F, 0.055F,
                  tick);
       }
     }
@@ -10534,19 +10602,87 @@ void Game::render(core::render::Batcher& b, float alpha) {
            fade, tierBanner_);
   }
 
-  // Chest toast. A box spends itself the instant it is touched, so without this
+  // Chest reveal. A box spends itself the instant it is touched, so without this
   // the player sees their weapon quietly improve and has no way of telling which
-  // one, or how many. The number is the whole reward, so it is what is written.
-  if (lastChestTimer_ > 0.0F && lastChestGrants_ > 0 && lastChestCard_ >= 0) {
-    const auto& card = content_.upgrades[static_cast<std::size_t>(lastChestCard_)];
-    const std::string what = card.name;
-    const std::string line =
-        "CHEST: " + std::to_string(lastChestGrants_) +
-        (lastChestGrants_ == 1 ? " WEAPON UPGRADED" : " WEAPONS UPGRADED") + " - " + what;
-    const float a = std::min(1.0F, lastChestTimer_ / 0.6F);
-    Color fade{1.0F, 0.85F, 0.35F, a};
-    b.text(px * 0.5F - b.textWidth(2.2F, line) * 0.5F, py * 0.5F - 176.0F, 2.2F, fade,
-           line);
+  // one, or how many.
+  //
+  // It names EVERY card the box gave, not one. The old toast was a single line
+  // built from `lastChestCard_`, which is the LAST roll of up to five: a
+  // champion's three upgrades were three real changes to the run and one
+  // ambiguous sentence. The player asked for a readout of what fell out, so this
+  // is a small panel of them.
+  //
+  // Deliberately plain. It is a receipt, not a celebration: one line per card,
+  // the card's own name and its own description, and nothing else. No rarity
+  // flourish, no per-card animation, no choice to make -- a box has already
+  // spent itself, and a reveal that looked like a picker would teach the player
+  // to wait for one.
+  if (lastChestTimer_ > 0.0F && lastChestGrants_ > 0 && chestRevealCount_ > 0) {
+    const int shown = std::min(chestRevealCount_,
+                               static_cast<int>(Game::kChestRevealMax));
+    // The tier's colour, so the panel matches the box the player just walked
+    // over. An elite's box and an overlord's are the same shape in two different
+    // colours, which is the same read the chest itself gives on the ground.
+    Color tierCol{1.0F, 0.85F, 0.35F, 1.0F};
+    if (chestRevealTier_ == 1) tierCol = {0.45F, 0.85F, 1.00F, 1.0F};
+    if (chestRevealTier_ == 2) tierCol = {0.75F, 0.50F, 1.00F, 1.0F};
+
+    constexpr float kNameScale = 1.7F;
+    constexpr float kDescScale = 1.4F;
+    constexpr float kRowH = 26.0F;
+    constexpr float kPadX = 14.0F;
+    constexpr float kPadTop = 30.0F;
+    // Hold the panel still for most of its life, then fade the last stretch, so a
+    // five-card receipt is readable rather than a thing that blinks away.
+    const float a = std::min(1.0F, lastChestTimer_ / 0.8F);
+
+    // Measure first, then centre. The panel's width is set by its widest row, and
+    // a fixed width would either clip a long card name or leave a lopsided gap
+    // around a short one.
+    float widest = 0.0F;
+    for (int k = 0; k < shown; ++k) {
+      const auto& u = content_.upgrades[static_cast<std::size_t>(
+          chestReveal_[static_cast<std::size_t>(k)])];
+      const std::string row = u.name + "  -  " + u.desc;
+      widest = std::max(widest, b.textWidth(kNameScale, row));
+    }
+    const float panelW = std::min(px - 40.0F, widest + kPadX * 2.0F);
+    const float panelH = kPadTop + static_cast<float>(shown) * kRowH + 8.0F;
+    const float panelX = px * 0.5F - panelW * 0.5F;
+    const float panelY = py * 0.5F - 96.0F;
+
+    Color back{0.06F, 0.05F, 0.09F, 0.90F * a};
+    Color edge = tierCol;
+    edge.a = 0.85F * a;
+    b.rect(panelX, panelY, panelW, panelH, back);
+    // A plain 2px frame. Four rects rather than a rounded outline: the panel has
+    // to read as a label sitting on the screen, not as a window.
+    b.rect(panelX, panelY, panelW, 2.0F, edge);
+    b.rect(panelX, panelY + panelH - 2.0F, panelW, 2.0F, edge);
+    b.rect(panelX, panelY, 2.0F, panelH, edge);
+    b.rect(panelX + panelW - 2.0F, panelY, 2.0F, panelH, edge);
+
+    const std::string head =
+        "CHEST  x" + std::to_string(shown) +
+        (shown == 1 ? "  CARD" : "  CARDS");
+    Color headCol = tierCol;
+    headCol.a = a;
+    b.text(panelX + kPadX, panelY + 9.0F, 1.6F, headCol, head);
+
+    for (int k = 0; k < shown; ++k) {
+      const auto& u = content_.upgrades[static_cast<std::size_t>(
+          chestReveal_[static_cast<std::size_t>(k)])];
+      const float rowY = panelY + kPadTop + static_cast<float>(k) * kRowH;
+      // Name in the tier colour, description in plain white: the name is what
+      // the player scans for, the description is what they read once they have.
+      Color nameCol = tierCol;
+      nameCol.a = a;
+      b.text(panelX + kPadX, rowY, kNameScale, nameCol, u.name);
+      const float descX =
+          panelX + kPadX + b.textWidth(kNameScale, u.name) + 10.0F;
+      Color descCol{0.92F, 0.92F, 0.96F, a};
+      b.text(descX, rowY + 2.0F, kDescScale, descCol, u.desc);
+    }
   }
 
   // Off-screen spawn warnings: a small dot at the screen edge marks where an

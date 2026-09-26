@@ -550,6 +550,11 @@ public:
   // paint a wall of cards over the game.
   static constexpr std::size_t kMaxMilestoneSlots = 4;
 
+  // How many cards the chest reveal panel can name at once. An overlord's box is
+  // the largest thing on the floor (five), so this is the hard ceiling on the
+  // panel rather than a chosen number.
+  static constexpr std::size_t kChestRevealMax = 5;
+
   // --- Fast-enemy pacing ----------------------------------------------------
   //
   // Three numbers, one intent: a quick enemy should be something the run grows
@@ -619,6 +624,11 @@ public:
     starterChoicePending_ = false; // tests set up weapons directly
     addWeapon(defIndex);
   }
+  // Test helper: how many weapons are armed. Several tests want an arsenal with
+  // more than one weapon -- a chest's 50/50 weapon-or-item roll only has two
+  // sides if the weapon side is not empty -- and each was otherwise re-deriving
+  // that by snapshotting slot 0 and hoping.
+  [[nodiscard]] int testWeaponCount() const { return weaponCount_; }
   // Test helper: a comparable copy of one weapon slot's whole CONFIGURABLE stat
   // block, so a test can assert that taking a card actually MOVED something
   // instead of silently doing nothing. Comparing two snapshots with == covers
@@ -833,6 +843,12 @@ public:
   // and which content card the last of them was. -1 / 0 before any box is opened.
   [[nodiscard]] int testLastChestGrants() const { return lastChestGrants_; }
   [[nodiscard]] int testLastChestCard() const { return lastChestCard_; }
+  // What a box actually handed out, in order. The reveal panel is the only
+  // place a champion's three cards are ever named, so a test can ask.
+  [[nodiscard]] const std::array<int, kChestRevealMax>& testChestReveal() const {
+    return chestReveal_;
+  }
+  [[nodiscard]] int testChestRevealCount() const { return chestRevealCount_; }
   // Test helper: elites-and-above currently alive. The spawner consults it so
   // the screen cannot fill with elites, and so a test can pin that cap.
   [[nodiscard]] int testLiveTierCount() const;
@@ -1432,6 +1448,10 @@ private:
   // prefers a weapon that has no card yet, so a box opens new lines instead of
   // stacking a fourth copy of one. Returns how many cards were actually granted.
   int openChest(int grants);
+  // Clears the chest reveal panel in one place, so the card list and the
+  // "this box gave N cards" counter can never disagree about whether a panel is
+  // up. The renderer gates on both.
+  void clearChestReveal(int tier);
   // Every weapon-targeted card in the content that is legal for the weapon in
   // `weaponSlot` and not yet maxed.
   [[nodiscard]] std::vector<int> legalWeaponCards(int weaponSlot) const;
@@ -1795,14 +1815,24 @@ private:
   float momentumRate_ = 0.0F;
   float momentumSpeedMul_ = 1.0F;
 
-  // The last chest the player opened: which card came out of it, how many it
-  // actually gave, and how long the toast stays up. The toast is a courtesy --
-  // a box spends itself whether or not anybody reads it -- but a reward the
-  // player cannot identify is a reward that feels like nothing happened.
+  // The last chest the player opened: every card that came out of it, how many it
+  // actually gave, and how long the panel stays up.
+  //
+  // It is a LIST, not a single card, because a box gives up to five of them and a
+  // one-line toast naming the last one is how a champion's hand of three cards
+  // arrives as a single ambiguous sentence. The player asked for this directly:
+  // a simple readout of what fell out. Five is the overlord's cap, so the array
+  // cannot be overrun -- and a sixth card is dropped rather than reallocating,
+  // because a reveal that grows without bound is a reveal that stops being read.
+  // kChestRevealMax itself is declared up with the other class constants, because
+  // the test hooks below name it in a signature and a signature needs it first.
+  std::array<int, kChestRevealMax> chestReveal_{};
+  int chestRevealCount_ = 0;
+  int chestRevealTier_ = 0;
   int lastChestCard_ = -1;
   int lastChestGrants_ = 0;
   float lastChestTimer_ = 0.0F;
-  static constexpr float kChestToastTime = 2.6F;
+  static constexpr float kChestToastTime = 3.4F;
 
   // Active ability state (see the Ability enum above).
   float abilityCd_[kAbilityCount] = {0.0F, 0.0F, 0.0F};
