@@ -9750,38 +9750,30 @@ void Game::render(core::render::Batcher& b, float alpha) {
         body.g += (kEmber.g - body.g) * k;
         body.b += (kEmber.b - body.b) * k;
       }
-      if (s.circle) b.circle(x, y, r.r, body);
-      else b.rect(x, y, r.r * 2.0F, r.r * 2.0F, body);
-      // A hexed body is outlined, because the hex is a stack: the player needs to
-      // be able to see it build without watching the damage numbers. The outline
-      // is a fraction of the elite ring so the two never read as the same thing.
+      // A hexed body is TINTED, not ringed.
+      //
+      // It used to wear its own dotted ring, and so did a frozen body, and so did
+      // a tiered one -- three concentric rings at 1.09r, 1.14r and 1.16r, on the
+      // same body, in a game where the screen is a hundred bodies deep. A frozen
+      // hexed elite looked like a striped ball and there was no way to tell which
+      // stripe meant what.
+      //
+      // The language is now one sentence: the RING says how tough the body is, the
+      // COLOUR says what state it is in. Chill and burn already worked that way,
+      // and hex joins them here, so a status costs a lerp instead of two dozen
+      // circles. The hex is a stack, so its depth is still readable as it builds.
+      //
+      // The body is therefore drawn ONCE, here, after all three tints.
       if (const auto* tr = registry_.try_get<EnemyTraits>(e);
           tr != nullptr && tr->vuln > 0.0F) {
         const float depth = std::clamp(tr->vuln, 0.0F, 1.0F);
         constexpr Color kHex{0.85F, 0.40F, 1.0F, 1.0F};
-        Color ring = kHex;
-        ring.a = 0.30F + 0.45F * depth;
-        constexpr int kHexDots = 12;
-        for (int k = 0; k < kHexDots; ++k) {
-          const float a =
-              (static_cast<float>(k) / static_cast<float>(kHexDots)) * 2.0F * kPi +
-              simTime_ * 1.4F;
-          b.circle(x + std::cos(a) * r.r * 1.09F, y + std::sin(a) * r.r * 1.09F, 0.06F,
-                   ring);
-        }
+        body.r += (kHex.r - body.r) * depth;
+        body.g += (kHex.g - body.g) * depth;
+        body.b += (kHex.b - body.b) * depth;
       }
-      // A hard freeze gets a ring, borrowing the elite outline's language so
-      // "this one is pinned" reads at the same glance as "this one is tough".
-      if (chilled && en->slowMul <= 0.55F) {
-        constexpr Color kFrostRing{0.70F, 0.94F, 1.0F, 0.55F};
-        constexpr float kDot = 0.07F;
-        constexpr int kRingDots = 20;
-        for (int k = 0; k < kRingDots; ++k) {
-          const float a = (static_cast<float>(k) / static_cast<float>(kRingDots)) * 2.0F * kPi;
-          b.circle(x + std::cos(a) * r.r * 1.14F, y + std::sin(a) * r.r * 1.14F, kDot,
-                   kFrostRing);
-        }
-      }
+      if (s.circle) b.circle(x, y, r.r, body);
+      else b.rect(x, y, r.r * 2.0F, r.r * 2.0F, body);
 
       const auto* tr = registry_.try_get<EnemyTraits>(e);
       if (h.hp < h.max || (tr != nullptr && tr->tier > 0)) {
@@ -9796,6 +9788,10 @@ void Game::render(core::render::Batcher& b, float alpha) {
       // champion orange, overlord violet) — no glow, no floating text. The
       // outline follows the enemy's shape (ring for circles, frame for squares)
       // and is drawn thick so it reads at a glance.
+      //
+      // This is now the ONLY ring an enemy can wear. Statuses are tints and the
+      // health bar is a bar, so the player learns one rule: a ring means this one
+      // is the hard one, and the colour says which hard one.
       if (tr != nullptr && tr->tier > 0) {
         Color ring;
         if (tr->tier >= 3) {
@@ -9805,7 +9801,7 @@ void Game::render(core::render::Batcher& b, float alpha) {
         } else {
           ring = {1.0F, 0.85F, 0.20F, 0.95F};
         }
-        const float rr = r.r * 1.16F;
+        const float rr = r.r * 1.18F;
         constexpr float kDot = 0.085F;
         if (s.circle) {
           constexpr int kRingDots = 24;
@@ -9814,10 +9810,16 @@ void Game::render(core::render::Batcher& b, float alpha) {
             b.circle(x + std::cos(a) * rr, y + std::sin(a) * rr, kDot, ring);
           }
         } else {
-          // Square perimeter: dots along each of the four edges.
+          // Square perimeter. Each side runs corner to corner INCLUSIVE, so every
+          // corner is drawn by exactly one side: the old `k <= kPerSide` drew all
+          // four corners twice, which is 8 wasted circles per square elite and
+          // made the corners brighter than the edges for no reason.
           constexpr int kPerSide = 7;
           for (int side = 0; side < 4; ++side) {
             for (int k = 0; k <= kPerSide; ++k) {
+              // The last dot on each side is the first dot of the next one, so it
+              // is skipped here.
+              if (k == kPerSide && side != 3) continue;
               const float f = -rr + (2.0F * rr) * (static_cast<float>(k) / static_cast<float>(kPerSide));
               float dx = 0.0F;
               float dy = 0.0F;
@@ -9955,6 +9957,12 @@ void Game::render(core::render::Batcher& b, float alpha) {
       const auto& vx = view.get<Vortex>(e);
       const float x = t.px + (t.x - t.px) * lerp;
       const float y = t.py + (t.y - t.py) * lerp;
+      // A well with an END winds shut, and the player can see the timer on the
+      // weapon instead of having to remember it. The Void Gyre never ends, so it
+      // never winds and its rim simply sits at full size.
+      const float chargeF = vx.collapseAt > 0.0F
+                                ? std::clamp(vx.charge / vx.collapseAt, 0.0F, 1.0F)
+                                : 0.0F;
       // Outer "reach" halo: where the drag starts.
       Color reach = vx.color;
       reach.a = 0.07F;
@@ -9974,50 +9982,32 @@ void Game::render(core::render::Batcher& b, float alpha) {
         mote.a = 0.30F + 0.45F * (1.0F - f);
         b.circle(x + std::cos(a) * rr, y + std::sin(a) * rr, 0.07F, mote);
       }
+      // ONE ring, at the radius that matters. It used to be two: a static 18-dot
+      // rim on the core's edge, plus -- for a well that winds shut -- a shrinking
+      // FILLED disc and twelve more tics crowding inward on top of it. That last
+      // one was the loudest thing on the screen and the least informative: a
+      // filled circle at 0.9 alpha is a blob, and a blob that shrinks does not
+      // read as a ring closing.
+      //
+      // The rim itself now closes in, so the winding shut is a direction of
+      // travel on a mark the player was already looking at, and the whole well is
+      // two discs, ten motes and one ring.
+      const float rimR = vx.radius * (1.0F - 0.80F * chargeF);
       Color rim = vx.color;
-      rim.a = 0.45F;
+      rim.a = 0.45F + 0.45F * chargeF;
       constexpr int kRim = 18;
       for (int k = 0; k < kRim; ++k) {
-        const float a = 2.0F * kPi * static_cast<float>(k) / static_cast<float>(kRim);
-        b.circle(x + std::cos(a) * vx.radius, y + std::sin(a) * vx.radius, 0.06F, rim);
+        const float a = 2.0F * kPi * static_cast<float>(k) / static_cast<float>(kRim) +
+                        chargeF * 2.2F;
+        b.circle(x + std::cos(a) * rimR, y + std::sin(a) * rimR,
+                 0.06F + 0.03F * chargeF, rim);
       }
-      if (vx.collapseAt > 0.0F) {
-        // A well with an END looks completely different from one without, and the
-        // difference is the whole point of the weapon: the Void Gyre is a soft
-        // patient disc you can stand next to, and the Event Horizon is a hard
-        // bright ring that is visibly winding shut. The player can see the timer
-        // on the weapon instead of having to remember it.
-        const float chargeF =
-            vx.collapseAt > 0.0F ? std::clamp(vx.charge / vx.collapseAt, 0.0F, 1.0F) : 0.0F;
-        // The rim goes hard and bright and closes in on the centre as it charges.
-        const float cr = vx.radius * (1.0F - 0.80F * chargeF);
-        Color close = vx.color;
-        close.a = 0.35F + 0.55F * chargeF;
-        b.circle(x, y, std::max(0.05F, cr), close);
-        // Radial tics that crowd inward with the charge, so the closing is a
-        // direction of travel rather than just a shrinking outline.
-        constexpr int kTics = 12;
-        for (int k = 0; k < kTics; ++k) {
-          const float a = 2.0F * kPi * static_cast<float>(k) / static_cast<float>(kTics) +
-                          chargeF * 2.2F;
-          const float rr = vx.radius * (1.0F - 0.72F * chargeF);
-          Color tic = vx.color;
-          tic.a = 0.30F + 0.60F * chargeF;
-          b.circle(x + std::cos(a) * rr, y + std::sin(a) * rr,
-                   0.05F + 0.03F * chargeF, tic);
-        }
-        // The eye only opens once the charge is nearly done, which is the tell
-        // that the burst is a moment away.
-        Color eye = vx.color;
-        eye.a = 0.25F + 0.75F * chargeF * chargeF;
-        b.circle(x, y, 0.05F + 0.13F * chargeF * chargeF, eye);
-      } else {
-        // The Gyre: a soft bright centre it never loses, because this well never
-        // ends.
-        Color eye = vx.color;
-        eye.a = 0.85F;
-        b.circle(x, y, 0.13F, eye);
-      }
+      // The eye only opens once the charge is nearly done, which is the tell
+      // that the burst is a moment away. The Gyre keeps a soft bright centre
+      // forever, because this well never ends.
+      Color eye = vx.color;
+      eye.a = vx.collapseAt > 0.0F ? 0.25F + 0.75F * chargeF * chargeF : 0.85F;
+      b.circle(x, y, 0.05F + 0.13F * chargeF * chargeF, eye);
     }
   }
 
