@@ -1832,3 +1832,14 @@ value = 1
 max_stacks = 1
 kind = "unique"
 weapon = "rimewake"
+
+
+[[upgrade]]
+id = "uw_rimewake_rimefang"
+name = "Rimefang"
+desc = "Hoarfrost Wake: the volley narrows into piercing lances and the corona shrinks, so the lane cuts what it touches instead of slowing it"
+effect = "w_unique_rimefang"
+value = 1
+max_stacks = 1
+kind = "unique"
+weapon = "rimewake"

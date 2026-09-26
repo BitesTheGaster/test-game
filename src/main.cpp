@@ -96,6 +96,12 @@ game::FrameInput pollInput(bool& quit, float deltaSeconds, bool menuActive,
         case SDLK_3: in.choose3 = true; break;
         case SDLK_4: in.choose4 = true; break;
         case SDLK_5: in.choose5 = true; break;
+        // Only the manual reads 6..9, as page jumps. No card screen has six
+        // choices, so nothing else has to know about them.
+        case SDLK_6: in.choose6 = true; break;
+        case SDLK_7: in.choose7 = true; break;
+        case SDLK_8: in.choose8 = true; break;
+        case SDLK_9: in.choose9 = true; break;
         case SDLK_R: in.restart = true; break;
         case SDLK_T: in.testModeToggle = true; break;
         // Weapon test sandbox (only read while the sandbox is open).

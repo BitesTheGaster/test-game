@@ -6317,6 +6317,7 @@ TEST_CASE("A weapon's unique card can only move fields its own attack type reads
        "splash radius"},
       {"w_unique_rime", {game::AttackType::Projectile}, "chill and pierce"},
       {"w_unique_deepfreeze", {game::AttackType::Projectile}, "the carried aura"},
+      {"w_unique_rimefang", {game::AttackType::Projectile}, "the lances and the shrunk aura"},
       {"w_unique_reaim", {game::AttackType::Projectile}, "pierce and the bend"},
       {"w_unique_skewer", {game::AttackType::Bounce}, "ricochet count and range"},
       {"w_unique_vortex", {game::AttackType::Orbit}, "the orbit ring"},
@@ -7508,4 +7509,244 @@ TEST_CASE("A heavy tier is an event, not a stream") {
   // overlord no more than one in eighty.
   REQUIRE(champCap <= 0.025F);
   REQUIRE(lordCap <= 0.012F);
+}
+
+static std::string uppered(std::string_view in) {
+  std::string v(in);
+  for (char& c : v) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+  return v;
+}
+
+// True when a line mentions any weapon in the game. This is how a RECIPE line is
+// told apart from prose: "STORM CALLER   WAND + CROSSBOW" names two weapons and
+// says nothing about either, while "STORM CALLER   A BOLT THAT BENDS ONTO THE
+// NEXT ONE" names one and explains it. Without this distinction "the manual
+// describes the weapon" is satisfiable by the ingredient list, which is the exact
+// thing a player cannot learn anything from.
+// The same text as one blob, for the checks that ask whether a phrase is
+// mentioned anywhere rather than where.
+static std::string manualSays(const std::vector<std::string>& lines) {
+  std::string all;
+  for (const auto& l : lines) {
+    all += ' ';
+    all += l;
+    all += ' ';
+  }
+  return all;
+}
+
+static bool manualLineNamesAWeapon(const std::string& content,
+                                   const std::vector<game::WeaponDef>& weapons) {
+  for (const auto& w : weapons) {
+    if (content.find(uppered(w.name)) != std::string::npos) return true;
+  }
+  return false;
+}
+
+// The manual as plain text: one entry per row, page titles included, the '>' /
+// '#' / two-space markup prefixes stripped and everything uppercased, so a lookup
+// finds a name whether the page wrote it as a title, a bullet or an indented
+// continuation. Every coverage check below goes through this, so "what the manual
+// says" has exactly one definition -- two copies of this loop is how one of them
+// ends up auditing a different book from the other.
+static std::vector<std::string> manualLines(const game::Content& content) {
+  std::vector<std::string> out;
+  const auto push = [&out](std::string_view line) {
+    std::string v(line);
+    if (!v.empty() && (v.front() == '>' || v.front() == '#')) v.erase(0, 1);
+    if (v.size() >= 2 && v[0] == ' ' && v[1] == ' ') v.erase(0, 2);
+    for (char& c : v) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    out.push_back(std::move(v));
+  };
+  for (const auto& page : content.manual) {
+    push(page.title);
+    for (const auto& line : page.lines) push(line);
+  }
+  return out;
+}
+
+TEST_CASE("The manual names every weapon, and a recipe line is not a description") {
+  // "The manual must describe all weapons" stops being enforced the moment it is
+  // written down: adding a weapon does not make the manual stop covering it, so
+  // the gap opens silently and a player reads a seventeen-page book and still
+  // cannot find out what the Sundering Core actually does.
+  //
+  // So the coverage is asserted rather than trusted, and it is asserted in the
+  // form the pages are actually written in. The two layouts are different rules
+  // because the two kinds of weapon are different problems:
+  //
+  //  - a base weapon is described ON the line that names it, and the test is that
+  //    the rest of that line is prose rather than a list of other weapons;
+  //  - an evolution or super is described UNDER its recipe, and the test is that
+  //    two lines of prose follow before the next weapon's recipe line starts.
+  //
+  // The locality in the second rule is the whole point. A "count two lines after
+  // the name" check passes on a page where the name's own description was deleted
+  // and the two lines belong to the weapon below it, which is precisely the
+  // silent-omission failure this is here to catch.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  const auto& weapons = content.weapons;
+
+  for (const auto& w : weapons) {
+    const std::string name = uppered(w.name);
+    CAPTURE(w.id);
+    REQUIRE(std::any_of(manualLines(content).begin(), manualLines(content).end(),
+                        [&name](const std::string& l) { return l.find(name) != std::string::npos; }));
+
+    if (w.prereqs.empty()) {
+      // A base weapon: the rule is on the naming line, in prose.
+      bool described = false;
+      for (const auto& l : manualLines(content)) {
+        const auto at = l.find(name);
+        if (at == std::string::npos) continue;
+        const std::string rest = l.substr(at + name.size());
+        // Trim the column padding the pages align names with.
+        const auto firstWord = rest.find_first_not_of(' ');
+        if (firstWord == std::string::npos) continue;
+        if (rest.size() - firstWord < 25) continue;
+        if (manualLineNamesAWeapon(rest.substr(firstWord), weapons)) continue;
+        described = true;
+        break;
+      }
+      REQUIRE(described);
+    } else {
+      // An evolution or a super: the rule is the body text under the recipe,
+      // and it has to be this weapon's body text, not its neighbour's.
+      bool described = false;
+      for (const auto& page : content.manual) {
+        const auto at = std::find_if(page.lines.begin(), page.lines.end(),
+                                     [&name](std::string_view l) {
+                                       std::string v = uppered(l);
+                                       if (v.size() >= 2 && v[0] == ' ' && v[1] == ' ') {
+                                         v.erase(0, 2);
+                                       }
+                                       return v.find(name) != std::string::npos;
+                                     });
+        if (at == page.lines.end()) continue;
+        int prose = 0;
+        for (auto it = at + 1; it != page.lines.end(); ++it) {
+          if (it->empty()) continue;
+          // Another weapon's name means the description ended and the next entry
+          // began, however much body text that next entry goes on to have.
+          if (manualLineNamesAWeapon(uppered(*it), weapons)) break;
+          ++prose;
+        }
+        if (prose >= 2) described = true;
+      }
+      REQUIRE(described);
+    }
+  }
+}
+
+TEST_CASE("No weapon in the game is a dead slot: every one has at least two cards") {
+  // The manual promises it in as many words -- "every weapon has at least one of
+  // its own, so a new weapon is never a dead slot" -- and for one weapon it was
+  // quietly false. The Hoarfrost Wake shipped with a single card while every
+  // other weapon in the game has two to four, so a player who took the newest
+  // super-evolution got a strictly worse slot than a player who took any other,
+  // and its only pick was an unambiguous upgrade. A stat line wearing a card's
+  // clothes, on the one weapon where the choice was not a choice.
+  //
+  // Two is the floor because two is what the rest of the game already provides;
+  // the assertion is not a taste about how many cards are good, it is a floor
+  // under the weakest slot so the next weapon added does not repeat it.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  for (const auto& w : content.weapons) {
+    int cards = 0;
+    for (const auto& u : content.upgrades) {
+      // Both kinds count: a weapon-scoped card is a weapon card whether it is
+      // written as a plain stackable or as a one-time rule change, and filtering
+      // one of them out is what let the dead slot through the first time.
+      if (u.weapon == w.id) ++cards;
+    }
+    CAPTURE(w.id);
+    CAPTURE(cards);
+    REQUIRE(cards >= 2);
+  }
+}
+
+TEST_CASE("The manual documents the mechanics a card cannot explain by itself") {
+  // The other half of "all mechanics". Every word below is something the player
+  // can only learn by being told: a number on a card explains itself, a system
+  // does not. The list is the deliverable, and asserting it means deleting a page
+  // cannot quietly remove a system from the book.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  const std::string all = manualSays(manualLines(content));
+
+  // The chest is the clearest example: a whole reward tier, with a card count
+  // that scales by tier and a panel that names every card it gave, that existed
+  // for as long as the game did and was never in the book at all.
+  //
+  // Asserted against the PAGE rather than against the word "chest", because the
+  // word survives the page: "every chest opens one more time" is on the unique
+  // cards page, so a corpus search for CHEST keeps passing with the chest page
+  // deleted and the reward rules -- how many cards, what is in them, how to read
+  // the reveal -- gone with it.
+  const auto* chests = content.manualPage("chests");
+  REQUIRE(chests != nullptr);
+  std::vector<std::string> rows;
+  for (const auto& raw : chests->lines) rows.push_back(uppered(raw));
+  const std::string page = manualSays(rows);
+  for (const char* bit : {"ELITE      1 CARD", "CHAMPION   3 CARDS", "OVERLORD   5 CARDS",
+                          "DEEP CACHE", "PANEL"}) {
+    CAPTURE(bit);
+    REQUIRE(page.find(bit) != std::string::npos);
+  }
+
+  // The four marks, each by name. They are what a milestone screen is mostly made
+  // of, and a milestone screen is the loudest thing the game does.
+  for (const char* mark : {"FROSTBIND", "EMBERBRAND", "HEX", "ARMOUR SPLIT"}) {
+    CAPTURE(mark);
+    REQUIRE(all.find(uppered(mark)) != std::string::npos);
+  }
+
+  // The kill chain, the shield pool, armour, the tribunal director, rerolls,
+  // milestones, lifesteal and defence. The one-time rule cards have a page of
+  // their own now.
+  //
+  // "KILL CHAIN", not "momentum": momentum is what the effect ids are called, and
+  // "kill chain" is what every card that touches it says out loud to the player.
+  // A manual that documents the system's internal name is documenting the source.
+  for (const char* idea : {"KILL CHAIN", "SHIELD", "ARMOUR", "TRIBUNAL", "REROLL",
+                           "MILESTONE", "LIFESTEAL", "DEFENSE"}) {
+    CAPTURE(idea);
+    REQUIRE(all.find(uppered(idea)) != std::string::npos);
+  }
+}
+
+TEST_CASE("The manual's page jump reaches as far as the hint bar promises") {
+  // The hint says [1-9] JUMP. If the decoder only reads five keys then the one
+  // screen whose whole job is telling the player which keys do something is
+  // lying, and the other eight pages of a seventeen-page book are unreachable by
+  // keyboard. That is not a hypothetical: the jump used to stop at 5, which was
+  // correct when the book had eleven pages and stopped being correct at twelve.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  REQUIRE(content.manual.size() >= 9); // otherwise [1-9] is not the promise
+  for (int key = 1; key <= 9; ++key) {
+    game::Game g{content, 555};
+    game::FrameInput in{};
+    in.manualToggle = true;
+    g.advance(1.0F / 60.0F, in);
+    REQUIRE(g.manualOpen());
+
+    // The page the key names, not the key's own offset in some enum: a decoder
+    // that read the keys in the wrong order would pass a "was it handled at all"
+    // check and fail this one.
+    in = game::FrameInput{};
+    switch (key) {
+      case 1: in.choose1 = true; break;
+      case 2: in.choose2 = true; break;
+      case 3: in.choose3 = true; break;
+      case 4: in.choose4 = true; break;
+      case 5: in.choose5 = true; break;
+      case 6: in.choose6 = true; break;
+      case 7: in.choose7 = true; break;
+      case 8: in.choose8 = true; break;
+      case 9: in.choose9 = true; break;
+      default: break;
+    }
+    g.advance(1.0F / 60.0F, in);
+    CAPTURE(key);
+    REQUIRE(g.manualPageIndex() == static_cast<std::size_t>(key - 1));
+  }
 }

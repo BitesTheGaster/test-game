@@ -965,9 +965,17 @@ void Game::updateManual(const FrameInput& input) {
   if (input.menuLeft) prevManualPage();
   if (input.menuRight) nextManualPage();
   // Number keys jump straight to a page: a player who knows the page list
-  // should not have to flip through eight screens to get there.
-  const int jump = (input.choose1 ? 0 : input.choose2 ? 1 : input.choose3 ? 2
-                : input.choose4 ? 3 : input.choose5 ? 4 : -1);
+  // should not have to flip through sixteen screens to get there.
+  const int jump = (input.choose1   ? 0
+                    : input.choose2 ? 1
+                    : input.choose3 ? 2
+                    : input.choose4 ? 3
+                    : input.choose5 ? 4
+                    : input.choose6 ? 5
+                    : input.choose7 ? 6
+                    : input.choose8 ? 7
+                    : input.choose9 ? 8
+                                    : -1);
   if (jump >= 0) {
     if (static_cast<std::size_t>(jump) < content_.manual.size()) {
       manualPage_ = static_cast<std::size_t>(jump);
@@ -6788,6 +6796,31 @@ void Game::applyWeaponEffect(int slotIndex, std::string_view effect, float value
     // work, the shard is a delivery mechanism, and a shard that also hits hard is
     // the same weapon with more of everything.
     w.damage *= 0.85F;
+  } else if (effect == "w_unique_rimefang") {
+    // Hoarfrost Wake, the other way round.
+    //
+    // Deep Freeze grows the corona until the lane is doing the work and the shard
+    // is only a delivery mechanism. This shrinks it again and spends the budget
+    // on the shard instead, so the volley becomes a narrow line of piercing
+    // lances and the cold is a by-product of them.
+    //
+    // The two cards are opposites on purpose. This weapon had exactly one card,
+    // where every other weapon in the game has two to four, so a player who took
+    // the Hoarfrost Wake got a strictly worse slot than a player who took any
+    // other super-evolution -- and its only pick was an unambiguous upgrade, which
+    // is a stat line wearing a card's clothes. Between the two, the player is
+    // choosing whether the Wake is a fog or a spear, which is the difference
+    // between a weapon and a reward.
+    w.pierce += 6;
+    w.spread *= 0.45F; // a line, not a spray
+    w.speed *= 1.2F;
+    w.life *= 1.15F;
+    w.damage *= 1.45F;
+    w.auraRadius *= 0.55F;
+    w.auraDps *= 0.7F;
+    // A line that cuts through more has to be paid for, or the card is simply
+    // "the same weapon, but better", which is the thing it is not allowed to be.
+    w.cooldown *= 1.15F;
   } else if (effect == "w_unique_rime") {
     // Frost Shards: the volley stops being a spray of ice and becomes a line of
     // lances that FREEZE. The chill is the point, not a stat line: the pierce
@@ -9121,12 +9154,14 @@ void Game::renderManual(core::render::Batcher& b, float px, float py) {
 
   // --- Hint bar --------------------------------------------------------------
   {
-    // The jump range is what the DECODER can do, not how many pages exist. Only
-    // choose1..choose5 are read, so advertising "[1-11]" and then silently
-    // ignoring 6..11 is a lie on the one screen whose whole job is telling the
-    // player what the keys do. Clamped to the five that actually work.
-    constexpr std::size_t kJumpPages = 5;
-    const std::size_t jumpable = std::min(total, kJumpPages);
+    // The jump range is what the DECODER can do, not how many pages exist. The
+    // number keys are 1..9, so advertising "[1-5]" on a seventeen-page document
+    // was leaving nine tenths of it two hundred keystrokes away, and advertising
+    // "[1-17]" would be a lie the moment a page is added. Clamped to the keys
+    // that are actually read, and the range is asked of the code below rather
+    // than written out.
+    constexpr int kJumpPages = 9;
+    const std::size_t jumpable = std::min(total, static_cast<std::size_t>(kJumpPages));
     const std::string hint =
         "[F1] CLOSE   [UP/DOWN] PAGE   [1-" + std::to_string(jumpable) + "] JUMP";
     b.text(px * 0.5F - b.textWidth(1.5F, hint) * 0.5F, py - 30.0F, 1.5F,

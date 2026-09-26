@@ -125,6 +125,14 @@ struct FrameInput {
   bool choose3 = false;
   bool choose4 = false;
   bool choose5 = false; // picks a 5th card (from +1 choice items)
+  // 6..9 pick nothing anywhere else -- no screen has six cards, and the sandbox
+  // uses these for its own shortcuts. They exist so the manual's page jump can
+  // reach a document that is now seventeen pages long, which the hint bar
+  // advertises as [1-9] JUMP.
+  bool choose6 = false;
+  bool choose7 = false;
+  bool choose8 = false;
+  bool choose9 = false;
   bool restart = false;
   bool togglePause = false;
   bool testModeToggle = false; // T: open/close the weapon test mode
