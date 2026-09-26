@@ -675,6 +675,11 @@ void Game::reset() {
   shieldDelay_ = 0.0F;
   rerollsUsed_ = 0;
   milestoneOffer_ = false;
+  // The chest panel is run state and does not survive a restart: the line above
+  // just left the state that keeps it open, and without clearing the list the new
+  // run would still be handed the previous run's cards by the fading branch.
+  clearChestReveal(0);
+  lastChestTimer_ = 0.0F;
   poison_ = 0.0F;
   chainCounter_ = 0;
   bloodKills_ = 0;
@@ -1010,6 +1015,23 @@ void Game::advance(float frameDt, const FrameInput& input) {
     timestep_.reset();
     return;
   }
+  // A chest's readout is a modal stop, not a toast. The box has already spent
+  // itself, so the only thing left is the player looking at what it handed them --
+  // and a horde walking over a receipt nobody is reading is the exact thing a
+  // fixed 3.4-second window invited. SPACE (or Enter) hands the run back, and the
+  // panel takes kChestFadeTime to leave so it does not pop.
+  //
+  // Placed below the manual branch and above everything else, so F1 still reaches
+  // the manual from here (reading a rule mid-receipt is a reasonable thing to do)
+  // and no other key is quietly swallowed by a screen the player did not open.
+  if (state_ == RunState::ChestReveal) {
+    if (input.menuConfirm) {
+      state_ = RunState::Playing;
+      lastChestTimer_ = kChestFadeTime;
+    }
+    timestep_.reset();
+    return;
+  }
   // Opening pick: the run starts weaponless and immediately offers three
   // starter weapons (unless a weapon is already equipped, e.g. in tests).
   if (state_ == RunState::Playing && starterChoicePending_ && weaponCount_ == 0) {
@@ -1144,7 +1166,14 @@ void Game::advance(float frameDt, const FrameInput& input) {
     moveY_ = 0.0F;
   }
   if (state_ == RunState::Playing) {
-    timestep_.advance(frameDt, [&] { fixedUpdate(); });
+    timestep_.advance(frameDt, [&] {
+      // A chest spent partway through a catch-up batch has already put the run
+      // into ChestReveal, so the rest of the batch is dropped. Otherwise the
+      // world keeps ticking for up to a frame's worth of steps behind a panel
+      // the player has not read yet -- which is the whole thing this state
+      // exists to prevent.
+      if (state_ == RunState::Playing) fixedUpdate();
+    });
   } else {
     timestep_.reset();
   }
@@ -4257,6 +4286,46 @@ void Game::updateChainLightning() {
     auto& t = view.get<Transform>(e);
     auto& cl = view.get<ChainLightning>(e);
 
+    // Follow the victim, first, before any of the beats. This is the fix for
+    // "the lightning does not follow the enemy": the bolt's draw position used to
+    // be a snapshot taken once per hop, so it hung where its target used to be
+    // while the target walked off. Every beat below -- the telegraph ring, the sky
+    // drop, the landing star, and the head of the next arc -- is drawn at this
+    // position, so refreshing it once per frame fixes all of them at the source.
+    //
+    // The victim's OWN px/py are copied along with its x/y, which is what puts the
+    // bolt on the enemy rather than one frame behind it: the renderer interpolates
+    // entities between ticks, and a bolt that interpolated from its own history
+    // while the enemy interpolated from the enemy's was always a frame adrift.
+    //
+    // px/py are NOT the hop origin. They used to be written as "the old victim's
+    // position" and then used by the renderer as the arc's head interpolation
+    // base, so the head slid the whole width of the gap in one frame: the segment
+    // the player was watching grew out of a point and then jumped. They are the
+    // new victim's own previous tick now, and the tail lives in fromX/fromY.
+    if (cl.anchor != 0) {
+      const entt::entity anc{cl.anchor};
+      // Validated, not trusted: an id can be recycled between the spawn and the
+      // frame it is used, and following whatever now owns it would put the bolt on
+      // a random body; not being able to resolve it just leaves the bolt where it
+      // is, which is what the else branch is for.
+      if (registry_.valid(anc) && registry_.all_of<Transform, Enemy>(anc)) {
+        const auto& at = registry_.get<Transform>(anc);
+        t.px = at.px;
+        t.py = at.py;
+        t.x = at.x;
+        t.y = at.y;
+      } else {
+        // The body died or the id was recycled mid-bolt: hold the last spot, with
+        // no interpolation, so the bolt does not streak to a stale px/py.
+        t.px = t.x;
+        t.py = t.y;
+      }
+    } else {
+      t.px = t.x;
+      t.py = t.y;
+    }
+
     // Beat 1: converge. Nothing is damaged yet; the renderer is drawing a ring
     // shrinking onto the target. The bolt only starts hopping when the ring
     // closes, so the strike is something you watch arrive rather than something
@@ -4376,10 +4445,13 @@ void Game::updateChainLightning() {
     // Damage the target
     const float damage = cl.damage * stats_.damageMul * momentumDamageMul_ * std::powf(cl.damageMul, static_cast<float>(cl.jumpsDone));
     auto* eh = registry_.try_get<Health>(nextTarget);
+    // Read once, here, for both the impact effects and the hop below: the hop runs
+    // even when the body was already dead, because the arc still travels to where
+    // the bolt is going.
+    const auto& targetT = registry_.get<Transform>(nextTarget);
     if (eh && eh->hp > 0.0F) {
       applyEnemyDamage(nextTarget, damage);
 
-      const auto& targetT = registry_.get<Transform>(nextTarget);
       spawnParticles(targetT.x, targetT.y, {0.55F, 1.0F, 1.0F, 1.0F}, 8, 4.0F);
 
       // Arc from current position to target
@@ -4409,17 +4481,24 @@ void Game::updateChainLightning() {
       }
     }
 
-    // Move chain lightning position to target. px/py are the previous-tick
-    // position used for render interpolation, and they were never written here:
-    // the renderer was lerping from (0, 0), so every bolt was drawn streaking
-    // in from the world origin.
-    t.px = t.x;
-    t.py = t.y;
-    const auto& targetT = registry_.get<Transform>(nextTarget);
+    // The hop. The arc's TAIL is where the bolt is standing right now -- the live
+    // position of the body it was on -- and the anchor moves to the new victim,
+    // so from the next frame on the bolt rides that body rather than a snapshot of
+    // where it was.
+    //
+    // t.px/t.py are written from the new victim's own previous position, which is
+    // what the renderer interpolates the arc's head from. The old code wrote
+    // t.px = t.x, i.e. it left the head interpolating from the old victim all the
+    // way to the new one across a single frame.
+    cl.fromX = t.x;
+    cl.fromY = t.y;
+    t.px = targetT.px;
+    t.py = targetT.py;
     t.x = targetT.x;
     t.y = targetT.y;
     cl.jumpsDone++;
     cl.lastTarget = entt::to_entity(nextTarget);
+    cl.anchor = cl.lastTarget;
   }
 }
 
@@ -4792,10 +4871,7 @@ void Game::updatePickups() {
         // A box with nothing left to give still opens, and says so, rather than
         // sitting on the floor forever waiting for a weapon to have a card again.
         spawnParticles(t.x, t.y, {1.0F, 0.85F, 0.35F, 1.0F}, 12, 5.0F);
-        if (given > 0) {
-          lastChestGrants_ = given;
-          lastChestTimer_ = kChestToastTime;
-        }
+        if (given > 0) presentChestReveal(given);
         destroyQueue_.push_back(e);
         continue;
       }
@@ -4810,8 +4886,22 @@ void Game::updatePickups() {
   }
 }
 
-// The chest toast is a timer like every other transient HUD message, so it is
-// ticked in the same place the banner is.
+void Game::presentChestReveal(int given) {
+  if (given <= 0) return;
+  lastChestGrants_ = given;
+  // No fade timer yet: the panel is up, not leaving. The timer starts when the
+  // player releases it, so a "how long has this been open" clock cannot expire
+  // the panel out from under them.
+  lastChestTimer_ = 0.0F;
+  // Only from a live run. A box can be under the player's feet on the step they
+  // die, and claiming the state here would clobber the GameOver that just landed
+  // -- the run would end, the player would press SPACE to "continue", and the run
+  // would carry on with a corpse. The death owns the screen; the receipt is
+  // recorded either way and the game-over screen does not show it.
+  if (state_ == RunState::Playing) state_ = RunState::ChestReveal;
+}
+
+// The chest panel's DISMISS fade, so it is ticked in the same place the banner is.
 void Game::updateChestToast(float dt) {
   if (lastChestTimer_ > 0.0F) lastChestTimer_ = std::max(0.0F, lastChestTimer_ - dt);
 }
@@ -5020,6 +5110,11 @@ void Game::spawnChainBolt(float x, float y, const WeaponSlot& w,
   cl.telegraph = kChainTelegraph;
   cl.strike = 0.0F;
   cl.pendingFirst = fromTarget;
+  // The bolt starts ON the body it is aimed at, so the telegraph ring converges on
+  // a moving enemy instead of on the spot it was standing in when the weapon
+  // fired. `anchor` is what updateChainLightning re-pins the draw position to
+  // every frame; fromX/fromY are unused until the first hop gives the arc a tail.
+  cl.anchor = fromTarget;
   cl.shatter = w.chainShatter;
   cl.shatterSpeed = w.chainShatterSpeed;
   cl.shatterSpread = w.chainShatterSpread;
@@ -7780,10 +7875,7 @@ void Game::testOpenFirstChest() {
   const auto& t = registry_.get<Transform>(e);
   clearChestReveal(registry_.get<Chest>(e).tier);
   const int given = openChest(registry_.get<Chest>(e).grants);
-  if (given > 0) {
-    lastChestGrants_ = given;
-    lastChestTimer_ = kChestToastTime;
-  }
+  if (given > 0) presentChestReveal(given);
   spawnParticles(t.x, t.y, {1.0F, 0.85F, 0.35F, 1.0F}, 12, 5.0F);
   registry_.destroy(e);
 }
@@ -7798,7 +7890,7 @@ int Game::testChestCount() const {
   return n;
 }
 
-void Game::testSpawnEnemyAt(float x, float y) {
+void Game::testSpawnEnemyAt(float x, float y, float speed) {
   const auto e = registry_.create();
   lastTestSpawn_ = e;
   registry_.emplace<Transform>(e, x, y, x, y);
@@ -7806,7 +7898,7 @@ void Game::testSpawnEnemyAt(float x, float y) {
   registry_.emplace<Radius>(e, 0.3F);
   registry_.emplace<Health>(e, 100000.0F, 100000.0F);
   Enemy en{};
-  en.speed = 0.0F; // stationary target for deterministic assertions
+  en.speed = speed; // 0 is a stationary target, for deterministic assertions
   en.touch = 0.0F; // no contact damage
   registry_.emplace<Enemy>(e, en);
   Sprite s{};
@@ -8095,6 +8187,60 @@ std::vector<float> Game::testBounceRadii() const {
 
 std::size_t Game::testChainCount() const {
   return registry_.view<ChainLightning>().size();
+}
+
+float Game::testChainAnchorGap() const {
+  float worst = -1.0F;
+  for (const auto& [e, cl] : registry_.view<ChainLightning>().each()) {
+    if (cl.anchor == 0) continue;
+    const entt::entity anc{cl.anchor};
+    // A recycled or dead anchor is not a failure to follow -- holding position is
+    // the documented behaviour there -- so it is skipped rather than counted as an
+    // infinite gap.
+    if (!registry_.valid(anc) || !registry_.all_of<Transform, Enemy>(anc)) continue;
+    const auto& at = registry_.get<Transform>(anc);
+    const auto& bt = registry_.get<Transform>(e);
+    const float dx = bt.x - at.x;
+    const float dy = bt.y - at.y;
+    const float gap = std::sqrt(dx * dx + dy * dy);
+    worst = std::max(worst, gap);
+  }
+  return worst;
+}
+
+float Game::testChainArcSpan() const {
+  float worst = -1.0F;
+  for (const auto& [e, cl] : registry_.view<ChainLightning>().each()) {
+    if (cl.jumpsDone <= 0) continue; // nothing has been drawn as an arc yet
+    const auto& bt = registry_.get<Transform>(e);
+    const float dx = bt.x - cl.fromX;
+    const float dy = bt.y - cl.fromY;
+    worst = std::max(worst, std::sqrt(dx * dx + dy * dy));
+  }
+  return worst;
+}
+
+float Game::testChainHeadLag() const {
+  float worst = -1.0F;
+  for (const auto& [e, cl] : registry_.view<ChainLightning>().each()) {
+    if (cl.jumpsDone <= 0) continue;
+    const auto& bt = registry_.get<Transform>(e);
+    const float dx = bt.x - bt.px;
+    const float dy = bt.y - bt.py;
+    worst = std::max(worst, std::sqrt(dx * dx + dy * dy));
+  }
+  return worst;
+}
+
+int Game::chestSatellites(int grants) {
+  // One sphere per card, and never zero: a box with a bug in its grant count would
+  // otherwise draw as a bare ball with nothing to count, which is exactly the
+  // "how many is in there" question the spheres exist to answer.
+  //
+  // Not clamped at the overlord's five. Deep Cache stacks three times, so a real
+  // box really can open eight times, and a clamped ring said "five" while six
+  // cards landed -- the picture and the receipt disagreed.
+  return std::max(1, grants);
 }
 
 std::size_t Game::testWaveCount() const {
@@ -8477,6 +8623,92 @@ Game::LevelUpRow Game::levelUpRowLayout(float px, float py, std::size_t n,
   out.top = std::max(py * 0.16F + 44.0F, std::min(py * 0.32F, py - out.cardH - 44.0F));
   out.hintY = out.top + out.cardH + 24.0F;
   return out;
+}
+
+// The chest receipt. Every number the renderer draws with, in one place.
+//
+// Two things were wrong with the old version, and neither was visible from a
+// test. It called the centre-based Batcher::rect at what were meant to be corner
+// coordinates, so the dark backing sat half a panel up and to the left of the
+// text it was backing and the four "frame" bars were drawn as centre-based rects
+// through the middle of the screen. And it set panelW = min(px - 40, widest +
+// padding) while laying the text out in ONE unwrapped line, so on any window
+// narrower than a long card description the panel was clamped narrower than its
+// own contents and the tail of the text ran off the side of the screen. The width
+// is now a real budget and the descriptions wrap to it.
+Game::ChestRevealLayout Game::chestRevealLayout(
+    float px, float py, const std::vector<std::string>& names,
+    const std::vector<std::string>& descs) {
+  ChestRevealLayout out;
+  const std::size_t n = std::min(names.size(), descs.size());
+  // The 5x7 font advances 6*scale pixels per character, so a pixel budget maps
+  // onto a character count. This is the same arithmetic Batcher::textWidth does,
+  // written out because a test cannot build a Batcher.
+  const auto textWidth = [](float scale, std::string_view str) {
+    return 6.0F * scale * static_cast<float>(str.size());
+  };
+
+  // Width first, because the wrap depends on it. 760px is a ceiling, not a
+  // target: a receipt five cards wide is a wall of text nobody reads end to end,
+  // and on a 4K window a panel sized to its own longest line would be a letterbox.
+  constexpr float kMaxW = 760.0F;
+  out.panelW = std::max(280.0F, std::min(px - 40.0F, kMaxW));
+  out.padX = 16.0F;
+  // The name column is ONE width for the whole panel: the widest name. Per-row
+  // widths made the description column ragged, which on a receipt whose whole job
+  // is to be scanned line by line is the first thing the eye trips over.
+  float nameCol = 0.0F;
+  for (std::size_t k = 0; k < n; ++k) {
+    nameCol = std::max(nameCol, textWidth(1.7F, names[k]));
+  }
+  // The column is capped at 42% of the panel so that even a name far longer than
+  // anything shipped cannot push the descriptions off the right edge. A name that
+  // overruns the cap overlaps the 14px gutter rather than being shrunk -- a test
+  // says no shipped name comes close, and shrinking a title is worse than a
+  // 3px overlap with a gap.
+  const float nameW = std::min(nameCol, out.panelW * 0.42F);
+  out.nameScale = 1.7F;
+  out.descScale = 1.4F;
+  out.nameX = out.padX;
+  out.descX = out.padX + nameW + 14.0F;
+  const float descW = std::max(60.0F, out.panelW - out.descX - out.padX);
+
+  constexpr float kDescLineH = 15.0F;
+  out.descLineH = kDescLineH;
+  constexpr float kRowGap = 9.0F;
+  constexpr float kHeadH = 30.0F;
+  constexpr float kHintH = 26.0F;
+
+  out.cardY.resize(n);
+  out.descLines.resize(n);
+  float y = kHeadH;
+  for (std::size_t k = 0; k < n; ++k) {
+    out.cardY[k] = y;
+    const auto lines = wrapToWidth(descs[k], descW, out.descScale, 0.0F);
+    out.descLines[k] = static_cast<int>(std::max<std::size_t>(lines.size(), 1));
+    // The name rides on the first description line, so a card is as tall as its
+    // own text and not as tall as some fixed row. A one-line name beside a
+    // three-line description must not leave two blank rows under it.
+    y += static_cast<float>(out.descLines[k]) * kDescLineH;
+    if (k + 1 < n) y += kRowGap;
+  }
+  out.panelH = y + kHintH;
+
+  // Vertically centred, and clamped to stay on screen. The old panel sat at a
+  // fixed py*0.5 - 96, which is above centre for one card and below it for five,
+  // and runs off the bottom of a short window entirely.
+  out.panelY = std::max(12.0F, std::min(py * 0.5F - out.panelH * 0.5F,
+                                       py - out.panelH - 12.0F));
+  out.panelX = px * 0.5F - out.panelW * 0.5F;
+  out.headY = out.panelY + 9.0F;
+  out.hintY = out.panelY + out.panelH - 18.0F;
+  return out;
+}
+
+std::vector<std::string> Game::chestRevealDescLines(
+    const ChestRevealLayout& lay, std::string_view desc) {
+  return wrapToWidth(desc, std::max(60.0F, lay.panelW - lay.descX - lay.padX),
+                     lay.descScale, 0.0F);
 }
 
 int cardTextLinesThatFit(float avail, const CardTextLayout& lay) {
@@ -9662,20 +9894,23 @@ void Game::render(core::render::Batcher& b, float alpha) {
     }
   }
 
-  // Chests. A plain dot would be mistaken for a fat XP orb, so the box is drawn
-  // as one.
+  // Chests. A plain dot would be mistaken for a fat XP orb, so the box is a
+  // SPHERE with small spheres orbiting it -- one per card it is going to hand
+  // over. The player asked for exactly this: a ball you can count, instead of a
+  // crate with one shape problem after another.
   //
-  // Everything is centred on the same x and the lid and body are the same width.
-  // That is not a style choice so much as a correction: the box used to be a
-  // full-width dark lid floating a hair above a NARROWER coloured body, with a
-  // strap that stopped at the body's top and never crossed the lid -- so the lid
-  // read as a separate dark hat perched on a smaller crate, and the whole thing
-  // looked crooked. The player named it.
+  // The crate is gone for a reason worth keeping in mind: it took eleven rects
+  // to assemble, and the thing that kept going wrong was symmetry. A full-width
+  // dark lid over a NARROWER body, a strap that stopped at the body's top and
+  // never crossed the lid, a latch floating off the seam -- the player looked at
+  // that and called it crooked, which was correct. A sphere cannot lean. It is
+  // one circle drawn from one centre, so there is no second width to disagree
+  // with the first, and no top and bottom to get out of step.
   //
-  // So: one silhouette, symmetric about its own centre, in two shades of the
-  // tier's colour, with one strap running the full height and a latch where the
-  // two halves meet. A chest you can name is a chest you recognise at a glance,
-  // and the ticks orbiting it say how many cards are inside.
+  // The satellites are spheres for the same reason. They were 0.055 dots on a ring
+  // at 1.6 radii, which read as a dotted line -- an ornament, not a count. At
+  // 0.105 with a filled core they read as objects, so "three" is legible at a
+  // glance from across the screen.
   {
     auto view = registry_.view<Transform, Sprite, Chest, Radius>();
     for (const auto e : view) {
@@ -9686,59 +9921,43 @@ void Game::render(core::render::Batcher& b, float alpha) {
       const float x = t.px + (t.x - t.px) * lerp;
       const float y = t.py + (t.y - t.py) * lerp;
       const float bob = 0.04F * std::sin(simTime_ * 4.0F);
-      // Halo on the ground, so a box on the far side of a pack still reads as
-      // something to walk toward.
-      Color glow = s.color;
-      glow.a = 0.14F + 0.06F * std::sin(simTime_ * 4.0F);
-      b.circle(x, y, r.r * 2.4F, glow);
+      const float cy = y + bob;
 
-      // The two halves are cut from one width and one centre. Nothing here is
-      // allowed to be a different width from the piece below it, because that is
-      // exactly what made the old box lean.
-      const float w = r.r * 2.0F;
-      const float bodyH = w * 0.52F;
-      const float lidH = w * 0.38F;
-      // The lid is a darker shade of the body's own colour, not a separate
-      // colour: two greys at different values read as two objects.
+      // How many cards this box will actually hand over -- see chestSatellites,
+      // which is where the Deep Cache case is explained and tested.
+      const int sats = chestSatellites(c.grants);
+
+      // The core, as a soft body with a bright centre rather than one flat disc.
+      // Two concentric circles is the whole of it: the outer halo gives the
+      // silhouette, the inner one gives it a light source, and the two are drawn
+      // from the same centre so the thing cannot come out lopsided.
+      Color halo = s.color;
+      halo.a = 0.16F + 0.06F * std::sin(simTime_ * 4.0F);
+      b.circle(x, cy, r.r * 2.3F, halo);
       Color body = s.color;
-      body.r *= 0.62F;
-      body.g *= 0.62F;
-      body.b *= 0.62F;
-      Color lid = s.color;
+      body.a = 0.55F;
+      b.circle(x, cy, r.r, body);
+      b.circle(x, cy, r.r * 0.55F, s.color);
 
-      // Bottom edge sits on the ground at the entity's own y, and the lid sits
-      // directly on the body with no gap and no overhang.
-      const float bodyY = y - bodyH * 0.5F + bob;
-      const float lidY = bodyY - lidH + bob;
-      b.rect(x - w * 0.5F, bodyY, w, bodyH, body);
-      b.rect(x - w * 0.5F, lidY, w, lidH, lid);
-      // Domed top, two steps of it, so the lid is not a plain brick. Symmetric
-      // by construction: both steps are centred and each is narrower than the
-      // one below.
-      const float domeH = lidH * 0.34F;
-      b.rect(x - w * 0.34F, lidY - domeH, w * 0.68F, domeH, lid);
-      b.rect(x - w * 0.16F, lidY - domeH * 2.0F, w * 0.32F, domeH, lid);
-
-      // One strap down the middle, running the WHOLE height including the dome,
-      // which is what ties the halves into one object instead of a hat on a
-      // crate. Dark, so it reads as a strap rather than as a third colour.
-      Color strap{0.13F, 0.12F, 0.18F, 1.0F};
-      const float strapW = w * 0.16F;
-      const float strapTop = lidY - domeH * 2.0F;
-      b.rect(x - strapW * 0.5F, strapTop, strapW, (y + bob) - strapTop, strap);
-      // Latch, sitting exactly on the seam between the lid and the body.
-      const float latch = w * 0.22F;
-      b.rect(x - latch * 0.5F, bodyY - bodyH - latch * 0.35F, latch, latch, strap);
-
-      // One tick per card this box will hand over, orbiting the whole silhouette.
-      const int ticks = std::clamp(c.grants, 1, 5);
-      for (int k = 0; k < ticks; ++k) {
-        const float a = (static_cast<float>(k) / static_cast<float>(ticks)) * 2.0F * kPi +
+      // One satellite per card, evenly spaced on a ring. Evenly, and starting at
+      // the top: a ring whose gaps are uneven looks like an accident, and these
+      // are the one thing on the chest the player counts.
+      //
+      // The orbit is wide enough that eight of them do not merge into a smear, and
+      // the satellites shrink a little past the overlord's base five so an
+      // eight-card box stays a countable cluster rather than a bright band.
+      const float orbit = r.r * 2.6F;
+      const float satR = sats > 5 ? 0.085F : 0.105F;
+      for (int k = 0; k < sats; ++k) {
+        // Start at -90 degrees so the first satellite is at the top of the ring
+        // rather than off to the side, and go clockwise like the rest of the HUD.
+        const float a = -kPi * 0.5F +
+                        (static_cast<float>(k) / static_cast<float>(sats)) * 2.0F * kPi +
                         simTime_ * 0.9F;
-        Color tick = s.color;
-        tick.a = 0.9F;
-        b.circle(x + std::cos(a) * r.r * 1.6F, y + std::sin(a) * r.r * 1.6F, 0.055F,
-                 tick);
+        Color sat = s.color;
+        sat.a = 0.45F;
+        b.circle(x + std::cos(a) * orbit, cy + std::sin(a) * orbit, satR, sat);
+        b.circle(x + std::cos(a) * orbit, cy + std::sin(a) * orbit, satR * 0.6F, s.color);
       }
     }
   }
@@ -10390,12 +10609,20 @@ void Game::render(core::render::Batcher& b, float alpha) {
           b.circle(x + std::cos(a) * r1, y + std::sin(a) * r1, 0.05F, flash);
         }
       } else {
-        // Enemy-to-enemy arc. The bolt's previous tick position is where the
-        // last hop ended, so the last hop's segment is drawn here. This is also
-        // why updateChainLightning writes t.px/t.py: before that they stayed at
-        // zero and the renderer drew every arc flying in from the world origin.
-        const float ax = t.px;
-        const float ay = t.py;
+        // Enemy-to-enemy arc. The tail is `fromX/fromY` -- the point the last hop
+        // came FROM, captured at the moment of the hop while it was still the live
+        // position of the body the bolt was on. It used to be t.px/t.py, which are
+        // the previous FRAME's position, so every segment was a worm that shrank
+        // from one enemy to the other and vanished exactly as the hop completed;
+        // and it used to be nothing at all, which drew every arc in from the world
+        // origin.
+        //
+        // The HEAD is the bolt's own interpolated position, and updateChainLightning
+        // keeps that pinned to the victim's live position every frame. Between the
+        // two, the arc connects the body it left to the body it is on, both of
+        // which are where the player can see them.
+        const float ax = cl.fromX;
+        const float ay = cl.fromY;
         const float dx = x - ax;
         const float dy = y - ay;
         const float len = std::sqrt(dx * dx + dy * dy);
@@ -10719,12 +10946,20 @@ void Game::render(core::render::Batcher& b, float alpha) {
   // ambiguous sentence. The player asked for a readout of what fell out, so this
   // is a small panel of them.
   //
-  // Deliberately plain. It is a receipt, not a celebration: one line per card,
-  // the card's own name and its own description, and nothing else. No rarity
+  // Deliberately plain. It is a receipt, not a celebration: one row per card, the
+  // card's own name and its own description, and nothing else. No rarity
   // flourish, no per-card animation, no choice to make -- a box has already
   // spent itself, and a reveal that looked like a picker would teach the player
   // to wait for one.
-  if (lastChestTimer_ > 0.0F && lastChestGrants_ > 0 && chestRevealCount_ > 0) {
+  //
+  // The gate is the STATE, not a timer. The panel is up for exactly as long as the
+  // player keeps it up (RunState::ChestReveal holds the world still) and then
+  // takes kChestFadeTime to leave once they press SPACE. Gating on a countdown is
+  // what made it a 3.4-second toast the player had to read standing still in a
+  // live horde; the leftover timer below is only the fade, and it cannot bring the
+  // panel back once the state has moved on.
+  if (chestRevealCount_ > 0 && lastChestGrants_ > 0 &&
+      (state_ == RunState::ChestReveal || lastChestTimer_ > 0.0F)) {
     const int shown = std::min(chestRevealCount_,
                                static_cast<int>(Game::kChestRevealMax));
     // The tier's colour, so the panel matches the box the player just walked
@@ -10733,62 +10968,84 @@ void Game::render(core::render::Batcher& b, float alpha) {
     Color tierCol{1.0F, 0.85F, 0.35F, 1.0F};
     if (chestRevealTier_ == 1) tierCol = {0.45F, 0.85F, 1.00F, 1.0F};
     if (chestRevealTier_ == 2) tierCol = {0.75F, 0.50F, 1.00F, 1.0F};
+    const bool open = state_ == RunState::ChestReveal;
+    const float a = open ? 1.0F : std::min(1.0F, lastChestTimer_ / kChestFadeTime);
 
-    constexpr float kNameScale = 1.7F;
-    constexpr float kDescScale = 1.4F;
-    constexpr float kRowH = 26.0F;
-    constexpr float kPadX = 14.0F;
-    constexpr float kPadTop = 30.0F;
-    // Hold the panel still for most of its life, then fade the last stretch, so a
-    // five-card receipt is readable rather than a thing that blinks away.
-    const float a = std::min(1.0F, lastChestTimer_ / 0.8F);
-
-    // Measure first, then centre. The panel's width is set by its widest row, and
-    // a fixed width would either clip a long card name or leave a lopsided gap
-    // around a short one.
-    float widest = 0.0F;
+    // The geometry comes from the same function the tests read, so "the receipt
+    // fits on screen and nothing runs off the right edge" is a claim about the
+    // renderer's own arithmetic rather than about a copy of it.
+    std::vector<std::string> names;
+    std::vector<std::string> descs;
+    names.reserve(static_cast<std::size_t>(shown));
+    descs.reserve(static_cast<std::size_t>(shown));
     for (int k = 0; k < shown; ++k) {
       const auto& u = content_.upgrades[static_cast<std::size_t>(
           chestReveal_[static_cast<std::size_t>(k)])];
-      const std::string row = u.name + "  -  " + u.desc;
-      widest = std::max(widest, b.textWidth(kNameScale, row));
+      names.push_back(u.name);
+      descs.push_back(u.desc);
     }
-    const float panelW = std::min(px - 40.0F, widest + kPadX * 2.0F);
-    const float panelH = kPadTop + static_cast<float>(shown) * kRowH + 8.0F;
-    const float panelX = px * 0.5F - panelW * 0.5F;
-    const float panelY = py * 0.5F - 96.0F;
+    const ChestRevealLayout lay = chestRevealLayout(px, py, names, descs);
 
-    Color back{0.06F, 0.05F, 0.09F, 0.90F * a};
+    // While the panel HOLDS the run, the world behind it is dimmed. The pause is
+    // the point of the screen -- the player asked for a stop, not a toast -- and a
+    // panel that appears over a fully lit, still-moving horde does not read as
+    // one. Not drawn on the dismissing frame, where the horde is meant to be back.
+    if (open) {
+      b.rectTopLeft(0.0F, 0.0F, px, py, Color{0.0F, 0.0F, 0.0F, 0.55F * a});
+    }
+
+    // rectTopLeft, not rect. The panel's x/y below ARE its top-left corner, and
+    // the centre-based rect was drawing the dark backing a half panel up and to
+    // the left of every line of text on it -- which is what "the chest window is
+    // broken and cut off" turned out to be.
+    Color back{0.06F, 0.05F, 0.09F, 0.94F * a};
     Color edge = tierCol;
     edge.a = 0.85F * a;
-    b.rect(panelX, panelY, panelW, panelH, back);
+    b.rectTopLeft(lay.panelX, lay.panelY, lay.panelW, lay.panelH, back);
     // A plain 2px frame. Four rects rather than a rounded outline: the panel has
     // to read as a label sitting on the screen, not as a window.
-    b.rect(panelX, panelY, panelW, 2.0F, edge);
-    b.rect(panelX, panelY + panelH - 2.0F, panelW, 2.0F, edge);
-    b.rect(panelX, panelY, 2.0F, panelH, edge);
-    b.rect(panelX + panelW - 2.0F, panelY, 2.0F, panelH, edge);
+    b.rectTopLeft(lay.panelX, lay.panelY, lay.panelW, 2.0F, edge);
+    b.rectTopLeft(lay.panelX, lay.panelY + lay.panelH - 2.0F, lay.panelW, 2.0F, edge);
+    b.rectTopLeft(lay.panelX, lay.panelY, 2.0F, lay.panelH, edge);
+    b.rectTopLeft(lay.panelX + lay.panelW - 2.0F, lay.panelY, 2.0F, lay.panelH, edge);
 
     const std::string head =
         "CHEST  x" + std::to_string(shown) +
         (shown == 1 ? "  CARD" : "  CARDS");
     Color headCol = tierCol;
     headCol.a = a;
-    b.text(panelX + kPadX, panelY + 9.0F, 1.6F, headCol, head);
+    b.text(lay.panelX + lay.padX, lay.headY, 1.6F, headCol, head);
 
     for (int k = 0; k < shown; ++k) {
       const auto& u = content_.upgrades[static_cast<std::size_t>(
           chestReveal_[static_cast<std::size_t>(k)])];
-      const float rowY = panelY + kPadTop + static_cast<float>(k) * kRowH;
+      const float top = lay.panelY + lay.cardY[static_cast<std::size_t>(k)];
       // Name in the tier colour, description in plain white: the name is what
       // the player scans for, the description is what they read once they have.
+      // The name shares the first description line's row, so a one-line name
+      // beside a three-line description leaves no gap under it.
       Color nameCol = tierCol;
       nameCol.a = a;
-      b.text(panelX + kPadX, rowY, kNameScale, nameCol, u.name);
-      const float descX =
-          panelX + kPadX + b.textWidth(kNameScale, u.name) + 10.0F;
+      b.text(lay.panelX + lay.nameX, top, lay.nameScale, nameCol, u.name);
+      // Wrapped to the panel's own text column. The old version set the panel
+      // width from the widest unwrapped line and then clamped it to the screen,
+      // so on any window narrower than a card description the text ran off the
+      // edge of the screen and was simply gone.
+      const std::vector<std::string> lines = chestRevealDescLines(lay, u.desc);
       Color descCol{0.92F, 0.92F, 0.96F, a};
-      b.text(descX, rowY + 2.0F, kDescScale, descCol, u.desc);
+      for (std::size_t li = 0; li < lines.size(); ++li) {
+        b.text(lay.panelX + lay.descX, top + static_cast<float>(li) * lay.descLineH,
+               lay.descScale, descCol, lines[li]);
+      }
+    }
+
+    // SPACE TO CONTINUE, and only while the panel is actually holding the run.
+    // Printed on the dismissing frame it would flash and vanish.
+    if (open) {
+      const std::string hint = "SPACE TO CONTINUE";
+      Color hintCol{0.70F, 0.70F, 0.80F, a};
+      b.text(lay.panelX + (lay.panelW - b.textWidth(1.3F, hint)) * 0.5F, lay.hintY,
+             1.3F, hintCol, hint);
     }
   }
 

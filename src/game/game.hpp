@@ -382,6 +382,10 @@ int traitsForTier(int tier, float simTime);
 enum class RunState {
   Playing,
   LevelUp,
+  // The chest receipt. Its own state rather than a flag, because the whole point
+  // is that the world stops: a readout the player has to read while a champion
+  // is chewing on them is not a readout. SPACE closes it and hands the run back.
+  ChestReveal,
   Paused,
   GameOver,
 };
@@ -536,6 +540,48 @@ public:
   [[nodiscard]] static LevelUpRow levelUpRowLayout(float px, float py, std::size_t n,
                                                    std::size_t tallestDescLines,
                                                    std::size_t tallestNameLines);
+
+  // The chest receipt's geometry, as pure arithmetic for the same reason: the
+  // panel was built with centre-based Batcher::rect calls at what were meant to be
+  // corner coordinates, so the dark backing was drawn half a panel up and to the
+  // left of the text it was supposed to be behind, and the four "frame" bars were
+  // drawn as centre-based rects through the middle of nowhere. Nothing about that
+  // was visible from a test, because a test cannot build a GL context -- so the
+  // arithmetic moved out here, where it can be.
+  struct ChestRevealLayout {
+    float panelW = 0.0F;
+    float panelH = 0.0F;
+    float panelX = 0.0F;   // top-left corner, the corner Batcher::rectTopLeft wants
+    float panelY = 0.0F;
+    float padX = 0.0F;
+    float nameScale = 0.0F;
+    float descScale = 0.0F;
+    float nameX = 0.0F;
+    float descX = 0.0F;    // one shared column, so the rows are not ragged
+    float headY = 0.0F;
+    float hintY = 0.0F;
+    float descLineH = 0.0F;  // the description pitch, so the renderer cannot
+                              // drift from the height the layout measured
+    // Top of each card's name, and the description lines it was wrapped to. Both
+    // are per-card because a five-card receipt is five different texts.
+    std::vector<float> cardY;
+    std::vector<int> descLines;
+  };
+  // `names` and `descs` are parallel and may be empty (an empty box still draws
+  // its frame and its hint, so a panel never appears half-built).
+  [[nodiscard]] static ChestRevealLayout chestRevealLayout(
+      float px, float py, const std::vector<std::string>& names,
+      const std::vector<std::string>& descs);
+  // The description lines the receipt actually DRAWS for one card, wrapped to the
+  // panel's own text column.
+  //
+  // A function rather than a formula, because the defect it guards against is the
+  // renderer laying every description out in one unwrapped line and letting the
+  // tail run off the right edge of the screen. A test that re-wrapped the text for
+  // itself would wrap correctly while the renderer did not, and would have passed
+  // against the exact bug it was written for.
+  [[nodiscard]] static std::vector<std::string> chestRevealDescLines(
+      const ChestRevealLayout& lay, std::string_view desc);
 
   // --- Progress reset (main menu) --------------------------------------------
   // Wipes the attached profile back to first-launch defaults: default skin, no
@@ -820,7 +866,14 @@ public:
   // Test helper: drop owned weapons + their persistent entities (orbit blades).
   void testClearWeapons();
   // Test helper: place a stationary, high-HP enemy at a world position.
-  void testSpawnEnemyAt(float x, float y);
+  //
+  // `speed` defaults to zero because almost every caller wants a body that holds
+  // still for a deterministic assertion. It is a parameter rather than a second
+  // hook because "does the thing follow a body that is MOVING" is a different
+  // question from "does it sit on a body", and the second one is vacuous: a
+  // frozen target is followed by a frozen bolt whether or not the bolt follows
+  // anything.
+  void testSpawnEnemyAt(float x, float y, float speed = 0.0F);
   // Test helper: the same body, but carrying an elite tier, so a test can check
   // that a box drops from the right kind of corpse. Tier 0 leaves the component
   // absent, exactly as a normal spawn does.
@@ -837,6 +890,10 @@ public:
   int testSpawnChest(float x, float y, int tier, int grants);
   // Test helper: how many chest bodies are on the floor right now.
   [[nodiscard]] int testChestCount() const;
+  // How many spheres orbit a chest. Pure, so "one sphere per card, and Deep Cache
+  // puts more in the ring" is a claim a test can make instead of a rendering
+  // detail nobody can see from outside a GL context.
+  [[nodiscard]] static int chestSatellites(int grants);
   // Test helper: remove every live enemy outright. There is no way to reach an
   // empty arena through the damage path -- a body at zero HP is only reaped by
   // the hit that killed it -- and "what does a projectile do when there is
@@ -995,6 +1052,33 @@ public:
   // from inside an update system, so they are the numbers that decide whether a
   // cascade is bounded.
   [[nodiscard]] std::size_t testChainCount() const;
+  // Test helper: the WORST distance, in world units, between a live chain bolt and
+  // the body it is riding. -1 when no bolt is riding anything.
+  //
+  // "The lightning does not follow the enemy" is a claim about a distance, so this
+  // measures the distance. Asking the code whether it believes it is following
+  // would pass against the old snapshot implementation, which believed it very
+  // much and drew a bolt hanging in mid-air two units from a walking bat.
+  [[nodiscard]] float testChainAnchorGap() const;
+  // Test helper: the distance from the last hop's origin to the bolt's live head,
+  // in world units. -1 when no bolt has hopped yet.
+  //
+  // A guard on the new fromX/fromY pair rather than a repro of the old bug: at the
+  // hop frame the old tail (the Transform's px/py) held exactly the same point, so
+  // no stored-state measurement can tell them apart. What this pins is that the
+  // tail still spans the gap once the bolt has started moving with the new victim,
+  // which is what a tail recomputed from the bolt's own frame history could not
+  // do. The half that WAS broken is testChainHeadLag's.
+  [[nodiscard]] float testChainArcSpan() const;
+  // Test helper: the worst distance, in world units, between a bolt's current
+  // position and its previous-tick position -- i.e. how far the renderer will
+  // interpolate its head this frame. -1 when no bolt has hopped.
+  //
+  // This has to stay SMALL. When it was the distance between two bodies, the
+  // renderer interpolated the arc's head from one enemy all the way to the other,
+  // so the bolt was drawn as a segment that grew out of nothing over a single
+  // frame -- the animation that "stopped in mid-air" and then jumped.
+  [[nodiscard]] float testChainHeadLag() const;
   [[nodiscard]] std::size_t testWaveCount() const;
   [[nodiscard]] std::size_t testBounceCount() const;
   // Test helper: number of live straight Projectiles. The Blizzard Rail's shard
@@ -1527,6 +1611,15 @@ private:
   // "this box gave N cards" counter can never disagree about whether a panel is
   // up. The renderer gates on both.
   void clearChestReveal(int tier);
+  // Records what a box just handed over and STOPS THE WORLD so the player can read
+  // it. Every path that spends a chest goes through here -- walking into it, and
+  // the test hook -- so "the panel pauses the run" cannot be true of one of them
+  // and quietly not true of the other.
+  //
+  // The pause is not a courtesy: an overlord's box is five cards of real build
+  // change, and a 3.4-second toast over a live horde meant the player either read
+  // it standing still and got hit for it, or missed it entirely.
+  void presentChestReveal(int given);
   // Every weapon-targeted card in the content that is legal for the weapon in
   // `weaponSlot` and not yet maxed.
   [[nodiscard]] std::vector<int> legalWeaponCards(int weaponSlot) const;
@@ -1907,12 +2000,13 @@ private:
   float momentumSpeedMul_ = 1.0F;
 
   // The last chest the player opened: every card that came out of it, how many it
-  // actually gave, and how long the panel stays up.
+  // actually gave, and how long the panel takes to fade after the player lets go
+  // of it.
   //
   // It is a LIST, not a single card, because a box gives up to five of them and a
   // one-line toast naming the last one is how a champion's hand of three cards
-  // arrives as a single ambiguous sentence. The player asked for this directly:
-  // a simple readout of what fell out. Five is the overlord's cap, so the array
+  // arrives as a single ambiguous sentence. The player asked for this directly: a
+  // simple readout of what fell out. Five is the overlord's cap, so the array
   // cannot be overrun -- and a sixth card is dropped rather than reallocating,
   // because a reveal that grows without bound is a reveal that stops being read.
   // kChestRevealMax itself is declared up with the other class constants, because
@@ -1922,8 +2016,12 @@ private:
   int chestRevealTier_ = 0;
   int lastChestCard_ = -1;
   int lastChestGrants_ = 0;
+  // The DISMISS fade, not a countdown. The panel is up for exactly as long as the
+  // player keeps it up (RunState::ChestReveal), and this only runs once they press
+  // SPACE -- long enough for the panel to leave without the horde popping through
+  // it on the same frame.
   float lastChestTimer_ = 0.0F;
-  static constexpr float kChestToastTime = 3.4F;
+  static constexpr float kChestFadeTime = 0.28F;
 
   // Active ability state (see the Ability enum above).
   float abilityCd_[kAbilityCount] = {0.0F, 0.0F, 0.0F};

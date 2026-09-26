@@ -7874,3 +7874,360 @@ TEST_CASE("The generated content doc is not behind the tier ladder it documents"
     }
   }
 }
+
+// ---------------------------------------------------------------------------
+// A sphere with satellites, a bolt that rides its victim, and a receipt that
+// stops the world. All three are things the player looked at and named.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("A chest draws one sphere per card it will hand over") {
+  // The box used to be a crate of eleven rects, with 0.055 dots on a ring around
+  // it standing in for "how many cards are in here". The player asked for a ball
+  // with balls orbiting it, and for the ring to be the real count -- including the
+  // ones Deep Cache adds, which the old clamp at five silently threw away.
+  REQUIRE(game::Game::chestSatellites(0) == 1); // never a bare ball: uncountable
+  REQUIRE(game::Game::chestSatellites(1) == 1); // an elite's box
+  REQUIRE(game::Game::chestSatellites(3) == 3); // a champion's
+  REQUIRE(game::Game::chestSatellites(5) == 5); // an overlord's
+  REQUIRE(game::Game::chestSatellites(6) == 6); // an overlord's + one Deep Cache
+  REQUIRE(game::Game::chestSatellites(8) == 8); // + three: the real maximum
+
+  // And the count on screen is the count in the box. An overlord's box with three
+  // Deep Cache stacks really does open eight times -- the clamp at five was the
+  // picture disagreeing with the receipt.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 909};
+  g.testDisableWaves();
+  g.testClearWeapons();
+  for (const char* id : {"wand", "dagger", "crossbow"}) {
+    g.testAddWeapon(g.testWeaponContentIndex(id));
+  }
+  REQUIRE(g.testSpawnChest(0.0F, 0.0F, 3, -1) == 5);
+  const int idx = g.testUpgradeContentIndex("u_deep_cache");
+  REQUIRE(idx >= 0);
+  REQUIRE(g.testGrantUpgrade(idx));
+  REQUIRE(g.testSpawnChest(4.0F, 0.0F, 3, -1) == 6);
+  REQUIRE(g.testGrantUpgrade(idx));
+  REQUIRE(g.testGrantUpgrade(idx));
+  REQUIRE(g.stats().chestBonus == 3);
+  // Eight is the real maximum: an overlord's five plus three Deep Cache stacks.
+  // The old ring clamped at five, so the eighth card was invisible on the ground
+  // and then appeared on the receipt.
+  REQUIRE(g.testSpawnChest(8.0F, 0.0F, 3, -1) == 8);
+  REQUIRE(game::Game::chestSatellites(8) == 8);
+}
+
+TEST_CASE("A chain bolt rides the enemy it is on") {
+  // "The lightning does not follow the enemy", reported against a bolt that was
+  // teleported onto a target once per hop and then left there. The arena is 40+
+  // units across and enemies do not stand still, so by the second hop the bolt
+  // was pointing at empty ground while the bat it had hit walked off.
+  //
+  // The measurement is a distance, and the enemy is WALKING, which is the part
+  // that matters. A bolt frozen on a stationary target is followed by a bolt that
+  // has no idea what following means -- the old implementation passed that test
+  // perfectly while looking, in motion, exactly as broken as reported.
+  SoloWeapon s("tesla", 31);
+  REQUIRE(s.slot >= 0);
+  s.arm();
+  s.g.testSpawnEnemyAt(3.0F, 0.0F, 2.5F);
+  s.g.testSpawnEnemyAt(-3.0F, 0.0F, 2.5F);
+
+  int measured = 0;
+  for (int i = 0; i < 20; ++i) {
+    s.g.testAdvance(0.10F);
+    const float gap = s.g.testChainAnchorGap();
+    if (gap >= 0.0F) {
+      CAPTURE(i);
+      ++measured;
+      // Exact, not approximate: the bolt's position IS the victim's position,
+      // copied in. A tolerance here would be a tolerance for the bug -- the old
+      // code sat one enemy-speed-times-0.05s behind, which at 2.5 units/s is
+      // 0.125 and would sail through any reasonable epsilon.
+      REQUIRE(gap == 0.0F);
+    }
+  }
+  // Not vacuous: bolts existed, and at least one of them had actually landed on a
+  // body, so the assertions above were about following and not about an empty
+  // registry.
+  REQUIRE(measured > 0);
+  REQUIRE(s.g.testChainCount() > 0);
+  // And the enemies really were moving the whole time, which is what makes the
+  // zero above mean something.
+  const std::vector<float> pos = s.g.testEnemyPositions();
+  REQUIRE(pos.size() >= 4);
+  REQUIRE(std::abs(pos[0]) < 3.0F);
+  REQUIRE(std::abs(pos[2]) < 3.0F);
+}
+
+TEST_CASE("A chain bolt's arc is a real segment between two bodies") {
+  // Two numbers, and both of them used to be wrong. The tail is fromX/fromY --
+  // the point the last hop came FROM, captured at the moment of the hop -- and
+  // the head is the bolt's own interpolated position, which the test above pins
+  // to the live victim. What this pins is the frame in between: the tail must
+  // still span the gap when the bolt is moving, and the head must not be
+  // interpolated across that gap.
+  SoloWeapon s("tesla", 77);
+  REQUIRE(s.slot >= 0);
+  s.arm();
+  // Three bodies, all inside tesla's 2.8-unit jump range of each other, so hops
+  // are real hops. Two bodies 5.2 apart dead-end the bolt on the spot: the arc
+  // never happens, which is a correct behaviour and useless for measuring one.
+  s.g.testSpawnEnemyAt(1.5F, 0.0F, 1.0F);
+  s.g.testSpawnEnemyAt(-1.5F, 0.0F, 1.0F);
+  s.g.testSpawnEnemyAt(0.0F, 2.4F, 1.0F);
+
+  float best = -1.0F;
+  float worstLag = -1.0F;
+  for (int i = 0; i < 20; ++i) {
+    s.g.testAdvance(0.10F);
+    best = std::max(best, s.g.testChainArcSpan());
+    worstLag = std::max(worstLag, s.g.testChainHeadLag());
+  }
+  CAPTURE(best);
+  CAPTURE(worstLag);
+  // A hop between bodies that start about 3 units apart is a segment you can see.
+  // The tail is captured at the hop and the head rides the new victim, so the
+  // drawn arc is the gap between two bodies at every moment of the frame.
+  REQUIRE(best > 1.0F);
+  // And it is bounded by the weapon's own reach, so this cannot pass by being
+  // loosened: the range is read out of the content, not typed in.
+  const game::WeaponDef* tesla = s.content.weapon("tesla");
+  REQUIRE(tesla != nullptr);
+  REQUIRE(best <= tesla->chainJumpRange);
+
+  // The other half, and the part that was actually broken. px/py are what the
+  // renderer interpolates the head from, and they used to be set to the OLD
+  // victim's position, so the head slid all the way across the gap in a single
+  // frame: the arc the player was watching grew out of a point and then jumped.
+  // They are now the new victim's own previous tick, so the head is always
+  // somewhere on the body it is standing on. One frame of a walking enemy is
+  // about 0.017 at speed 1.0; the gap is about 3.0.
+  REQUIRE(worstLag >= 0.0F);
+  REQUIRE(worstLag < 0.2F);
+}
+
+TEST_CASE("Opening a chest stops the run until the player says so") {
+  // The player asked for this outright: the readout should pause the game, wait
+  // to be read, and continue on SPACE. It was a 3.4-second toast over a live
+  // horde, which is either read while being chewed on or missed entirely.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 4242};
+  g.enterTestMode();
+  g.testDisableWaves();
+  for (const char* id : {"dagger", "scythe", "orb", "bow", "whip"}) {
+    const int idx = g.testWeaponContentIndex(id);
+    if (idx >= 0) g.testAddWeapon(idx);
+  }
+  g.testSpawnEnemyAt(3.0F, 0.0F);
+  REQUIRE(g.testSpawnChest(0.0F, 0.0F, 3, -1) == 5);
+  g.testOpenFirstChest();
+
+  // Held.
+  REQUIRE(g.state() == game::RunState::ChestReveal);
+  REQUIRE(g.testChestRevealCount() > 0);
+
+  // Held means held: a hundred frames of nothing, with a champion standing right
+  // there, must not resolve into a kill or a second wave. The enemy is alive for
+  // the whole of it.
+  game::FrameInput in{};
+  for (int i = 0; i < 100; ++i) g.advance(1.0F / 60.0F, in);
+  REQUIRE(g.state() == game::RunState::ChestReveal);
+  REQUIRE(g.testChestRevealCount() > 0);
+
+  // SPACE lets go, and the run is handed back.
+  game::FrameInput go{};
+  go.menuConfirm = true;
+  g.advance(1.0F / 60.0F, go);
+  REQUIRE(g.state() == game::RunState::Playing);
+
+  // And it does not come back on its own: the panel had a lifetime, and a
+  // countdown that brings the receipt back is the bug again.
+  for (int i = 0; i < 120; ++i) g.advance(1.0F / 60.0F, in);
+  REQUIRE(g.state() == game::RunState::Playing);
+}
+
+TEST_CASE("The chest receipt fits on screen and nothing runs off the right edge") {
+  // Two defects, neither of which a test could see while the layout was inline in
+  // the renderer:
+  //
+  //  1. The panel was drawn with the CENTRE-based Batcher::rect at what were meant
+  //     to be corner coordinates, so the dark backing sat half a panel up and to
+  //     the left of the text it was backing and the four frame bars were drawn as
+  //     centre-based rects through the middle of the screen. That is "the chest
+  //     window is broken".
+  //  2. Its width was min(screen, widest UNWRAPPED line) while the text was laid
+  //     out in one line, so on any window narrower than a card description the
+  //     tail of the text left the screen. That is "and cut off".
+  //
+  // The layout is the renderer's own arithmetic, so these are claims about what
+  // gets drawn rather than about a copy of it.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  std::vector<std::string> names;
+  std::vector<std::string> descs;
+  for (const auto& u : content.upgrades) {
+    names.push_back(u.name);
+    descs.push_back(u.desc);
+  }
+  REQUIRE(names.size() > 100);
+
+  // The shipped worst case, measured over the WHOLE card set rather than a
+  // hand-picked pair: the longest description in the game, four times over, which
+  // is what a real overlord's box can hand out.
+  std::size_t longest = 0;
+  for (std::size_t i = 1; i < descs.size(); ++i) {
+    if (descs[i].size() > descs[longest].size()) longest = i;
+  }
+  const std::vector<std::string> worstName{
+      names[longest], names[longest], names[longest], names[longest], names[longest]};
+  const std::vector<std::string> worstDesc{
+      descs[longest], descs[longest], descs[longest], descs[longest], descs[longest]};
+
+  for (const float py : {720.0F, 1080.0F}) {
+    for (const float px : {1920.0F, 1280.0F, 800.0F, 640.0F}) {
+      CAPTURE(px);
+      CAPTURE(py);
+      const auto lay = game::Game::chestRevealLayout(px, py, worstName, worstDesc);
+      REQUIRE(lay.panelX >= 0.0F);
+      REQUIRE(lay.panelX + lay.panelW <= px);
+      REQUIRE(lay.panelY >= 0.0F);
+      // The BOTTOM is not guaranteed on a window too short to hold a five-card
+      // receipt with the game's longest description in it, and that is the same
+      // trade the level-up row makes: clamping the top keeps the heading and the
+      // first card readable, which beats pushing the whole thing up off the
+      // screen. Only reachable by dragging the window to a few hundred pixels tall.
+      // What is checked is that the reference heights have room for it.
+      if (py >= 720.0F) REQUIRE(lay.panelY + lay.panelH <= py);
+      REQUIRE(lay.cardY.size() == 5);
+      REQUIRE(lay.descLines.size() == 5);
+
+      // Every line the renderer will DRAW fits the column it will be drawn in, and
+      // the column is inside the panel. chestRevealDescLines is the renderer's own
+      // wrapping, not a copy of it -- the defect was a renderer laying every
+      // description out in one unwrapped line, and a test that wrapped the text
+      // for itself would have passed straight through it.
+      const float colW = lay.panelW - lay.descX - lay.padX;
+      REQUIRE(colW > 0.0F);
+      const std::vector<std::string> drawn =
+          game::Game::chestRevealDescLines(lay, worstDesc[0]);
+      // A 134-character description in a 300px column has to wrap. If this ever
+      // reports one line, the wrap is gone and the tail is going off screen.
+      REQUIRE(drawn.size() > 1);
+      for (const auto& line : drawn) {
+        CAPTURE(line);
+        REQUIRE(6.0F * lay.descScale * static_cast<float>(line.size()) <= colW);
+      }
+      // The name column is one width for the whole panel, so the rows are not
+      // ragged, and the longest name in the game fits inside it at every width the
+      // game supports.
+      for (const auto& n : content.upgrades) {
+        const auto one = game::Game::chestRevealLayout(
+            px, py, std::vector<std::string>{n.name},
+            std::vector<std::string>{n.desc});
+        CAPTURE(n.name);
+        REQUIRE(one.nameX + 6.0F * one.nameScale * static_cast<float>(n.name.size()) <=
+                one.descX + 0.5F);
+      }
+      // The last card's text ends above the hint line, not on top of it, using the
+      // layout's own pitch -- the renderer draws at lay.descLineH, so a literal here
+      // would be a second copy of a number that decides the panel's height.
+      REQUIRE(lay.descLineH > 0.0F);
+      REQUIRE(lay.panelY + lay.cardY.back() +
+                  static_cast<float>(lay.descLines.back()) * lay.descLineH <=
+              lay.hintY);
+    }
+  }
+
+  // A name far longer than anything shipped must not push the description column
+  // off the right edge. The column is capped at 42% of the panel for exactly this,
+  // and the guarantee is about the geometry, not about the name being readable --
+  // no card can be that long.
+  const std::vector<std::string> one{
+      "A DELIBERATELY ABSURDLY LONG UPGRADE NAME FOR A TEST"};
+  const std::vector<std::string> od{
+      std::string("and a description long enough to need wrapping, which is ") +
+      "the only way a card row ever gets to be two lines tall"};
+  const auto narrow = game::Game::chestRevealLayout(640.0F, 720.0F, one, od);
+  REQUIRE(narrow.panelX >= 0.0F);
+  REQUIRE(narrow.panelX + narrow.panelW <= 640.0F);
+  REQUIRE(narrow.descX >= narrow.nameX);
+  REQUIRE(narrow.descX + (narrow.panelW - narrow.descX - narrow.padX) <= narrow.panelW);
+  // The name may overrun its column -- nothing can make 53 characters fit 252px --
+  // but the column the descriptions live in is still whole.
+  REQUIRE(narrow.panelW - narrow.descX - narrow.padX > 0.0F);
+}
+
+TEST_CASE("The manual tells the player how a chest actually behaves") {
+  // Three things changed and all three are things a player has to be told, or the
+  // manual becomes a lie: the box is a ball of spheres rather than a crate, the
+  // spheres are the real card count including Deep Cache's, and opening one stops
+  // the run until SPACE.
+  //
+  // Pinned on the CHESTS page rather than searched for anywhere, because "every
+  // chest opens one more time" is also on the cards page -- a corpus search for
+  // CHEST survives deleting the chest page entirely, which is the same trap the
+  // earlier coverage tests walked into.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  const game::ManualPage* page = nullptr;
+  for (const auto& p : content.manual) {
+    if (p.id == "chests") page = &p;
+  }
+  REQUIRE(page != nullptr);
+
+  std::string body;
+  for (const auto& raw : page->lines) {
+    std::string line(raw);
+    if (!line.empty() && (line.front() == '>' || line.front() == '#')) line.erase(0, 1);
+    if (line.size() >= 2 && line[0] == ' ' && line[1] == ' ') line.erase(0, 2);
+    for (char& c : line) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    body += line;
+    body += '\n';
+  }
+
+  // SPACE is the key the renderer actually waits for, named on the page. If the
+  // key is ever rebound, this is where it should fail.
+  REQUIRE(body.find("SPACE") != std::string::npos);
+  REQUIRE(body.find("STOPS THE GAME") != std::string::npos);
+  // The ring is the count, and it grows with the card that makes boxes bigger.
+  REQUIRE(body.find("SPHERES") != std::string::npos);
+  REQUIRE(body.find("DEEP CACHE") != std::string::npos);
+  // And the three tiers, which is the other half of "the ring is the count".
+  REQUIRE(body.find("ELITE") != std::string::npos);
+  REQUIRE(body.find("CHAMPION") != std::string::npos);
+  REQUIRE(body.find("OVERLORD") != std::string::npos);
+
+  // It must not still be describing the panel as a timed toast. That sentence was
+  // true until this change and is the exact thing a player would read and believe.
+  REQUIRE(body.find("HOLDS A FEW SECONDS") == std::string::npos);
+}
+
+TEST_CASE("A chest opened on the step the player dies does not resurrect the run") {
+  // The panel takes the run state, so it has to be checked before it takes it. A
+  // box can be under the player's feet on the step they die, and a chest that
+  // clobbered the GameOver would leave SPACE meaning "continue" on a corpse.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 1717};
+  g.enterTestMode();
+  g.testDisableWaves();
+  g.testClearWeapons();
+  for (const char* id : {"dagger", "scythe", "orb", "bow", "whip"}) {
+    const int idx = g.testWeaponContentIndex(id);
+    if (idx >= 0) g.testAddWeapon(idx);
+  }
+  REQUIRE(g.testSpawnChest(0.0F, 0.0F, 3, -1) == 5);
+  // A body standing on the box, so the box is spent in the same breath as the
+  // kill. testKillPlayer is the honest way to get there: it goes through the
+  // death path, not around it.
+  g.testSpawnEnemyAt(0.0F, 0.0F, 2.5F);
+  g.testKillPlayer();
+  REQUIRE(g.state() == game::RunState::GameOver);
+  g.testOpenFirstChest();
+
+  // The cards are still granted and still readable, and the run stays over.
+  REQUIRE(g.testChestRevealCount() > 0);
+  REQUIRE(g.state() == game::RunState::GameOver);
+  game::FrameInput go{};
+  go.menuConfirm = true;
+  for (int i = 0; i < 30; ++i) g.advance(1.0F / 60.0F, go);
+  REQUIRE(g.state() == game::RunState::GameOver);
+}

@@ -433,14 +433,14 @@ build if a weapon is added with fewer.
 
 Shown in the game with **F1** (main menu, live run, or the pause screen). **17 pages:**
 
-- `controls` — CONTROLS (16 lines)
+- `controls` — CONTROLS (17 lines)
 - `run` — THE RUN (18 lines)
 - `levels` — LEVEL-UPS (21 lines)
 - `weapons` — WEAPONS (19 lines)
 - `every weapon` — EVERY WEAPON (22 lines)
 - `every evolution` — EVERY EVOLUTION (33 lines)
 - `every super` — EVERY SUPER (18 lines)
-- `chests` — CHESTS (19 lines)
+- `chests` — CHESTS (22 lines)
 - `the unique rules` — THE UNIQUE RULES (23 lines)
 - `the four marks` — THE FOUR MARKS (19 lines)
 - `evolutions` — EVOLUTIONS (21 lines)
@@ -464,6 +464,7 @@ Shown in the game with **F1** (main menu, live run, or the pause screen). **17 p
 
     1-5  PICK A CARD ON LEVEL-UP
     R    REROLL THE CARD CHOICE
+    SPACE  CONTINUE AFTER A CHEST OPENS
     ESC  PAUSE / CHARACTER SHEET
     B    BESTIARY (WHILE PAUSED)
     F1   THIS MANUAL
@@ -637,7 +638,8 @@ Shown in the game with **F1** (main menu, live run, or the pause screen). **17 p
 
 ```
     EVERY ELITE, CHAMPION AND OVERLORD DROPS ONE. WALK OVER IT - A CHEST IS A
-    PICKUP, NEVER A BUTTON.
+    PICKUP, NEVER A BUTTON. IT IS A GLOWING BALL WITH SMALLER BALLS ORBITING IT,
+    ONE PER CARD INSIDE, AND DEEP CACHE PUTS MORE BALLS IN THE RING.
 
     # WHAT IS INSIDE
     CARDS THAT IMPROVE THE WEAPONS YOU OWN AND THE BUILD AROUND THEM. NOT LEVEL-UPS
@@ -649,12 +651,14 @@ Shown in the game with **F1** (main menu, live run, or the pause screen). **17 p
     > ELITE      1 CARD.    THE SMALL CHANGE.
     > CHAMPION   3 CARDS.   A WHOLE HAND.
     > OVERLORD   5 CARDS.   MOST OF THE ARSENAL AT ONCE.
-    DEEP CACHE ADDS ONE MORE CARD TO EVERY BOX IN THE GAME.
+    DEEP CACHE ADDS ONE MORE CARD TO EVERY BOX IN THE GAME. THE SPHERES AROUND
+    THE BOX ARE THE CARDS IT WILL GIVE YOU, SO COUNT THEM BEFORE YOU TOUCH IT.
 
     # READING IT
-    OPENING A BOX PUTS A PANEL ON SCREEN NAMING EVERY CARD IT GAVE, IN THE COLOUR
-    OF THE TIER THAT DROPPED IT. IT HOLDS A FEW SECONDS AND THEN FADES. THE CARDS
-    ARE ALREADY YOURS; THE PANEL IS ONLY SO YOU CAN SEE WHAT WENT WHERE.
+    OPENING A BOX STOPS THE GAME AND PUTS A PANEL ON SCREEN NAMING EVERY CARD IT
+    GAVE, IN THE COLOUR OF THE TIER THAT DROPPED IT. PRESS SPACE WHEN YOU HAVE
+    READ IT AND THE RUN CARRIES ON. THE CARDS ARE ALREADY YOURS; THE PANEL IS
+    ONLY SO YOU CAN SEE WHAT WENT WHERE.
 ```
 
 ### THE UNIQUE RULES

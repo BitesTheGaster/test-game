@@ -416,6 +416,36 @@ struct ChainLightning {
   // 0 means "nothing owed". Stored as a raw id like lastTarget, and validated
   // before use: an id can be recycled between the spawn and the landing.
   std::uint32_t pendingFirst = 0;
+  // The bolt FOLLOWS its victim. Three fields, and they exist because the
+  // animation was reported as not following the enemy -- correctly, and for a
+  // structural reason rather than a tuning one.
+  //
+  // The bolt used to be TELEPORTED onto a target once per hop and then left
+  // there. Its draw position was that snapshot, so for the rest of the bolt's life
+  // -- through the telegraph, the sky drop and the whole cascade of hops -- the
+  // lightning hung in the air where an enemy used to be while the enemy walked
+  // off. The arena here is 40+ units across and enemies do not stand still, so by
+  // the second hop the bolt was pointing at empty ground.
+  //
+  // anchor: the id of the enemy the bolt is currently ON. The update refreshes
+  //   the draw position from it every frame, so the sky drop lands on the enemy
+  //   that is about to be hit and the bolt stays on its victim as it walks. An id
+  //   can be recycled or the body can die mid-bolt, so it is validated before use
+  //   and the bolt simply holds its position when it is not resolvable: a bolt
+  //   that snapped to (0, 0), or teleported to whatever now owns the id, is worse
+  //   than one that freezes where it was.
+  std::uint32_t anchor = 0;
+  // fromX / fromY: the tail of the arc, the point the last hop came FROM, captured
+  // at the moment of the hop.
+  //
+  // Separate from the Transform's px/py on purpose. Those are the previous FRAME's
+  // position and the renderer interpolates the arc's HEAD from them, which is the
+  // half that was actually broken: they held the old victim's position, so the head
+  // slid the whole width of the gap in a single frame and the segment the player
+  // was watching grew out of a point and then jumped. They now hold the new
+  // victim's own previous tick, and the tail lives here where it belongs.
+  float fromX = 0.0F;
+  float fromY = 0.0F;
 };
 
 // A crescent of force that LEAVES the player and travels outward (Sunder).
