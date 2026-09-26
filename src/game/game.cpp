@@ -55,11 +55,6 @@ constexpr float kMarkVulnHits = 8.0F;
 // the player standing in the middle of it alive.
 constexpr float kNovaPullFloor = 1.6F;
 
-// How far above the first target a chain bolt is drawn coming down from. A
-// lightning strike that starts at the victim's own centre is just a dot; the
-// vertical drop is what makes it read as a strike.
-constexpr float kChainSkyDrop = 4.2F;
-
 // Deterministic per-point jitter for a jagged bolt, in [-1, 1]. Derived from the
 // entity handle and the step index so the bolt is a different shape every shot
 // but does not shimmer between frames within one shot (which would look like
@@ -153,6 +148,11 @@ core::render::Color eliteTint(core::render::Color c) {
 }
 
 } // namespace
+
+ChainDropSpan chainDropSpan(float targetY, float born) {
+  const float sky = chainChargeY(targetY);
+  return {sky, sky + (targetY - sky) * std::clamp(born, 0.0F, 1.0F)};
+}
 
 // Effects whose value is a COUNT, not a number: the applier feeds them through
 // `static_cast<int>`, so a fractional value in the data is silently truncated
@@ -4193,11 +4193,24 @@ void Game::updateChainLightning() {
       cl.telegraph -= 1.0F / 60.0F;
       continue;
     }
-    // Beat 2: the sky drop draws itself down. The bolt is already damaging
-    // during it -- the ring is the warning, not the damage -- and the renderer
-    // scales the drop's brightness by this.
+    // Beat 2: the sky drop draws itself down, and the hit is paid on the frame it
+    // ARRIVES.
+    //
+    // Both halves of this used to be wrong in the same direction, which is why
+    // the strike still read as a pop no matter what the telegraph did. The hit
+    // was paid on the first frame of the window, so the health bar moved while
+    // the bolt was still a third of the way down; and the drop was replaced by
+    // the first arc 0.05s later, at 55% of its own length, so the lightning the
+    // player was watching stopped in mid-air. Now the bolt holds position until
+    // the drop has finished falling, takes its hit there, sits for
+    // kChainLandHold, and only then starts hopping.
     if (cl.strike < 1.0F) {
       cl.strike = std::min(1.0F, cl.strike + (1.0F / 60.0F) / kChainStrike);
+      if (cl.strike < 1.0F) continue; // still falling: nothing has landed yet
+      // The drop has reached the target. The hold is expressed by starting the
+      // hop timer in the past, so the ordinary `timer < 0.05` gate below carries
+      // it -- one rule for the delay between hops instead of two.
+      cl.timer = -kChainLandHold;
     }
 
     // Pay the strike the bolt was aimed at. See ChainLightning::pendingFirst:
@@ -10213,7 +10226,7 @@ void Game::render(core::render::Batcher& b, float alpha) {
         // least alarming thing a telegraph can look like.
         const float open = std::clamp(cl.telegraph / kChainTelegraph, 0.0F, 1.0F);
         const float f = 1.0F - open * open;
-        const float chargeY = y + kChainSkyDrop;
+        const float chargeY = chainChargeY(y);
         // Three rings closing at different rates reads as depth; one reads as a
         // circle being scaled. Drawn UP HERE around the charge, not on the floor
         // around the victim.
@@ -10250,10 +10263,16 @@ void Game::render(core::render::Batcher& b, float alpha) {
       // A bolt that has not moved yet is still a bolt that came from the sky:
       // draw the vertical drop above the first target.
       if (cl.jumpsDone == 0) {
-        const float topY = y - kChainSkyDrop;
-        // The drop reaches further down as it lands, so it reads as falling
-        // rather than as a fixed decoration that switched on.
-        const float reach = topY + (y - topY) * born;
+        // The drop's two ends come from one shared function, so they cannot
+        // disagree about which way is up. See chainDropSpan: the render used to
+        // gather the charge above the enemy and then draw the drop starting
+        // BELOW it, and that sign error is what kept being reported as a broken
+        // animation.
+        const ChainDropSpan span = chainDropSpan(y, born);
+        const float topY = span.skyY;
+        // Grows DOWN from the sky end as it lands, so it reads as falling rather
+        // than as a fixed decoration that switched on.
+        const float reach = span.reachY;
         const int steps = 9;
         for (int k = 0; k <= steps; ++k) {
           const float f = static_cast<float>(k) / static_cast<float>(steps);

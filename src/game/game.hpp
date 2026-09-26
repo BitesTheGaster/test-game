@@ -303,6 +303,41 @@ UpgradeEffectResult applyUpgrade(PlayerStats& stats, std::string_view effect, fl
 // approaches 50% as defense grows. Never makes damage negative.
 float mitigateDamage(float raw, float defense);
 
+// How far above its first target a chain bolt is drawn coming down from. A
+// lightning strike that starts at the victim's own centre is just a dot; the
+// vertical drop is what makes it read as a strike.
+//
+// The SIGN of this number is a load-bearing fact about the world -- world +y is
+// UP, so "above" is "+" -- and the render got it wrong once already: the charge
+// gathered in the sky and the bolt rose out of the floor to meet it. It is
+// namespace-scope rather than a class constant so that chainChargeY() below, the
+// one place the direction is written down, can be a free function a test calls.
+constexpr float kChainSkyDrop = 4.2F;
+
+// Where the sky end of a chain bolt's drop is, and how far down it has got.
+//
+// The two ends of one lightning effect, in one function, because they used to be
+// two independent sign decisions in the renderer and they disagreed: the
+// telegraph gathered at `y + kChainSkyDrop` while the drop ran from
+// `y - kChainSkyDrop`. The effect therefore pointed both ways at once, and
+// "the chain lightning animation is still broken" kept meaning exactly that --
+// not a rough shape, not a bad easing, but a bolt that fell upward.
+//
+// `born` is the strike's 0..1 progress: at 0 the drop has not started, at 1 it has
+// reached the target. `reachY` therefore moves DOWN from `skyY` as `born` rises,
+// which is the property a test can assert and a comment cannot.
+struct ChainDropSpan {
+  float skyY = 0.0F;   // where the bolt comes from
+  float reachY = 0.0F; // how far down it has got
+};
+[[nodiscard]] ChainDropSpan chainDropSpan(float targetY, float born);
+
+// Where the strike's charge gathers. Must be the same end the drop falls from,
+// or the effect is aimed one way and delivered another.
+[[nodiscard]] constexpr float chainChargeY(float targetY) {
+  return targetY + kChainSkyDrop;
+}
+
 // XP needed to advance from `level` to `level + 1`.
 float xpForLevel(int level);
 
@@ -600,7 +635,17 @@ public:
   // target shrinks through this window and the bolt only lands when it closes.
   static constexpr float kChainTelegraph = 0.22F;
   // How long the sky drop takes to draw itself down, once the ring has closed.
-  static constexpr float kChainStrike = 0.09F;
+  //
+  // 0.09 was shorter than the gap to the first hop (0.05s), so the drop was
+  // replaced by an arc at 55% of its own length: the player saw a stub of
+  // lightning that stopped in mid-air. It now outlasts the hop delay with room
+  // to spare, and the hit is paid on the frame the drop REACHES the target
+  // rather than the frame it starts.
+  static constexpr float kChainStrike = 0.14F;
+  // How long the landed drop sits there, fully drawn, before the bolt arcs on.
+  // Without it the impact and the first arc are the same frame, and the strike
+  // reads as an instantaneous swap from "vertical line" to "bent line".
+  static constexpr float kChainLandHold = 0.07F;
   // Gap between the arcs of a multi-arc wave shot, in seconds.
   static constexpr float kWaveBurstGap = 0.08F;
   // How fast a ricochet aims itself, in radians per second. A target inside

@@ -4732,6 +4732,16 @@ struct SoloWeapon {
   void arm() { g.testAddWeapon(slot); }
 };
 
+// The most wind-up left on any live chain bolt, in milliseconds, or -1 if every
+// bolt has closed its ring. Not a lambda: it is called from inside REQUIRE, and
+// Catch2's macro turns the expression into a template argument, where a
+// user-defined conversion does not go.
+int chainMostAiming(const std::vector<int>& telegraphs) {
+  int best = -1;
+  for (const int ms : telegraphs) best = std::max(best, ms);
+  return best;
+}
+
 }  // namespace
 
 TEST_CASE("No evolution is a numbers-only copy of one of its parents") {
@@ -5037,41 +5047,46 @@ TEST_CASE("A shattering bolt throws one fan of shards, not one per jump") {
     s.g.testSpawnEnemyAt(2.0F * std::cos(a), 2.0F * std::sin(a));
   }
 
-  // The bolt spends kChainTelegraph converging on the first target before it
-  // damages anything, so "straight after the first hop" is now at least that far
-  // in -- plus the 0.05s inter-hop delay. Advancing past the wind-up is the point
-  // of the test: the fan must exist.
-  s.g.testAdvance(game::Game::kChainTelegraph + 0.1F);
+  // The bolt spends kChainTelegraph converging, then kChainStrike dropping, then
+  // kChainLandHold sitting with the drop fully drawn, before its first hop. The
+  // fan is paid on that hop, so "straight after the first hop" is all three of
+  // those plus the inter-hop delay. Written as the sum rather than as a literal
+  // because the whole point of the wind-up is that it is several beats long, and
+  // a hardcoded 0.1s here silently became "before the strike has even landed"
+  // the last time the timing moved.
+  constexpr float kHopDelay = 0.05F;
+  s.g.testAdvance(game::Game::kChainTelegraph + game::Game::kChainStrike +
+                  game::Game::kChainLandHold + kHopDelay + 0.02F);
   const std::size_t shardsEarly = s.g.testProjectileCount();
   CAPTURE(shardsEarly);
   REQUIRE(shardsEarly > 0);
 
-  // The bolt keeps hopping afterwards, but the shard count does not keep
-  // growing with it. Four hops at a six-shard fan each would be 24 if the
-  // shatter were being paid out every time; one fan is 6, and they are already
-  // expiring, so the count stays near the first fan's size.
-  s.g.testAdvance(0.2F);
+  // "Not one per jump", measured inside a window the next volley cannot start in.
+  //
+  // The Blizzard Rail fires every 0.50s, so a 0.30s window can contain hops 2
+  // through 4 and their arcs but not a second shot. If the fan were paid on every
+  // hop, four jumps would add four fans and the count would climb towards 24;
+  // paid once, it can only fall as those six shards expire. This is the whole
+  // point of the test, so it is written to be immune to the fire schedule rather
+  // than to pick a lucky moment in it.
+  constexpr float kVolley = 0.50F; // blizzard's cooldown
+  s.g.testAdvance(kVolley - 0.20F);
   const std::size_t shardsMid = s.g.testProjectileCount();
+  CAPTURE(shardsEarly);
   CAPTURE(shardsMid);
-  REQUIRE(shardsMid <= shardsEarly + 2);
-
-  // The bolt's 4 jumps at 0.05s each plus the 0.45s linger is under a second,
-  // and the shards only live 0.55s -- but the WEAPON fires every 0.5s, so "no
-  // bolts left" would only be true by accident of the schedule. Compare against
-  // the next shot instead: the fan must clear rather than pile up.
-  s.g.testAdvance(0.4F);
-  const std::size_t shardsAfter = s.g.testProjectileCount();
-  CAPTURE(shardsAfter);
-  REQUIRE(shardsAfter <= shardsEarly);
+  REQUIRE(shardsMid <= shardsEarly);
 
   // Steady state: however many volleys have gone by, there is never more than a
-  // couple of fans' worth of shards in the air at once. The chain bound is sized
-  // to include bolts still in their telegraph, which is why it is 4 and not
-  // "bolts that have already struck": a converging bolt is a real bolt occupying
-  // a real entity slot.
+  // couple of fans' worth of shards in the air at once. A bolt lives longer than
+  // the 0.5s between shots, so two or three are in flight and the honest ceiling
+  // is a few fans -- the point is that the count is BOUNDED, not that it is
+  // small. The chain bound is sized to include bolts still in their telegraph,
+  // which is why it is 4 and not "bolts that have already struck": a converging
+  // bolt is a real bolt occupying a real entity slot.
+  constexpr std::size_t kFan = 6; // blizzard's chain_shatter
   for (int i = 0; i < 20; ++i) {
-    s.g.testAdvance(0.5F);
-    REQUIRE(s.g.testProjectileCount() <= shardsEarly * 2);
+    s.g.testAdvance(kVolley);
+    REQUIRE(s.g.testProjectileCount() <= kFan * 3);
     REQUIRE(s.g.testChainCount() <= 4);
   }
 }
@@ -7328,4 +7343,97 @@ TEST_CASE("A chest names every card it handed over, not just the last one") {
   while (g.testChestCount() > 0) g.testOpenFirstChest();
   REQUIRE(g.testLastChestGrants() == 0);
   REQUIRE(g.testChestRevealCount() == 0);
+}
+
+TEST_CASE("A chain bolt falls DOWN out of the sky, and its hit lands as it arrives") {
+  // This is the complaint that would not go away: "the lightning animation is
+  // still broken". It was not a rough shape and not a bad easing. The render drew
+  // the telegraph charge at `targetY + kChainSkyDrop` and the drop from
+  // `targetY - kChainSkyDrop`, so the effect gathered in the sky above the enemy
+  // and then delivered its lightning upward out of the floor to meet it.
+  //
+  // A sign error in a renderer is invisible to a test suite, so it is not left in
+  // the renderer: both ends now come from one function, and this asks the
+  // function.
+  const float target = 3.0F;
+  const auto span = game::chainDropSpan(target, 0.0F);
+  const auto landed = game::chainDropSpan(target, 1.0F);
+
+  // The bolt comes FROM above. World +y is up, so above is a larger y.
+  REQUIRE(span.skyY > target);
+  // And the charge that telegraphs it is aimed at that same end of the sky, not
+  // a second opinion about which way is up.
+  REQUIRE(span.skyY == game::chainChargeY(target));
+
+  // It FALLS. As `born` rises the reached end descends toward the target, which
+  // is the only way a strike reads as falling rather than as extending upward
+  // out of the ground.
+  REQUIRE(landed.reachY < span.reachY);
+  REQUIRE(landed.reachY == target); // and it finishes at the enemy
+
+  // A half-drawn drop is a vertical segment hanging from the sky, not from the
+  // ground: the part that exists is always the TOP of it.
+  const auto half = game::chainDropSpan(target, 0.5F);
+  REQUIRE(half.reachY > target);
+  REQUIRE(half.reachY < half.skyY);
+  // And a nonsensical progress value is clamped rather than making the bolt
+  // teleport: the render's `born` is a clamp of a timer, but the clamp lives in
+  // one place now instead of at every use.
+  REQUIRE(game::chainDropSpan(target, -5.0F).reachY == span.reachY);
+  REQUIRE(game::chainDropSpan(target, 9.0F).reachY == target);
+}
+
+TEST_CASE("A chain bolt's first hit waits for the drop to finish falling") {
+  // The other half of the same defect, and the reason it kept reading as a pop.
+  // The damage was paid on the FIRST FRAME of the strike window, while the drop
+  // was still a third of the way down, and the drop was then replaced by the
+  // first arc 0.05s later -- at 55% of its own length, so the lightning the
+  // player was watching stopped in mid-air.
+  //
+  // The wind-up is three beats long now: converge, drop, land. Nothing may be
+  // damaged before the drop has arrived, and the bolt must not start arcing until
+  // it has.
+  SoloWeapon s("tesla", 4);
+  REQUIRE(s.slot >= 0);
+  s.arm();
+  s.g.testSpawnEnemyAt(2.0F, 0.0F);
+  const float hp0 = s.g.testEnemyHpNear(2.0F, 0.0F);
+  REQUIRE(hp0 > 0.0F);
+  // Roll forward to the START of a wind-up rather than to a chosen number of
+  // seconds. The Tesla needs 0.65s to shoot at all, and its bolts are ~1.2s
+  // long, so a fixed pre-roll lands at a different point of the strike every time
+  // the timings are touched -- and a test that measures beat 1 of a wind-up it
+  // has already run through is measuring nothing.
+  for (int i = 0; i < 400; ++i) {
+    if (chainMostAiming(s.g.testChainTelegraphs()) > 150) break;
+    s.g.testAdvance(1.0F / 60.0F);
+  }
+  REQUIRE(chainMostAiming(s.g.testChainTelegraphs()) > 100);
+  const float hpStart = s.g.testEnemyHpNear(2.0F, 0.0F);
+
+  // Beat 1: converging. Nothing has been hit yet, and the bolt is still aiming.
+  s.g.testAdvance(game::Game::kChainTelegraph * 0.5F);
+  REQUIRE(s.g.testEnemyHpNear(2.0F, 0.0F) == hpStart);
+  REQUIRE(chainMostAiming(s.g.testChainTelegraphs()) > 0);
+
+  // Beat 2, most of the way: the drop is still falling. The ring has closed --
+  // the bolt is no longer aiming, it is arriving -- but the health bar must not
+  // have moved, because the bolt has not arrived yet. This is the assertion that
+  // used to be false: the hit was paid on the first frame of this window, while
+  // the drop was a third of the way down.
+  s.g.testAdvance(game::Game::kChainTelegraph * 0.5F +
+                  game::Game::kChainStrike * 0.75F);
+  REQUIRE(s.g.testEnemyHpNear(2.0F, 0.0F) == hpStart);
+  // -1 is a bolt that has closed its ring and is on its way down; it is NOT yet
+  // a bolt that has hit anything.
+  REQUIRE(chainMostAiming(s.g.testChainTelegraphs()) == -1);
+
+  // Beat 2, complete: the drop reaches the enemy, and only now is the hit paid.
+  s.g.testAdvance(game::Game::kChainStrike * 0.25F + 2.0F / 60.0F);
+  REQUIRE(s.g.testEnemyHpNear(2.0F, 0.0F) < hpStart);
+
+  // The whole wind-up is strictly longer than the old one, which is the point:
+  // it is something you can watch rather than something that has already
+  // happened by the time you look at it.
+  REQUIRE(game::Game::kChainStrike > 0.05F);
 }
