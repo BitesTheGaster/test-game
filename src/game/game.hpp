@@ -287,6 +287,83 @@ struct PlayerStats {
   float stasisDuration = 2.5F; // Stasis: window length
   float stasisSlow = 0.35F;    // Stasis: enemy time multiplier while it is up
   int abilityEcho = 0;         // 1 = every ability also fires a 40% Overload
+
+  // --- Milestone BRANCH mechanics ---------------------------------------------
+  // Two of the tier-2 branch shapes the design asked for, which are the two that
+  // cannot be expressed as a number on a stat. They are here rather than in the
+  // milestone layer because neither is a multiplier -- one is a CONDITIONAL
+  // multiplier and the other is a one-shot event, and pretending otherwise by
+  // folding them into Scale would make the card lie about what it does.
+  //
+  // STILLNESS: regen is multiplied by this while the player is not giving a
+  // movement input. 1.0 means off. It is a conditional multiplier on purpose --
+  // the same reason Frenzy is a fire-rate card and not a damage card: it makes
+  // the player's POSITION part of the build, and a build you have to stand still
+  // to use is a different build from one you have to keep moving for.
+  float stillnessRegenMul = 1.0F;
+  // ...and its mirror at the other end of the health bar: regen is multiplied by
+  // this while the player is below half health. 1.0 means off. The two are
+  // deliberately the same mechanic pointed at opposite conditions, because a
+  // survival branch that only rewards standing still is a rule with one half:
+  // the player also has to be able to be rewarded for being nearly dead, which is
+  // the state they are in for most of a fight they are winning narrowly.
+  float lowHpRegenMul = 1.0F;
+  // MERCY: seconds of taking no contact damage before the run heals to full, ONCE
+  // per injury. 0 means off. Once-per-injury rather than a repeating heartbeat,
+  // because "you survived that, here is your health back" is a readable reward
+  // and "you are safe, therefore repeat" is a health bar that stops being a
+  // health bar. It also cannot be cheesed by out-ranging the game, since the
+  // timer resets the moment anything touches you.
+  float mercyHealDelay = 0.0F;
+  // Two more branch mechanics that are neither a multiplier nor an event, so they
+  // cannot live in Scale and are read where they are spent.
+  //
+  // LIFESTEAL PIERCING RESISTANCE. 1 = the slain enemy's resistance is ignored.
+  // A percentage axis whose whole difficulty late in a run is that enemies resist
+  // it, so a card that deletes the resistance is a genuine tier-3 payoff rather
+  // than another flat point on a number that is already being multiplied.
+  int lifestealPierceRes = 0;
+  // Regen as a FRACTION OF MAXIMUM HEALTH per second, added on top of the flat
+  // rate. Read as x(1 + .) elsewhere and as a percent here because a fraction of
+  // health has to be a fraction: the card says 2% of maximum, and at 300 total
+  // health that is 6 HP/s, which is the whole point of the card.
+  float regenOfMax = 0.0F;
+
+  // --- Milestone multipliers ----------------------------------------------------
+  // A card ADDS to a stat. A milestone MULTIPLIES the total the cards built. They
+  // live in different fields on purpose: `damageMul` starts at 1.0 and Whetstone
+  // adds 0.30 to it, while every field below starts at 0.0 and is read as
+  // x(1 + it). Mixing them in one number is how a card ends up reading "+30% of
+  // your milestones", which is a sentence no player can act on.
+  //
+  // WHY a milestone multiplies instead of adding, which is the whole reason the
+  // milestone tiers exist: a flat "+0.5 damage" is worth exactly the same to a
+  // build that engaged one damage card as to one that engaged eight, so it is a
+  // number on a card rather than a reward for having built something. A
+  // multiplier is worth more the deeper the axis already is, so the milestone
+  // pays out for engagement -- the two things the player was told they were
+  // choosing between (breadth, and depth) and the one that a flat bump pays
+  // neither of.
+  //
+  // MIND THE TWO CONVENTIONS. `damageMul` above is 1.0-based (cards add to a
+  // multiplier) and every field in here is 0.0-based (read as x(1 + it)). The
+  // asymmetry is pre-existing and the six damage-multiplier tests catch the
+  // mistake instantly, which is the good kind of landmine.
+  struct Scale {
+    float damage = 0.0F;     // x(1+.) at every damage site
+    float fireRate = 0.0F;   // x(1+.) on the final cooldown multiplier
+    float regen = 0.0F;      // x(1+.) on HP per second
+    float lifesteal = 0.0F;  // x(1+.) on proc chance AND on HP per proc
+    float shield = 0.0F;     // x(1+.) on shieldMax
+    float maxHp = 0.0F;      // x(1+.) on total health
+    float defense = 0.0F;    // x(1+.) on the flat defence term
+    float mark = 0.0F;       // x(1+.) on all four on-hit marks at once
+    float reach = 0.0F;      // x(1+.) on projectile speed and lifetime
+    float knockback = 0.0F;  // x(1+.) on every shove the player deals
+    int proj = 0;            // whole extra projectiles -- an integer axis, so
+                             // it is a count and not a percentage
+  };
+  Scale milestone{};
 };
 
 struct UpgradeEffectResult {
@@ -1010,6 +1087,11 @@ public:
   [[nodiscard]] int testUsedItemSlots() const { return usedItemSlots(); }
   [[nodiscard]] bool testSlotIsOpen() const { return slotIsOpen(); }
   [[nodiscard]] std::vector<std::string> testChoiceIds() const;
+  // Test hook for the branch tree: does the run hold this card id? Public only
+  // as a test hook -- holdsCard() itself stays private because nothing outside
+  // the game has a business asking which cards a run took, and a public accessor
+  // for it is an invitation to build UI on the wrong layer.
+  [[nodiscard]] bool testHoldsCard(std::string_view id) const { return holdsCard(id); }
   // Is this weapon equipped right now. Distinct from testWeaponContentIndex,
   // which answers "does this weapon exist in the content" and is therefore always
   // true -- a test that asked the wrong one to mean "do I own it" would report a
@@ -1132,6 +1214,86 @@ public:
   [[nodiscard]] int killStreak() const { return streak_; }
   [[nodiscard]] float killStreakTimer() const { return streakTimer_; }
   [[nodiscard]] float momentumDamageMul() const { return momentumDamageMul_; }
+  // THE ONE NUMBER EVERY DAMAGE SITE MULTIPLIES BY.
+  //
+  // Three things scale player damage and they used to be written out longhand at
+  // each of the twenty-odd places a point of damage is produced, which is twenty
+  // places to forget one when a fourth arrives. The three layers, in the order
+  // they are applied:
+  //
+  //   damageMul                   cards. NOTE the convention: this one field
+  //                               starts at 1.0 and cards ADD to it, so it IS
+  //                               already a multiplier and must not be read as
+  //                               an offset. The other eight milestone axes are
+  //                               0-based additive and are read as x(1 + .).
+  //   x (1 + milestone.damage)    milestones, multiplying the sum
+  //   x momentumDamageMul_        the kill chain, a live runtime meter
+  //
+  // Milestone sits BETWEEN the cards and the meter, not outside both, and that
+  // is the ordering that has to be right: a milestone should scale what the
+  // build did, and the chain should then scale what the milestone made. Putting
+  // the milestone last would make a run with a live chain pay the same
+  // milestone tax as a run sitting still, and the chain is the part of the
+  // damage model that is already paying for itself.
+  [[nodiscard]] float playerDamageScale() const {
+    return stats_.damageMul * (1.0F + stats_.milestone.damage) * momentumDamageMul_;
+  }
+  // The same three-layer treatment for fire rate, in the ADDITIVE form
+  // attackCooldown wants. A milestone is a multiplier, so it is folded into the
+  // denominator multiplicatively and then converted back:
+  //
+  //     denominator = (1 + fireRateBonus) * (1 + milestone.fireRate)
+  //
+  // and the per-weapon card bonus and the live chain are added to THAT rather
+  // than to `fireRateBonus` directly. Putting them outside the fold would mean a
+  // milestone does not scale the chain, which is the one thing a milestone
+  // should never do -- it would tax a run for playing well.
+  [[nodiscard]] float playerCooldown(float baseCooldown, float extraBonus) const {
+    const float denom = (1.0F + stats_.fireRateBonus) * (1.0F + stats_.milestone.fireRate) +
+                        extraBonus;
+    return baseCooldown / std::max(0.05F, denom);
+  }
+  // The global fire-rate figure for the pause sheet, as a percentage of the
+  // 1.0x base. Reported through the same fold as playerCooldown so the sheet
+  // cannot print a number the weapons do not use.
+  [[nodiscard]] float effectiveFireRate() const {
+    return (1.0F + stats_.fireRateBonus) * (1.0F + stats_.milestone.fireRate) - 1.0F;
+  }
+  // The remaining milestone axes, each read through one accessor for the same
+  // reason playerDamageScale exists: the multiplier has to be applied where the
+  // value is USED, and "where the value is used" is more than one place for
+  // every one of these. Health is read at spawn and again on every max-health
+  // card; regen at the top of every frame; the marks inside the single damage
+  // funnel. A milestone that reached four of the five would be a card that
+  // silently does half of what it says, which is the failure mode this whole
+  // layer exists to avoid.
+  [[nodiscard]] float regenRate() const {
+    return stats_.regen * (1.0F + stats_.milestone.regen) +
+           maxHealth() * stats_.regenOfMax;
+  }
+  [[nodiscard]] float shieldCap() const {
+    return stats_.shieldMax * (1.0F + stats_.milestone.shield);
+  }
+  [[nodiscard]] float maxHealth() const {
+    return stats_.maxHp * (1.0F + stats_.milestone.maxHp);
+  }
+  [[nodiscard]] float defenseValue() const {
+    return stats_.defense * (1.0F + stats_.milestone.defense);
+  }
+  // Lifesteal is a per-kill chance, so a plain multiplier on it would spend most
+  // of itself above 100% and read as a dead card. The milestone therefore scales
+  // the PAYOUT as well as the chance: past 100% the chance is already certain and
+  // the multiplier keeps paying as healing per kill, which is the number a
+  // vampirism build actually plans around.
+  [[nodiscard]] float lifestealChance() const {
+    return std::min(100.0F, stats_.lifesteal * (1.0F + stats_.milestone.lifesteal));
+  }
+  [[nodiscard]] float lifestealHealAmount() const {
+    return static_cast<float>(stats_.lifestealHeal) * (1.0F + stats_.milestone.lifesteal);
+  }
+  [[nodiscard]] int extraProjectiles() const {
+    return stats_.projAdd + stats_.milestone.proj;
+  }
   [[nodiscard]] float momentumFireRate() const { return momentumRate_; }
   [[nodiscard]] float momentumSpeedMul() const { return momentumSpeedMul_; }
   // Test hook: set the chain directly.
@@ -1302,6 +1464,29 @@ public:
   void testHurtPlayer(float amount) { hurtPlayer(amount); }
   // Test helper: set the player's current HP (for low-HP unique tests).
   void testSetPlayerHp(float hp);
+  // Test helper: the player's current health. Needed because every healing rule
+  // this round added (mercy, conditional regen) is a claim about a NUMBER MOVING
+  // OVER TIME, and a test that reaches into the registry for it is asserting on
+  // the storage rather than on the game.
+  [[nodiscard]] float testPlayerHp() const;
+  // Test helper: the shield buffer right now, against shieldCap() for the max.
+  [[nodiscard]] float testShield() const { return shield_; }
+  // Test helper: hold a movement input. The two conditional regeneration cards
+  // are gated on whether the player is GIVING INPUT rather than on velocity, so
+  // the only way to test them is to give some -- and a dash would have moved the
+  // player without them choosing to, which is the distinction the cards turn on.
+  void testSetMove(float x, float y) { moveX_ = x; moveY_ = y; }
+  // Test helper: deal damage-over-time damage, the path that deliberately does NOT
+  // re-arm the mercy timer. Exposed because "the DoT exclusion still holds" is a
+  // promise with a test on it, not a comment.
+  void testDirectPlayerDamage(float amount) { damagePlayerDirect(amount); }
+  // Test hook for the branch gate. Public only as a hook: upgradeIsUsable() is
+  // private because nothing outside the game has business deciding what a run may
+  // be offered, but every door a card enters through asks it, and a test has to be
+  // able to ask the same question they do.
+  [[nodiscard]] bool testUpgradeUsable(int index) const {
+    return upgradeIsUsable(index);
+  }
   // Test helper: kill the first live Enemy through the normal kill path (so
   // the bestiary records it). No-op when the registry has no enemies.
   void testKillFirstEnemy();
@@ -1856,6 +2041,12 @@ private:
   void updatePickups();
   void updateShield();
   void updateUniqueEffects();
+  // The mercy timer: seconds since contact damage, and a once-per-injury heal to
+  // full when the threshold is crossed. Driven from the ONE place contact damage
+  // is applied, via notePlayerHurt(), because a third damage site added later and
+  // not wired up is how a heal quietly becomes a no-op.
+  void notePlayerHurt();
+  void updateMercyHeal(float dt);
   void buildSpatialHash();
   void enterLevelUp();
   // Opening pick: the run begins with no weapon, offering three starter
@@ -1874,6 +2065,11 @@ private:
   // True when the card can actually be applied right now. Weapon-specific
   // cards are unusable while their weapon is not equipped.
   [[nodiscard]] bool upgradeIsUsable(int upgradeIndex) const;
+  // Does the run hold this card id? The parent lookup for a branch, and the
+  // answer to "which of these cards does taking this one close", both of which
+  // are questions about the CONTENT the run actually loaded rather than about a
+  // list somebody maintained alongside it.
+  [[nodiscard]] bool holdsCard(std::string_view id) const;
   void addWeapon(int defIndex);
   void syncOrbitBlades(int slot); // add orbit blades up to the current count
   void syncHaloBeams(int slot);   // add halo beams up to the current count
@@ -2092,6 +2288,20 @@ private:
 
   RunState state_ = RunState::Playing;
   float simTime_ = 0.0F;
+  // Mercy-heal branch state. See PlayerStats::mercyHealDelay.
+  float timeSinceHurt_ = 0.0F;
+  // "true = the current injury has already been paid out". Starts FALSE, meaning
+  // the branch is armed, and the reason is worth writing down because the obvious
+  // initialiser is the other one: a run that has never been hurt has not "already
+  // been paid out", it simply has not been hurt, and starting true would make the
+  // card silently dead on any run that reached low health without going through
+  // hurtPlayer() -- a chest, a penalty, a future mechanic. The `hp >= max` guard
+  // inside is what stops the free full heal at full health, not this flag.
+  bool mercySpent_ = false;
+  // Whether the player gave a movement input this frame. Set in movePlayer, read
+  // by the regen block, and deliberately NOT derived from velocity -- a dash or a
+  // knockback moves the player without them choosing to stand still.
+  bool playerMoving_ = false;
   int level_ = 1;
   float xp_ = 0.0F;
   float xpNext_ = 6.0F;

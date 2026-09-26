@@ -1398,13 +1398,46 @@ max_stacks = 3
 
 # L4 --- SURVIVOR: how you outlast it. Three ways to be harder to kill, and the
 # run commits to one of them for good.
+#
+# This group is the worked example of the milestone TREE, and it is the group's
+# first member rather than a new group because the tree is the natural evolution
+# of what was already here. What it used to be: three flat stat cards with three
+# different stack counts, of which the run could take the same one twice at the
+# next milestone. What it is now: one question at level 4, then a choice of two
+# answers to THAT answer at level 8, then a choice of two at level 16.
+#
+# Three rules hold the whole tree together and each of them is load-bearing:
+#
+#  1. A milestone MULTIPLIES the axis, it does not add to it. A flat "+9%
+#     lifesteal" is worth exactly as much to a run that engaged one lifesteal
+#     card as to one that engaged eight, so it is a number rather than a reward.
+#     Every card below carries a multiplier, so the tier pays out for depth.
+#
+#  2. A tier-1 card therefore ALSO seeds a flat amount, because a pure
+#     multiplier is worth nothing to a run that has not engaged the axis at all
+#     -- x1.6 on zero lifesteal is zero lifesteal, which is a dead card on the
+#     only screen it can first appear on. The seed opens the axis; the multiplier
+#     is what makes going deeper worth it.
+#
+#  3. Branches are `after` a parent card and siblings are a `group`, so the tree
+#     needs no new state: the run already remembered which milestone cards it
+#     held. A player who took Crimson Pact sees two lifesteal answers at level 8
+#     and neither of the other four.
+#
+# The two branch shapes the design asked for by name are here verbatim: regen
+# that is super-fast while you stand still (Stillness Bloom, and Deep Stillness
+# which is its stronger sibling), and an instant heal after a few seconds without
+# damage (Wound Echo, and Red Mend which shortens the wait). The user's own
+# verdict on that pair was that it is unbalanced; it is shipped anyway, because
+# the point of the round was the SHAPE, and the numbers are on the card where they
+# can be argued with.
 [[upgrade]]
 id = "m4_crimson"
 name = "Crimson Pact"
-desc = "Lifesteal +9%"
-effect = "lifesteal_add"
-value = 9
-max_stacks = 3
+desc = "Lifesteal 7% per kill. Everything else you add to lifesteal counts 60% stronger."
+effect = "ms_lifesteal_seed"
+value = 0.6
+max_stacks = 1
 kind = "milestone"
 level = 4
 group = "survivor"
@@ -1412,15 +1445,10 @@ group = "survivor"
 [[upgrade]]
 id = "m4_renewal"
 name = "Verdant Renewal"
-desc = "Regeneration +3 HP/s"
-effect = "regen_add"
-# +3, not the +1.2 this used to be. A plain Vitality is +2 a stack, so the
-# milestone was the WORSE buy on the axis it exists to win, which is not a reward
-# for committing -- it is a tax. A milestone closes its two siblings for the rest
-# of the run, so it has to beat the repeatable card on the per-take number and on
-# the whole-run total, or the player is right to walk away from it.
-value = 3.0
-max_stacks = 3
+desc = "Regeneration 1 HP/s. Everything else you add to regeneration counts 75% stronger."
+effect = "ms_regen_seed"
+value = 0.75
+max_stacks = 1
 kind = "milestone"
 level = 4
 group = "survivor"
@@ -1428,13 +1456,237 @@ group = "survivor"
 [[upgrade]]
 id = "m4_aegis"
 name = "Aegis"
-desc = "Shield +55, filled to the brim at once"
-effect = "shield_add"
-value = 55.0
-max_stacks = 2
+desc = "Shield 50, filled at once. Your whole pool is 60% larger."
+effect = "ms_shield_seed"
+value = 0.6
+max_stacks = 1
 kind = "milestone"
 level = 4
 group = "survivor"
+
+# L8 --- the first BRANCH. Two answers per line, and the line you are on decides
+# which two you are asked. The group name is the line, not the tier, so the two
+# branches of one line are each other's siblings and the lines never interfere.
+[[upgrade]]
+id = "m8_blooddebt"
+name = "Blood Debt"
+desc = "Lifesteal 60% stronger again. Totals 2.2x."
+effect = "ms_lifesteal"
+value = 0.6
+max_stacks = 1
+kind = "milestone"
+level = 8
+group = "survivor.crimson"
+after = "m4_crimson"
+
+[[upgrade]]
+id = "m8_woundecho"
+name = "Wound Echo"
+desc = "Survive 3 seconds untouched and heal to full, once per injury."
+effect = "mercy_heal"
+value = 3.0
+max_stacks = 1
+kind = "milestone"
+level = 8
+group = "survivor.crimson"
+after = "m4_crimson"
+
+[[upgrade]]
+id = "m8_stillbloom"
+name = "Stillness Bloom"
+desc = "Regeneration x4 while you give no movement input."
+effect = "regen_stillness"
+value = 3.0
+max_stacks = 1
+kind = "milestone"
+level = 8
+group = "survivor.renewal"
+after = "m4_renewal"
+
+[[upgrade]]
+id = "m8_deeproots"
+name = "Deep Roots"
+desc = "Regeneration 75% stronger again. Totals 2.5x."
+effect = "ms_regen"
+value = 0.75
+max_stacks = 1
+kind = "milestone"
+level = 8
+group = "survivor.renewal"
+after = "m4_renewal"
+
+[[upgrade]]
+id = "m8_bulwark"
+name = "Bulwark"
+desc = "Shield pool 60% larger again. Totals 2.2x."
+effect = "ms_shield"
+value = 0.6
+max_stacks = 1
+kind = "milestone"
+level = 8
+group = "survivor.aegis"
+after = "m4_aegis"
+
+[[upgrade]]
+id = "m8_riposte"
+name = "Riposte"
+desc = "Defence doubled."
+effect = "ms_defense"
+value = 1.0
+max_stacks = 1
+kind = "milestone"
+level = 8
+group = "survivor.aegis"
+after = "m4_aegis"
+
+# L16 --- the second BRANCH, one pair per tier-2 card, so the level-16 answer is a
+# reply to the level-8 answer and not a second helping of the level-4 one. This
+# is the part that makes the tree a build rather than a ladder: a player who took
+# Deep Roots is asked about regeneration, and a player who took Stillness Bloom is
+# asked about standing still, and neither is ever asked the other's question.
+[[upgrade]]
+id = "m16_thirstunbound"
+name = "Thirst Unbound"
+desc = "Lifesteal 60% stronger again. Totals 2.8x, and the payout scales with it."
+effect = "ms_lifesteal"
+value = 0.6
+max_stacks = 1
+kind = "milestone"
+level = 16
+group = "survivor.crimson.debt"
+after = "m8_blooddebt"
+
+[[upgrade]]
+id = "m16_ironblood"
+name = "Ironblood"
+desc = "Lifesteal chance cannot be reduced by enemy resistance."
+effect = "lifesteal_uncapped"
+value = 1.0
+max_stacks = 1
+kind = "milestone"
+level = 16
+group = "survivor.crimson.debt"
+after = "m8_blooddebt"
+
+[[upgrade]]
+id = "m16_redmend"
+name = "Red Mend"
+desc = "Two seconds untouched is enough. Heals to full, once per injury."
+effect = "mercy_heal"
+value = 2.0
+max_stacks = 1
+kind = "milestone"
+level = 16
+group = "survivor.crimson.echo"
+after = "m8_woundecho"
+
+[[upgrade]]
+id = "m16_warmblood"
+name = "Warmblood"
+desc = "Regeneration x4 while you are below half health."
+effect = "regen_low"
+value = 3.0
+max_stacks = 1
+kind = "milestone"
+level = 16
+group = "survivor.crimson.echo"
+after = "m8_woundecho"
+
+[[upgrade]]
+id = "m16_deepstill"
+name = "Deep Stillness"
+desc = "Regeneration x9 while you give no movement input."
+effect = "regen_stillness"
+value = 8.0
+max_stacks = 1
+kind = "milestone"
+level = 16
+group = "survivor.renewal.still"
+after = "m8_stillbloom"
+
+[[upgrade]]
+id = "m16_verdantheart"
+name = "Verdant Heart"
+desc = "Total health 50% larger, and regeneration scales with it."
+effect = "ms_max_hp"
+value = 0.5
+max_stacks = 1
+kind = "milestone"
+level = 16
+group = "survivor.renewal.still"
+after = "m8_stillbloom"
+
+[[upgrade]]
+id = "m16_verdantearth"
+name = "Verdant Earth"
+desc = "Regeneration 75% stronger again. Totals 3.1x."
+effect = "ms_regen"
+value = 0.75
+max_stacks = 1
+kind = "milestone"
+level = 16
+group = "survivor.renewal.deep"
+after = "m8_deeproots"
+
+[[upgrade]]
+id = "m16_greenreservoir"
+name = "Green Reservoir"
+desc = "Regeneration also counts 2% of your maximum health every second."
+effect = "regen_of_max"
+value = 0.02
+max_stacks = 1
+kind = "milestone"
+level = 16
+group = "survivor.renewal.deep"
+after = "m8_deeproots"
+
+[[upgrade]]
+id = "m16_aegisprism"
+name = "Aegis Prism"
+desc = "Shield pool 60% larger again. Totals 2.8x."
+effect = "ms_shield"
+value = 0.6
+max_stacks = 1
+kind = "milestone"
+level = 16
+group = "survivor.aegis.bulwark"
+after = "m8_bulwark"
+
+[[upgrade]]
+id = "m16_ironvow"
+name = "Iron Vow"
+desc = "Shield pool 60% larger, and the 4 second wait before it refills is gone."
+effect = "shield_delay"
+value = 4.0
+max_stacks = 1
+kind = "milestone"
+level = 16
+group = "survivor.aegis.bulwark"
+after = "m8_bulwark"
+
+[[upgrade]]
+id = "m16_stonevow"
+name = "Stone Vow"
+desc = "Defence tripled."
+effect = "ms_defense"
+value = 2.0
+max_stacks = 1
+kind = "milestone"
+level = 16
+group = "survivor.aegis.riposte"
+after = "m8_riposte"
+
+[[upgrade]]
+id = "m16_ripostecall"
+name = "Riposte Call"
+desc = "Defence tripled, and knockback you deal is doubled with it."
+effect = "ms_knockback"
+value = 1.0
+max_stacks = 1
+kind = "milestone"
+level = 16
+group = "survivor.aegis.riposte"
+after = "m8_riposte"
 
 # L8 --- EXECUTION: how you kill. Weight, rate, or reach. These are the three
 # axes every damage card in the game is secretly a fraction of, so the milestone

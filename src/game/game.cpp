@@ -391,6 +391,135 @@ UpgradeEffectResult applyUpgrade(PlayerStats& stats, std::string_view effect, fl
     stats.lifestealHeal = static_cast<int>(value);
     return {true, 0.0F, 0.0F};
   }
+  // --- Milestone multipliers ---------------------------------------------------
+  // Ten effect ids, one per axis in PlayerStats::Scale, and the rule is that a
+  // card never writes to `milestone` directly and a milestone never writes to a
+  // card stat. Keeping the two halves of the damage model in separate fields is
+  // the only reason a milestone can be a MULTIPLIER (x what you built) rather
+  // than a bigger add (a flat number that ignores what you built), which is the
+  // whole reason milestone tiers exist at all.
+  //
+  // They are all `+=` into a 0.0 field read as x(1 + it). ADDITIVE within the
+  // milestone layer, which is worth being precise about because "a multiplier"
+  // invites the reader to assume it compounds: two takes of a +60% card give
+  // x2.2, not x2.56.
+  //
+  // Addition is the right choice and the card text is written for it ("60%
+  // stronger AGAIN. Totals 2.2x"), because the total has to be something the
+  // player can do in their head while reading four cards. Genuine compounding
+  // would need the value of every card ever taken rather than one number, and a
+  // card whose printed total is not the total is worse than a smaller card whose
+  // total is. The layer still multiplies -- that is the whole point of it -- it
+  // just multiplies the CARDS rather than itself.
+  if (effect == "ms_damage") {
+    stats.milestone.damage += value;
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "ms_fire_rate") {
+    stats.milestone.fireRate += value;
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "ms_regen") {
+    stats.milestone.regen += value;
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "ms_lifesteal") {
+    stats.milestone.lifesteal += value;
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "ms_shield") {
+    stats.milestone.shield += value;
+    return {true, 0.0F, value};
+  }
+  if (effect == "ms_max_hp") {
+    stats.milestone.maxHp += value;
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "ms_defense") {
+    stats.milestone.defense += value;
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "ms_mark") {
+    stats.milestone.mark += value;
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "ms_reach") {
+    stats.milestone.reach += value;
+    return {true, 0.0F, 0.0F};
+  }
+  // A tier-1 milestone has to be worth taking on its own AND worth deepening, and
+  // those two wants pull in opposite directions: a pure multiplier is worth
+  // nothing to a run that has not engaged the axis yet (x1.6 on zero lifesteal is
+  // zero lifesteal, which is a dead card on the first screen it can appear), and
+  // a pure flat bump stops caring the moment the player has built something.
+  //
+  // So the seed cards do both, and the card says both: a flat amount that opens
+  // the axis, and a multiplier on everything else the player puts into it. The
+  // multiplier is the part that makes the milestone a reward for engaging, and
+  // the seed is the part that makes it not depend on having engaged first.
+  if (effect == "ms_lifesteal_seed") {
+    stats.lifesteal += 7.0F;
+    stats.milestone.lifesteal += value;
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "ms_regen_seed") {
+    stats.regen += 1.0F;
+    stats.milestone.regen += value;
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "ms_shield_seed") {
+    // The seeded 50 is itself inside the multiplier, because the multiplier is on
+    // the axis and not on "the cards". 50 becomes 80 at x1.6, and the card says
+    // "+50 shield, pool 60% larger" rather than pretending the two are separate.
+    stats.shieldMax += 50.0F;
+    stats.milestone.shield += value;
+    return {true, 0.0F, 50.0F * (1.0F + value)};
+  }
+  if (effect == "lifesteal_uncapped") {
+    stats.lifestealPierceRes = 1;
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "regen_of_max") {
+    stats.regenOfMax += value;
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "ms_knockback") {
+    stats.milestone.knockback += value;
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "regen_low") {
+    // The mirror of regen_stillness: the same conditional multiplier, gated on
+    // the other end of the health bar, and assigned for the same reason.
+    stats.lowHpRegenMul = 1.0F + value;
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "regen_stillness") {
+    // The value IS the factor minus one, and the card prints the factor: 3.0
+    // arrives as x4 and the card says "x4 faster".
+    //
+    // Assignment, not accumulation, and the reason is a reading of the word
+    // "faster". Accumulating turned value 3.0 into a factor of 5.0 -- because
+    // 1.0 + 1.0 + value -- which meant the card said "4x faster" and the game did
+    // five. "4x faster" is ambiguous between "four times the rate" and "four
+    // times faster than it was", and those are 4x and 5x, and a player reading a
+    // number off a card and checking it against their health bar is the only
+    // person who can catch that. The factor is the number on the card, so the
+    // number on the card is the factor.
+    stats.stillnessRegenMul = 1.0F + value;
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "mercy_heal") {
+    // Seconds of contact-free time. Later branches shorten it, which is a
+    // strictly better version of the same promise rather than a different one.
+    stats.mercyHealDelay = value;
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "ms_proj") {
+    // An integer axis, so it is a count and not a percentage: x2.0 damage
+    // projectiles would be a different weapon, not a bigger one.
+    stats.milestone.proj += static_cast<int>(value);
+    return {true, 0.0F, 0.0F};
+  }
   if (effect == "shield_add") {
     stats.shieldMax += value;
     return {true, 0.0F, value}; // the picker tops the shield up to the new max
@@ -859,7 +988,7 @@ void Game::reset() {
   ps.color = {0.55F, 0.85F, 1.0F, 1.0F};
   ps.circle = true;
   registry_.emplace<Sprite>(player_, ps);
-  registry_.emplace<Health>(player_, stats_.maxHp, stats_.maxHp);
+  registry_.emplace<Health>(player_, maxHealth(), maxHealth());
   registry_.emplace<PlayerTag>(player_);
 
   // No starter weapon is granted; advance() opens the three-weapon pick.
@@ -1356,10 +1485,24 @@ void Game::fixedStep() {
   updateChestToast(1.0F / 60.0F);
 
   // Regen.
-  if (stats_.regen > 0.0F && player_ != entt::null && registry_.valid(player_)) {
-    auto& hp = registry_.get<Health>(player_);
-    hp.hp = std::min(hp.max, hp.hp + stats_.regen / 60.0F);
+  // The two conditional multipliers, applied to the base rate and to each other
+  // multiplicatively rather than as a product of factors: a player who is both
+  // still and below half health earns BOTH, because those are the two things
+  // they are doing, and adding the factors would have made standing still worth
+  // less the closer they were to dying -- which is backwards from every other
+  // conditional in the game.
+  float regenPerSecond = regenRate();
+  if (!playerMoving_) regenPerSecond *= stats_.stillnessRegenMul;
+  if (player_ != entt::null && registry_.valid(player_)) {
+    const auto& hp = registry_.get<Health>(player_);
+    if (hp.max > 0.0F && hp.hp < hp.max * 0.5F) regenPerSecond *= stats_.lowHpRegenMul;
   }
+  if (regenPerSecond > 0.0F && player_ != entt::null && registry_.valid(player_)) {
+    auto& hp = registry_.get<Health>(player_);
+    hp.hp = std::min(hp.max, hp.hp + regenPerSecond / 60.0F);
+  }
+
+  updateMercyHeal(1.0F / 60.0F);
 
   updateShield();
   updateUniqueEffects();
@@ -1407,6 +1550,12 @@ void Game::movePlayer() {
     my /= len;
   }
   float speed = stats_.speed * stats_.speedMul * momentumSpeedMul_;
+  // Whether the player is GIVING A MOVEMENT INPUT, which is not the same as
+  // whether they moved: a dash carries you, a knockback carries you, and neither
+  // is standing still. A stillness regen bonus that keyed off velocity would
+  // therefore switch itself off for a fifth of a second every time the player
+  // dashed -- and a bonus that blinks is a bonus the player learns to distrust.
+  playerMoving_ = length(moveX_, moveY_) > 0.05F;
 
   // Adrenaline: low HP gives a burst of speed and a brief invulnerability.
   if (stats_.adrenaline != 0) {
@@ -1434,8 +1583,33 @@ void Game::movePlayer() {
   t.y += v.y / 60.0F;
 }
 
-void Game::buildSpatialHash() {
-  scratchX_.clear();
+// The mercy timer. Counts seconds of taking no CONTACT damage and, once the
+// threshold is crossed, heals to full -- but only once per injury, so the reward
+// is for surviving something rather than for being somewhere safe.
+//
+// Contact damage only, and that is the same rule the kill chain already uses: a
+// damage-over-time aura ticks through damagePlayerDirect every frame, and if that
+// reset this timer then standing inside your own fire would switch the branch
+// off permanently. Which is exactly the sort of thing a player finds out in the
+// worst possible moment, so it is excluded on purpose and the exclusion is
+// written down where the next person will look.
+void Game::updateMercyHeal(float dt) {
+  if (player_ == entt::null || !registry_.valid(player_)) return;
+  if (stats_.mercyHealDelay <= 0.0F) return;
+  timeSinceHurt_ += dt;
+  if (mercySpent_ || timeSinceHurt_ < stats_.mercyHealDelay) return;
+  auto& hp = registry_.get<Health>(player_);
+  if (hp.hp >= hp.max) return;
+  hp.hp = hp.max;
+  mercySpent_ = true;
+  shield_ = shieldCap(); // the shield comes back with it: a mercy heal that left
+                          // the buffer empty would hand the next hit straight
+                          // through, which is the opposite of mercy
+  spawnParticles(registry_.get<Transform>(player_).x,
+                 registry_.get<Transform>(player_).y, {0.55F, 1.0F, 0.7F, 1.0F}, 18, 5.0F);
+}
+
+void Game::buildSpatialHash() {  scratchX_.clear();
   scratchY_.clear();
   scratchId_.clear();
   auto view = registry_.view<Transform>();
@@ -1693,7 +1867,7 @@ void Game::fireWeapons() {
       auto& w = weapons_[i];
       w.timer -= dt;
       if (w.timer <= 0.0F) {
-        w.timer = attackCooldown(w.cooldown, stats_.fireRateBonus + w.cdBonus + momentumRate_);
+        w.timer = playerCooldown(w.cooldown, w.cdBonus + momentumRate_);
       }
     }
     return;
@@ -1728,7 +1902,7 @@ void Game::fireWeapons() {
         continue;
       }
       w.waveBurstTimer = kWaveBurstGap;
-      const float burstDmg = w.damage * stats_.damageMul * momentumDamageMul_;
+      const float burstDmg = w.damage * playerDamageScale();
       spawnWaveCrescent(w, w.waveBurstAngle, burstDmg, w.pierce + stats_.pierceAdd);
       --w.waveBurstLeft;
       w.waveBurstAngle += w.waveArcStep;
@@ -1757,9 +1931,9 @@ void Game::fireWeapons() {
     w.timer -= 1.0F / 60.0F;
     if (w.timer > 0.0F) continue;
 
-    const float cooldown = attackCooldown(w.cooldown, stats_.fireRateBonus + w.cdBonus + momentumRate_);
-    const float damage = w.damage * stats_.damageMul * momentumDamageMul_;
-    const int count = std::max(1, w.projectiles + stats_.projAdd);
+    const float cooldown = playerCooldown(w.cooldown, w.cdBonus + momentumRate_);
+    const float damage = w.damage * playerDamageScale();
+    const int count = std::max(1, w.projectiles + extraProjectiles());
     const int pierce = w.pierce + stats_.pierceAdd;
 
     switch (w.attackType) {
@@ -1818,7 +1992,7 @@ void Game::fireWeapons() {
         if (found) {
           const float coneAngle = w.coneAngle;
           // More projectiles = a wider cone sweep.
-          const float coneRange = w.coneRange * (1.0F + stats_.projAdd * 0.25F);
+          const float coneRange = w.coneRange * (1.0F + extraProjectiles() * 0.25F);
           const float halfAngle = coneAngle * 0.5F;
           auto view = registry_.view<Transform, Health, Radius, Enemy>();
           std::vector<entt::entity> hits;
@@ -2021,7 +2195,7 @@ void Game::fireWeapons() {
         // Arcing projectile that explodes on impact
         const float gravity = 30.0F; // matches updateBombProjectiles
         // More projectiles = a taller arc; more pierce = a bigger blast.
-        const float arcHeight = w.bombArcHeight * (1.0F + stats_.projAdd * 0.25F);
+        const float arcHeight = w.bombArcHeight * (1.0F + extraProjectiles() * 0.25F);
         // A shell thrown over an arc comes back down to its launch height after a
         // fixed flight time, whatever it was aimed at: t = sqrt(8H/g). Solving for
         // that ONCE per shot is what makes the landing point a decision instead of
@@ -2185,7 +2359,7 @@ void Game::fireWeapons() {
           // projectiles widen the same symmetric fan instead of stacking.
           const bool triad = w.beamSplit >= 3;
           const int beamCount = triad ? 3 : std::clamp(count, 1, 4);
-          const float beamWidth = w.beamWidth * (1.0F + stats_.projAdd * 0.05F);
+          const float beamWidth = w.beamWidth * (1.0F + extraProjectiles() * 0.05F);
           constexpr float kTriadGap = 0.30F;  // ~17 degrees between the three
           constexpr float kFanGap = 0.18F;    // ~10 degrees per extra beam
           const float gap = triad ? kTriadGap : kFanGap;
@@ -2231,7 +2405,7 @@ void Game::fireWeapons() {
         // what lets the whip (and its evolution) cover the player's own front
         // while the scythe covers the far side of a crowd.
         const bool lead = w.sweepLead > 0.0F;
-        const float sweepRadius = w.sweepRadius * (1.0F + stats_.projAdd * 0.15F);
+        const float sweepRadius = w.sweepRadius * (1.0F + extraProjectiles() * 0.15F);
         const float sx = lead ? pt.x + std::cos(baseAngle) * w.sweepLead : targetX;
         const float sy = lead ? pt.y + std::sin(baseAngle) * w.sweepLead : targetY;
         const float halfArc = lead ? std::min(kPi, w.sweepAngle * 0.5F) : kPi;
@@ -2362,7 +2536,7 @@ void Game::fireWeapons() {
         // Zone - create damage zone at target location
         if (found) {
           // More projectiles = a wider zone; more pierce = denser damage.
-          const float zr = w.zoneRadius * (1.0F + stats_.projAdd * 0.2F);
+          const float zr = w.zoneRadius * (1.0F + extraProjectiles() * 0.2F);
           for (int p = 0; p < count; ++p) {
             const float offset = (static_cast<float>(p) - static_cast<float>(count - 1) * 0.5F) * w.spread;
             const float angle = baseAngle + offset;
@@ -2445,7 +2619,7 @@ void Game::fireWeapons() {
       case AttackType::Inferno: {
         // Inferno evolution (flame + scythe): reaps a full circle around the
         // nearest enemy AND leaves burning ground that keeps dealing damage.
-        const float sweepRadius = w.sweepRadius * (1.0F + stats_.projAdd * 0.15F);
+        const float sweepRadius = w.sweepRadius * (1.0F + extraProjectiles() * 0.15F);
         float ix = targetX;
         float iy = targetY;
         // Siege Mortar (mortar + lure): the shells land on the BELL. Its whole
@@ -2511,7 +2685,7 @@ void Game::fireWeapons() {
         sw.color = {1.0F, 0.45F, 0.1F, 1.0F};
         registry_.emplace<SweepEffect>(se, sw);
         // Burning ground: persistent DPS zone at the reap center.
-        const float zr = w.zoneRadius * (1.0F + stats_.projAdd * 0.2F);
+        const float zr = w.zoneRadius * (1.0F + extraProjectiles() * 0.2F);
         const auto zone = registry_.create();
         registry_.emplace<Transform>(zone, ix, iy, ix, iy);
         registry_.emplace<Radius>(zone, zr);
@@ -2701,15 +2875,16 @@ void Game::applyMarks(entt::entity e, float towardX, float towardY) {
   // Frostbind: a hit chills, so a melee build gets an ice weapon's control for
   // free. The chill is shallower than a deep freeze on purpose -- this is meant
   // to be the everyday version of slow, not a second copy of the ice cards.
+  const float markMul = 1.0F + stats_.milestone.mark;
   if (stats_.markChillTime > 0.0F) {
-    applyChill(e, kMarkChillMul, stats_.markChillTime);
+    applyChill(e, kMarkChillMul, stats_.markChillTime * markMul);
   }
   // Emberbrand: a hit lights it up. Refreshed rather than accumulated, so the
   // weapon you field decides whether a target stays alight, and a slow heavy
   // hitter is honestly worse at this than a fast one.
   if (stats_.markBurnDps > 0.0F) {
     if (auto* en = registry_.try_get<Enemy>(e); en != nullptr) {
-      en->burnDps = std::max(en->burnDps, stats_.markBurnDps);
+      en->burnDps = std::max(en->burnDps, stats_.markBurnDps * markMul);
       en->burnT = std::max(en->burnT, kMarkBurnWindow);
     }
   }
@@ -2717,7 +2892,7 @@ void Game::applyMarks(entt::entity e, float towardX, float towardY) {
   // the ramp costs the first strike nothing and every strike after it more.
   if (stats_.markVuln > 0.0F) {
     if (auto* tr = registry_.try_get<EnemyTraits>(e); tr != nullptr) {
-      tr->vuln = std::min(tr->vuln + stats_.markVuln, stats_.markVulnMax);
+      tr->vuln = std::min(tr->vuln + stats_.markVuln * markMul, stats_.markVulnMax);
     }
   }
   // Armour Split: the target's own mitigation is taken off, permanently, a piece
@@ -2726,7 +2901,7 @@ void Game::applyMarks(entt::entity e, float towardX, float towardY) {
   // roster finally grows armour to strip.
   if (stats_.markDefStrip > 0.0F) {
     if (auto* tr = registry_.try_get<EnemyTraits>(e); tr != nullptr) {
-      tr->defense = std::max(0.0F, tr->defense - stats_.markDefStrip);
+      tr->defense = std::max(0.0F, tr->defense - stats_.markDefStrip * markMul);
     }
   }
   (void)towardX;
@@ -2793,7 +2968,7 @@ void Game::killEnemy(entt::entity e) {
   // that bursts into a fan of ice reads as ice, and it rewards the player for
   // chilling first and killing second instead of swapping one number for another.
   if (const auto* en = registry_.try_get<Enemy>(e); en != nullptr && en->slowT > 0.0F) {
-    spawnShatterBurst(t.x, t.y, 0.55F * stats_.damageMul);
+    spawnShatterBurst(t.x, t.y, 0.55F * playerDamageScale());
     spawnParticles(t.x, t.y, {0.70F, 0.94F, 1.0F, 1.0F}, 10, 4.5F);
   }
 
@@ -2963,12 +3138,14 @@ void Game::tryLifestealOnKill(entt::entity source) {
   auto& hp = registry_.get<Health>(player_);
   if (hp.hp >= hp.max) return;
   float res = 0.0F;
-  if (auto* tr = registry_.try_get<EnemyTraits>(source)) {
-    res = tr->lifestealRes;
+  if (stats_.lifestealPierceRes == 0) {
+    if (auto* tr = registry_.try_get<EnemyTraits>(source)) {
+      res = tr->lifestealRes;
+    }
   }
   std::uniform_real_distribution<float> unit(0.0F, 100.0F);
-  const float L = stats_.lifesteal * (1.0F - std::clamp(res, 0.0F, 1.0F));
-  const float heal = stats_.lifestealHeal >= 2 ? 2.0F : 1.0F;
+  const float L = lifestealChance() * (1.0F - std::clamp(res, 0.0F, 1.0F));
+  const float heal = lifestealHealAmount();
   int procs = 0;
   if (L >= 100.0F) {
     procs = 1;
@@ -3017,7 +3194,9 @@ void Game::applyKnockback(entt::entity e, float angle, float force) {
   // separate channel is added to movement in updateEnemies and decays away.
   auto* en = registry_.try_get<Enemy>(e);
   if (en == nullptr) return;
-  const float f = force * stats_.knockbackMul * (1.0F - displacementResistance(e));
+  const float f = force * stats_.knockbackMul *
+                 (1.0F + stats_.milestone.knockback) *
+                 (1.0F - displacementResistance(e));
   en->kbX += std::cos(angle) * f;
   en->kbY += std::sin(angle) * f;
 }
@@ -3133,7 +3312,7 @@ void Game::updateProjectiles() {
           // weapon's own answer would be "stand in the thick of it".
           const float mul = aoeFalloff(static_cast<int>(auraHits.size()), pr.pierce);
           const float dmg = pr.auraDps * std::max(0.02F, pr.auraTick) * mul *
-                            stats_.damageMul * momentumDamageMul_;
+                            playerDamageScale();
           for (const auto en : auraHits) {
             if (!registry_.valid(en)) continue;
             applyEnemyDamage(en, dmg);
@@ -3308,8 +3487,8 @@ void Game::updateOrbitBlades() {
     // Derive damage/pierce/speed/radius from the owning weapon slot each tick
     // so upgrades (incl. the "Blade Vortex" unique) apply to existing blades.
     const bool owned = ob.weaponIndex >= 0 && ob.weaponIndex < weaponCount_;
-    const float damage = owned ? weapons_[ob.weaponIndex].damage * stats_.damageMul * momentumDamageMul_
-                               : ob.damage * stats_.damageMul * momentumDamageMul_;
+    const float damage = owned ? weapons_[ob.weaponIndex].damage * playerDamageScale()
+                               : ob.damage * playerDamageScale();
     const int pierce =
         owned ? weapons_[ob.weaponIndex].pierce + stats_.pierceAdd
               : ob.pierce + stats_.pierceAdd;
@@ -3367,7 +3546,7 @@ void Game::updateOrbitBlades() {
     bool hasWindow = false;
     float gapAngle = 0.0F;
     if (w.orbitWindow) {
-      const int blades = std::max(1, w.projectiles + stats_.projAdd);
+      const int blades = std::max(1, w.projectiles + extraProjectiles());
       for (const auto e : registry_.view<OrbitBlade>()) {
         if (registry_.get<OrbitBlade>(e).weaponIndex != orbitSlot) continue;
         gapAngle = registry_.get<OrbitBlade>(e).angle + kPi / static_cast<float>(blades);
@@ -3379,7 +3558,7 @@ void Game::updateOrbitBlades() {
       hasWindow = hasWindow && blades > 1;
     }
     const float damage =
-        w.damage * stats_.damageMul * momentumDamageMul_ * kOrbitInnerMul;
+        w.damage * playerDamageScale() * kOrbitInnerMul;
     std::vector<entt::entity> inside;
     auto enemyView = registry_.view<Transform, Health, Radius, Enemy>();
     for (const auto en : enemyView) {
@@ -3434,8 +3613,8 @@ void Game::updateHaloBeams() {
     // Derive damage/pierce/spin/length from the owning weapon slot each tick so
     // upgrades (projectile count, damage, fire rate) apply to existing beams.
     const bool owned = hb.weaponIndex >= 0 && hb.weaponIndex < weaponCount_;
-    const float damage = owned ? weapons_[hb.weaponIndex].damage * stats_.damageMul * momentumDamageMul_
-                               : hb.damage * stats_.damageMul * momentumDamageMul_;
+    const float damage = owned ? weapons_[hb.weaponIndex].damage * playerDamageScale()
+                               : hb.damage * playerDamageScale();
     const int pierce = owned ? weapons_[hb.weaponIndex].pierce + stats_.pierceAdd
                              : hb.pierce + stats_.pierceAdd;
     const float spin = owned ? weapons_[hb.weaponIndex].orbitSpeed : hb.spin;
@@ -3518,7 +3697,7 @@ void Game::updateVortices() {
     // Live values come from the owning weapon so upgrades apply as they land.
     const bool owned = vx.weaponIndex >= 0 && vx.weaponIndex < weaponCount_;
     auto& w = weapons_[owned ? vx.weaponIndex : 0];
-    const float damage = (owned ? w.damage : vx.damage) * stats_.damageMul * momentumDamageMul_;
+    const float damage = (owned ? w.damage : vx.damage) * playerDamageScale();
     const int pierce = (owned ? w.pierce : vx.pierce) + stats_.pierceAdd;
     const float pull = owned ? w.vortexPull : vx.pull;
     // Collapse settings are read live like everything else, so a card that adds
@@ -3591,8 +3770,8 @@ void Game::updateVortices() {
         // The collapse is worth several seconds of the steady grind, or it is not
         // an event -- it is a slightly louder tick.
         const float dmg = burstDamage > 0.0F
-                              ? burstDamage * stats_.damageMul * momentumDamageMul_
-                              : damage * 3.0F * stats_.damageMul * momentumDamageMul_;
+                              ? burstDamage * playerDamageScale()
+                              : damage * 3.0F * playerDamageScale();
         std::vector<entt::entity> collapsed;
         for (const auto en : registry_.view<Transform, Health, Radius, Enemy>()) {
           auto* eh = registry_.try_get<Health>(en);
@@ -4240,7 +4419,7 @@ void Game::updateBeamEffects() {
       const entt::entity en = bline[bi];
       auto* eh = registry_.try_get<Health>(en);
       if (eh == nullptr) continue;
-      applyEnemyDamage(en, be.damage * stats_.damageMul * momentumDamageMul_ / 60.0F * beamMul);
+      applyEnemyDamage(en, be.damage * playerDamageScale() / 60.0F * beamMul);
       spawnParticles(bhx[bi], bhy[bi], {1.0F, 1.0F, 0.75F, 1.0F}, 2, 2.0F);
     }
   }
@@ -4298,7 +4477,7 @@ void Game::updateZoneEffects() {
         }
       }
       const float zoneMul = aoeFalloff(static_cast<int>(zhits.size()), ze.pierce);
-      const float dmg = ze.dps * ze.tickRate * stats_.damageMul * momentumDamageMul_;
+      const float dmg = ze.dps * ze.tickRate * playerDamageScale();
       for (std::size_t zi = 0; zi < zhits.size(); ++zi) {
         auto* eh = registry_.try_get<Health>(zhits[zi]);
         if (eh == nullptr) continue;
@@ -4377,7 +4556,7 @@ void Game::updateLures() {
     // arsenal thirtyfold, so the core uses the same crowd falloff as a bomb.
     const float mul = aoeFalloff(static_cast<int>(inside.size()), lu.pierce);
     const float baseDamage = owned ? weapons_[lu.weaponIndex].lureDps : lu.damage;
-    const float dmg = baseDamage * tickSpan * stats_.damageMul * momentumDamageMul_;
+    const float dmg = baseDamage * tickSpan * playerDamageScale();
     for (const auto en : inside) {
       if (!registry_.valid(en)) continue;
       applyEnemyDamage(en, dmg * mul);
@@ -4476,15 +4655,14 @@ void Game::updateChainLightning() {
       if (registry_.valid(first) && registry_.all_of<Health, Enemy>(first)) {
         auto& fh = registry_.get<Health>(first);
         if (fh.hp > 0.0F) {
-          const float damage = cl.damage * stats_.damageMul * momentumDamageMul_;
+          const float damage = cl.damage * playerDamageScale();
           applyEnemyDamage(first, damage);
           const auto& ft = registry_.get<Transform>(first);
           spawnParticles(ft.x, ft.y, {0.55F, 1.0F, 1.0F, 1.0F}, 8, 4.0F);
           // Shatter on the landing hit, which is where a slug coming apart reads
           // best: the first thing the player saw was the fan.
           if (cl.shatter > 0) {
-            spawnChainShatter(cl, ft.x, ft.y, 0.0F, cl.damage * stats_.damageMul *
-                                                     momentumDamageMul_ * 0.5F);
+            spawnChainShatter(cl, ft.x, ft.y, 0.0F, cl.damage * playerDamageScale() * 0.5F);
             cl.shatter = 0; // one fan per slug
           }
         }
@@ -4555,7 +4733,7 @@ void Game::updateChainLightning() {
     }
 
     // Damage the target
-    const float damage = cl.damage * stats_.damageMul * momentumDamageMul_ * std::powf(cl.damageMul, static_cast<float>(cl.jumpsDone));
+    const float damage = cl.damage * playerDamageScale() * std::powf(cl.damageMul, static_cast<float>(cl.jumpsDone));
     auto* eh = registry_.try_get<Health>(nextTarget);
     // Read once, here, for both the impact effects and the hop below: the hop runs
     // even when the body was already dead, because the arc still travels to where
@@ -4586,7 +4764,7 @@ void Game::updateChainLightning() {
           heading = std::atan2(segY, segX);
         }
         const float shardDamage =
-            cl.damage * stats_.damageMul * momentumDamageMul_ *
+            cl.damage * playerDamageScale() *
             std::powf(cl.damageMul, static_cast<float>(cl.jumpsDone)) * 0.5F;
         spawnChainShatter(cl, targetT.x, targetT.y, heading, shardDamage);
         cl.shatter = 0; // one fan per slug
@@ -4637,7 +4815,7 @@ void Game::updateWaveEffects() {
       continue;
     }
 
-    const float dmg = wv.damage * stats_.damageMul * momentumDamageMul_;
+    const float dmg = wv.damage * playerDamageScale();
     auto enemies = registry_.view<Transform, Health, Enemy>();
     std::vector<entt::entity> hits;
     for (const auto oe : enemies) {
@@ -4709,7 +4887,7 @@ void Game::updateNovaRing() {
         // the burst again each one, which is a different weapon than the one
         // described.
         nr.burstDone = true;
-        const float burst = nr.burstDamage * stats_.damageMul * momentumDamageMul_;
+        const float burst = nr.burstDamage * playerDamageScale();
         // The blast is at the player, because that is where the ring arrived.
         auto enemyView = registry_.view<Transform, Health, Radius, Enemy>();
         std::vector<entt::entity> bhits;
@@ -4795,7 +4973,7 @@ void Game::updateNovaRing() {
       for (std::size_t ni = 0; ni < nhits.size(); ++ni) {
         auto* eh = registry_.try_get<Health>(nhits[ni]);
         if (eh == nullptr) continue;
-        applyEnemyDamage(nhits[ni], nr.damagePerTick * stats_.damageMul * momentumDamageMul_ * novaMul);
+        applyEnemyDamage(nhits[ni], nr.damagePerTick * playerDamageScale() * novaMul);
         spawnParticles(nhx[ni], nhy[ni], {0.5F, 0.3F, 1.0F, 1.0F}, 4, 3.0F);
       }
     }
@@ -5032,13 +5210,13 @@ void Game::updateChestToast(float dt) {
 }
 
 void Game::updateShield() {
-  if (stats_.shieldMax <= 0.0F) return;
+  if (shieldCap() <= 0.0F) return;
   if (shieldDelay_ > 0.0F) {
     shieldDelay_ -= 1.0F / 60.0F;
     return;
   }
   const float rate = shieldRegenRate();
-  shield_ = std::min(stats_.shieldMax, shield_ + rate / 60.0F);
+  shield_ = std::min(shieldCap(), shield_ + rate / 60.0F);
 }
 
 // How long the shield waits after a hit before it starts refilling again.
@@ -5400,7 +5578,7 @@ void Game::spawnShatterBurst(float x, float y, float damage) {
 // drift apart: they are the same call with different fields, so a change to one is
 // automatically a change to the other.
 void Game::spawnNovaRing(float x, float y, const WeaponSlot& w, int pierce) {
-  const float maxR = w.novaMaxRadius * (1.0F + stats_.projAdd * 0.1F);
+  const float maxR = w.novaMaxRadius * (1.0F + extraProjectiles() * 0.1F);
   const auto nova = registry_.create();
   registry_.emplace<Transform>(nova, x, y, x, y);
   registry_.emplace<Radius>(nova, maxR);
@@ -5695,6 +5873,11 @@ void Game::updateMomentum() {
   momentumDamageMul_ = 1.0F + n * stats_.momentumDamage * 0.01F;
   momentumRate_ = n * stats_.momentumRate * 0.01F;
   momentumSpeedMul_ = 1.0F + n * stats_.momentumSpeed * 0.01F;
+}
+
+void Game::notePlayerHurt() {
+  timeSinceHurt_ = 0.0F;
+  mercySpent_ = false;
 }
 
 void Game::breakMomentum() {
@@ -5993,7 +6176,7 @@ void Game::castBurst(float damageScale) {
   auto& t = registry_.get<Transform>(player_);
   const float radius = stats_.burstRadius;
   const float damage =
-      stats_.burstDamage * damageScale * stats_.damageMul * momentumDamageMul_;
+      stats_.burstDamage * damageScale * playerDamageScale();
   auto view = registry_.view<Transform, Health, Radius, Enemy>();
   std::vector<entt::entity> hits;
   for (const auto e : view) {
@@ -6121,36 +6304,61 @@ void Game::buildChoices() {
     // Two groups may share a screen when both are narrow, and picking from one
     // does NOT close the other: that is what lets the player choose the subject
     // as well as the card.
-    std::vector<std::string> groupNames;
+    //
+    // THREE THINGS are filters on "may this card be on screen", and they are
+    // gathered into one predicate so no loop below can forget one: not maxed, not
+    // blocked by an earlier pick, and USABLE (which is where the weapon rule and
+    // the branch rule live). The branch rule is the one that had to be threaded
+    // through all three loops by hand before, which is exactly the shape of bug
+    // this codebase keeps paying for.
+    const auto available = [this](std::size_t i) {
+      const auto& u = content_.upgrades[i];
+      if (u.kind != "milestone" || u.level != level_) return false;
+      if (stacks_[i] >= u.maxStacks || blocked_[i]) return false;
+      return upgradeIsUsable(static_cast<int>(i));
+    };
+
+    // A group is a BRANCH group if any of its members has a parent. Those go on
+    // screen FIRST and unconditionally, because a branch is a debt the run
+    // already incurred: the player took a tier-1 card and is owed a tier-2
+    // question. Letting a shuffle drop it in favour of a group it never
+    // committed to would mean the tree silently stops growing, and the player
+    // would be shown a milestone they had earned and been robbed of.
+    std::vector<std::string> branchGroups;
+    std::vector<std::string> openGroups;
     std::vector<int> ungrouped;
     for (std::size_t i = 0; i < content_.upgrades.size(); ++i) {
+      if (!available(i)) continue;
       const auto& u = content_.upgrades[i];
-      if (u.kind != "milestone" || u.level != level_) continue;
-      if (stacks_[i] >= u.maxStacks || blocked_[i]) continue;
+      auto& bucket = u.after.empty() ? openGroups : branchGroups;
       if (u.group.empty()) {
         ungrouped.push_back(static_cast<int>(i));
-      } else if (std::find(groupNames.begin(), groupNames.end(), u.group) ==
-                 groupNames.end()) {
-        groupNames.push_back(u.group);
+      } else if (std::find(bucket.begin(), bucket.end(), u.group) == bucket.end()) {
+        bucket.push_back(u.group);
       }
     }
 
     std::vector<int> offer;
-    const auto membersOf = [this, level = level_](const std::string& name) {
+    const auto membersOf = [this, &available](const std::string& name) {
       std::vector<int> out;
       for (std::size_t i = 0; i < content_.upgrades.size(); ++i) {
-        const auto& u = content_.upgrades[i];
-        if (u.kind != "milestone" || u.level != level) continue;
-        if (u.group != name) continue;
-        if (stacks_[i] >= u.maxStacks || blocked_[i]) continue;
+        if (content_.upgrades[i].group != name) continue;
+        if (!available(i)) continue;
         out.push_back(static_cast<int>(i));
       }
       return out;
     };
 
-    std::shuffle(groupNames.begin(), groupNames.end(), rng_);
+    std::shuffle(branchGroups.begin(), branchGroups.end(), rng_);
+    std::shuffle(openGroups.begin(), openGroups.end(), rng_);
     std::shuffle(ungrouped.begin(), ungrouped.end(), rng_);
-    for (const auto& name : groupNames) {
+    // Branches first, and past the cap on purpose: a two-card branch fits in
+    // kMaxMilestoneSlots on its own, so a branch group is only ever truncated by
+    // a LATER branch group, never by an unrelated open one.
+    for (const auto& name : branchGroups) {
+      for (const int idx : membersOf(name)) offer.push_back(idx);
+    }
+    for (const auto& name : openGroups) {
       if (offer.size() >= kMaxMilestoneSlots) break;
       for (const int idx : membersOf(name)) {
         if (offer.size() >= kMaxMilestoneSlots) break;
@@ -6186,6 +6394,7 @@ void Game::buildChoices() {
         if (u.level < 4 || u.level >= level_) continue;
         if ((u.level & (u.level - 1)) != 0) continue; // milestones are powers of two
         if (stacks_[i] >= u.maxStacks || blocked_[i]) continue;
+        if (!upgradeIsUsable(static_cast<int>(i))) continue;
         // A group the run has NOT answered yet. Unblocked-and-unstacked is also
         // true of a group that simply has not come up, and offering one of its
         // cards in a leftover slot would put half of a question the player has
@@ -6262,7 +6471,7 @@ void Game::buildChoices() {
     // so this cannot fire today -- but the lock is the rule, and the rule should
     // be the thing every pool goes through rather than a guard on one path.
     if (blocked_[i]) continue;
-    if (!u.weapon.empty() && findWeaponSlot(u.weapon) < 0) continue;
+    if (!upgradeIsUsable(static_cast<int>(i))) continue;
     // THE SLOT RULE. A slotted card the player does not already hold would open
     // a new slot, and there is a fixed number of those. A card they DO already
     // hold is free: re-taking Whetstone deepens an axis the player already chose,
@@ -6296,8 +6505,10 @@ void Game::buildChoices() {
     for (std::size_t i = 0; i < content_.upgrades.size(); ++i) {
       const auto& u = content_.upgrades[i];
       if (u.kind != "unique" || stacks_[i] >= u.maxStacks || blocked_[i]) continue;
-      // A weapon's unique item only makes sense if that weapon is equipped.
-      if (!u.weapon.empty() && findWeaponSlot(u.weapon) < 0) continue;
+      // A weapon's unique item only makes sense if that weapon is equipped, and
+      // a branch needs its parent. Both are the same question -- may this card
+      // reach this run at all -- so they go through the one predicate.
+      if (!upgradeIsUsable(static_cast<int>(i))) continue;
       uniques.push_back(static_cast<int>(i));
     }
     if (!uniques.empty() && (normals.empty() || unit(rng_) < 0.45F)) {
@@ -6343,7 +6554,26 @@ bool Game::upgradeIsUsable(int upgradeIndex) const {
     return false;
   }
   const auto& def = content_.upgrades[static_cast<std::size_t>(upgradeIndex)];
-  return def.weapon.empty() || findWeaponSlot(def.weapon) >= 0;
+  // A weapon card needs its weapon.
+  if (!def.weapon.empty() && findWeaponSlot(def.weapon) < 0) return false;
+  // A BRANCH needs its parent. This is the milestone tree's eligibility rule and
+  // it lives here, next to the weapon rule, because "may this card reach this run
+  // at all" is one question with two clauses -- and splitting them would mean the
+  // chest pool and the level-up pool could disagree about a branch card, which is
+  // the same class of bug as a slot cap the chest ignores.
+  if (!def.after.empty() && !holdsCard(def.after)) return false;
+  return true;
+}
+
+bool Game::holdsCard(std::string_view id) const {
+  for (std::size_t i = 0; i < content_.upgrades.size(); ++i) {
+    if (content_.upgrades[i].id == id) return stacks_[i] > 0;
+  }
+  // An id nothing in the content declares can never be held. Returning false is
+  // the safe direction: the card stays invisible rather than appearing for
+  // everybody, which is the failure a typo in upgrades.toml produces and the one
+  // a player would actually notice.
+  return false;
 }
 
 void Game::completeLevelUp() {
@@ -6509,13 +6739,13 @@ bool Game::applyUpgradeAt(int upgradeIndex) {
 
   if (player_ != entt::null && registry_.valid(player_)) {
     auto& hp = registry_.get<Health>(player_);
-    hp.max = stats_.maxHp;
+    hp.max = maxHealth();
     if (result.heal > 0.0F) {
       hp.hp = std::min(hp.max, hp.hp + result.heal);
     }
   }
   if (result.shield > 0.0F) {
-    shield_ = stats_.shieldMax; // refill on pickup
+    shield_ = shieldCap(); // refill on pickup
   }
   return true;
 }
@@ -6538,9 +6768,9 @@ float Game::testWeaponStat(int slot, std::string_view name) const {
   // by. Kept separate from the raw fields above on purpose: "Levelling changes a
   // weapon on its own" is about the base number never moving, and folding the
   // player multipliers in here would make that test pass for the wrong reason.
-  if (name == "effectiveDamage") return w.damage * stats_.damageMul;
+  if (name == "effectiveDamage") return w.damage * playerDamageScale();
   if (name == "effectiveCooldown") {
-    return attackCooldown(w.cooldown, stats_.fireRateBonus + w.cdBonus);
+    return playerCooldown(w.cooldown, w.cdBonus);
   }
   if (name == "cdBonus") return w.cdBonus;
   if (name == "cooldown") return w.cooldown;
@@ -6724,7 +6954,7 @@ void Game::addWeapon(int defIndex) {
   w.beamSplit = 0;
 
   // Create orbit blades if this is an orbit weapon. The blade count tracks
-  // w.projectiles + stats_.projAdd so "+1 projectile" upgrades add blades.
+  // w.projectiles + extraProjectiles() so "+1 projectile" upgrades add blades.
   if (w.attackType == AttackType::Orbit && player_ != entt::null && registry_.valid(player_)) {
     syncOrbitBlades(weaponCount_ - 1);
   }
@@ -6745,7 +6975,7 @@ void Game::syncOrbitBlades(int slot) {
   auto& w = weapons_[slot];
   if (w.attackType != AttackType::Orbit) return;
 
-  const int desired = std::max(1, w.projectiles + stats_.projAdd);
+  const int desired = std::max(1, w.projectiles + extraProjectiles());
 
   // Collect this slot's blades, remembering the first blade's angle as the
   // rotation phase so the ring keeps its orientation when re-laid out.
@@ -6814,7 +7044,7 @@ void Game::syncHaloBeams(int slot) {
   auto& w = weapons_[slot];
   if (w.attackType != AttackType::Halo) return;
 
-  const int desired = std::max(1, w.projectiles + stats_.projAdd);
+  const int desired = std::max(1, w.projectiles + extraProjectiles());
 
   std::vector<entt::entity> beams;
   float phase = 0.0F;
@@ -6883,7 +7113,7 @@ void Game::syncVortices(int slot) {
   auto& w = weapons_[slot];
   if (w.attackType != AttackType::Vortex) return;
 
-  const int desired = std::max(1, w.projectiles + stats_.projAdd);
+  const int desired = std::max(1, w.projectiles + extraProjectiles());
 
   std::vector<entt::entity> zones;
   float phase = 0.0F;
@@ -7395,7 +7625,7 @@ std::vector<int> Game::collectWeaponGrants() {
 
 float Game::iframeDuration(float base) const {
   // ~1% longer invulnerability per 5 points of defense (defense / 500).
-  return base * (1.0F + stats_.defense / 500.0F);
+  return base * (1.0F + defenseValue() / 500.0F);
 }
 
 void Game::hurtPlayer(float amount) {
@@ -7426,7 +7656,7 @@ void Game::hurtPlayer(float amount) {
     spawnParticles(pt.x, pt.y, {0.9F, 0.4F, 0.2F, 1.0F}, 8, 4.0F);
   }
 
-  float dmg = mitigateDamage(amount, stats_.defense);
+  float dmg = mitigateDamage(amount, defenseValue());
 
   // Regenerating shield absorbs the remainder first.
   if (shield_ > 0.0F) {
@@ -7438,6 +7668,7 @@ void Game::hurtPlayer(float amount) {
 
   if (dmg > 0.0F) {
     php.hp -= dmg;
+    notePlayerHurt();
     // The chain takes the hit with you. This is the whole tension of the
     // system: standing in the horde is the only way to keep it fed, and it is
     // also the only way to lose it. (Aura/DoT ticks go through
@@ -7467,7 +7698,7 @@ void Game::damagePlayerDirect(float amount) {
   if (testMode_ && testInvuln_) return;
   auto& php = registry_.get<Health>(player_);
   if (php.hp <= 0.0F) return;
-  float dmg = mitigateDamage(amount, stats_.defense);
+  float dmg = mitigateDamage(amount, defenseValue());
   if (shield_ > 0.0F) {
     const float absorbed = std::min(shield_, dmg);
     shield_ -= absorbed;
@@ -7585,6 +7816,11 @@ void Game::testClearWeapons() {
 void Game::testSetPlayerHp(float hp) {
   if (player_ == entt::null || !registry_.valid(player_)) return;
   registry_.get<Health>(player_).hp = hp;
+}
+
+float Game::testPlayerHp() const {
+  if (player_ == entt::null || !registry_.valid(player_)) return 0.0F;
+  return registry_.get<Health>(player_).hp;
 }
 
 void Game::testKillFirstEnemy() {
@@ -8615,7 +8851,7 @@ float Game::testOrbitWindowAngle(int slot) const {
   if (slot < 0 || slot >= weaponCount_) return -1.0F;
   const auto& w = weapons_[slot];
   if (w.attackType != AttackType::Orbit || !w.orbitWindow) return -1.0F;
-  const int blades = std::max(1, w.projectiles + stats_.projAdd);
+  const int blades = std::max(1, w.projectiles + extraProjectiles());
   if (blades < 2) return -1.0F;
   for (const auto e : registry_.view<OrbitBlade>()) {
     if (registry_.get<OrbitBlade>(e).weaponIndex == slot) {
@@ -9154,7 +9390,7 @@ void Game::renderPlayerStats(core::render::Batcher& b, float px, float py) {
   rows.push_back("TIME " + std::to_string(static_cast<int>(simTime_)) + "S     KILLS " +
                  std::to_string(kills_));
   float hpNow = 0.0F;
-  float hpMax = stats_.maxHp;
+  float hpMax = maxHealth();
   if (player_ != entt::null && registry_.valid(player_)) {
     const auto& h = registry_.get<Health>(player_);
     hpNow = h.hp;
@@ -9162,17 +9398,17 @@ void Game::renderPlayerStats(core::render::Batcher& b, float px, float py) {
   }
   rows.push_back("HP " + std::to_string(static_cast<int>(hpNow)) + "/" +
                  std::to_string(static_cast<int>(hpMax)) + "    REGEN " +
-                 fit1(stats_.regen) + "/S");
+                 fit1(regenRate()) + "/S");
   // Shield shows its refill rate and its delay, because a shield build is only
   // half a pool and half a clock: 400 HP that trickles back at 10/s is a very
   // different weapon from 400 HP that trickles back at 30/s.
   rows.push_back("SHIELD " + std::to_string(static_cast<int>(shield_)) + "/" +
-                 std::to_string(static_cast<int>(stats_.shieldMax)) + " +" +
+                 std::to_string(static_cast<int>(shieldCap())) + " +" +
                  std::to_string(static_cast<int>(shieldRegenRate())) + "/S AFTER " +
                  fit1(shieldRegenDelay()) + "S");
-  rows.push_back("DEFENSE " + std::to_string(static_cast<int>(stats_.defense)));
-  rows.push_back("DAMAGE X" + fit1(stats_.damageMul) + "    FIRE RATE +" +
-                 std::to_string(static_cast<int>(stats_.fireRateBonus * 100.0F)) + "%");
+  rows.push_back("DEFENSE " + std::to_string(static_cast<int>(defenseValue())));
+  rows.push_back("DAMAGE X" + fit1(playerDamageScale()) + "    FIRE RATE +" +
+                 std::to_string(static_cast<int>(effectiveFireRate() * 100.0F)) + "%");
   rows.push_back("CHAIN x" + std::to_string(streak_) + "/" +
                  std::to_string(std::max(1, stats_.momentumMax)) + "  +" +
                  std::to_string(static_cast<int>(stats_.momentumDamage)) + "% DMG/STACK  +" +
@@ -9182,11 +9418,11 @@ void Game::renderPlayerStats(core::render::Batcher& b, float px, float py) {
   if (stats_.lifesteal > 0.0F) {
     // Lifesteal rolls per KILL, not per hit — label it so that is not a
     // surprise: "+12% per kill".
-    speedRow += "   LIFE " + std::to_string(static_cast<int>(stats_.lifesteal)) + "%/KILL";
-    if (stats_.lifestealHeal >= 2) speedRow += " X2";
+    speedRow += "   LIFE " + fit1(lifestealChance()) + "%/KILL";
+    speedRow += " +" + fit1(lifestealHealAmount()) + "HP";
   }
   rows.push_back(speedRow);
-  rows.push_back("PROJECTILES +" + std::to_string(stats_.projAdd) + "   PIERCE +" +
+  rows.push_back("PROJECTILES +" + std::to_string(extraProjectiles()) + "   PIERCE +" +
                  std::to_string(stats_.pierceAdd));
   {
     // The item slots, and what is in them. This is the run's power curve, so it
@@ -9279,9 +9515,8 @@ void Game::renderPlayerStats(core::render::Batcher& b, float px, float py) {
     // The kill-chain multipliers are deliberately left out: they come and go with
     // the chain, and a build summary that flickers is not a summary. What is
     // printed is what the weapon is worth while the chain is cold.
-    const float shownDamage = w.damage * stats_.damageMul;
-    const float shownCooldown =
-        attackCooldown(w.cooldown, stats_.fireRateBonus + w.cdBonus);
+    const float shownDamage = w.damage * playerDamageScale();
+    const float shownCooldown = playerCooldown(w.cooldown, w.cdBonus);
     rows.push_back(def.name + " [" + attackTypeName(w.attackType) + "] D" +
                    std::to_string(static_cast<int>(shownDamage + 0.5F)) + " N" +
                    std::to_string(w.projectiles) + " CD" + fit1(shownCooldown) + "S");
@@ -10178,7 +10413,7 @@ float Game::playerHp() const {
 }
 
 float Game::playerMaxHp() const {
-  if (player_ == entt::null || !registry_.valid(player_)) return stats_.maxHp;
+  if (player_ == entt::null || !registry_.valid(player_)) return maxHealth();
   return registry_.get<Health>(player_).max;
 }
 
@@ -11181,8 +11416,8 @@ void Game::render(core::render::Batcher& b, float alpha) {
              std::to_string(static_cast<int>(playerMaxHp())));
 
   // Shield bar (under HP).
-  if (stats_.shieldMax > 0.0F) {
-    const float frac = stats_.shieldMax > 0.0F ? shield_ / stats_.shieldMax : 0.0F;
+  if (shieldCap() > 0.0F) {
+    const float frac = shield_ / shieldCap();
     b.rectTopLeft(14.0F, 34.0F, 240.0F, 7.0F, Color{0.05F, 0.1F, 0.2F, 0.9F});
     b.rectTopLeft(14.0F, 34.0F, 240.0F * frac, 7.0F, Color{0.35F, 0.65F, 1.0F, 1.0F});
   }

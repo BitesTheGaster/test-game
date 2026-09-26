@@ -343,6 +343,24 @@ struct UpgradeDef {
   // it already closes two other axes for the rest of the run, so the slot would be
   // charging the player twice for the same exclusivity.
   bool slot = true;
+  // THE PARENT OF A BRANCH. A card with a non-empty `after` is only ever offered
+  // if the player HOLDS the card named here; otherwise it is invisible. That is
+  // the whole of the milestone branch mechanism, and it is deliberately a
+  // reference to a card rather than a level or a flag, because a level cannot
+  // express "only if you answered this way" and a flag would have to be a
+  // hand-maintained list that drifts out of step with the cards.
+  //
+  // Together with `group` this gives a milestone tree out of two existing
+  // mechanisms: `after` is the eligibility rule (you only see the branch you
+  // earned) and `group` is the exclusivity rule (the branches are each other's
+  // siblings, so taking one closes the other). Neither needed new state -- the
+  // run already remembered which milestone cards it held.
+  //
+  // The two together are what stop a tier-2 offer from being a free sample of
+  // every line: a player who took Verdant Renewal sees two regen branches, and a
+  // player who took Crimson Pact sees two lifesteal branches and neither of the
+  // others. The tree is a consequence of two relations, not a new subsystem.
+  std::string after;
 };
 
 // One screen of the in-game manual (assets/data/manual.toml).

@@ -578,16 +578,22 @@ def upgrades_md() -> str:
             # the loader reads it -- printed here so the table says which cards
             # are competing for the run's eight item slots and which are not.
             takes_slot = u.get("slot", u.get("kind", "normal") != "unique")
+            # `after` is the branch parent: the card is only ever offered to a run
+            # that already holds that id. Printed because the group column alone
+            # cannot express a tree -- a group says who is shut, `after` says who
+            # has to have been asked first, and the two together are the whole rule.
             rows.append([u["name"], f"`{u['id']}`", u["effect"], fmt(u["value"]),
                          fmt(u.get("max_stacks", 1)), u.get("weapon", ""),
                          str(u.get("level", "")), u.get("group", ""),
+                         u.get("after", ""),
                          "yes" if takes_slot else "no",
                          md_escape(u["desc"])])
         if not rows:
             continue
         parts.append(heading + "\n\n" +
                      table(["Name", "ID", "Effect", "Value", "Max stacks",
-                            "Weapon", "Level", "Group", "Slot", "Description"],
+                            "Weapon", "Level", "Group", "After", "Slot",
+                            "Description"],
                            rows))
     s = "\n\n".join(parts)
 
@@ -603,6 +609,21 @@ def upgrades_md() -> str:
         s += table(["Group", "Members", "N"],
                    [[k, ", ".join(sorted(v)), str(len(v))]
                     for k, v in sorted(groups.items())])
+        # The tree, as a tree. The group table above says which cards shut each
+        # other; this says which are only reachable at all, and a flat list cannot
+        # show that without the reader reassembling the parent/child links by hand.
+        by_parent: dict[str, list[str]] = {}
+        for u in us:
+            if u.get("kind") != "milestone" or not u.get("after"):
+                continue
+            by_parent.setdefault(u["after"], []).append(
+                f"{u['name']} (`{u['id']}`, group `{u['group']}`)")
+        if by_parent:
+            s += ("\n\n### Milestone branches (offered only to a run holding "
+                  "the parent)\n\n")
+            rows2 = [[f"`{parent}`", "; ".join(sorted(kids)), str(len(kids))]
+                     for parent, kids in sorted(by_parent.items())]
+            s += table(["Parent", "Branches", "N"], rows2)
 
     # summary counts
     counts = {}

@@ -413,6 +413,7 @@ Content loadContent(const std::filesystem::path& dir) {
       // Everything else does, unless the file says otherwise; see the `slot`
       // field's comment in content.hpp for what the limit is actually for.
       def.slot = (*t)["slot"].value_or(def.kind == "normal" && def.weapon.empty());
+      def.after = (*t)["after"].value_or("");
       content.upgrades.push_back(std::move(def));
     }
   }

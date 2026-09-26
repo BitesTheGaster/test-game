@@ -2374,16 +2374,27 @@ TEST_CASE("Vampirism is reachable, the milestone stacks it, the trigger is a kil
   // the slot system is quietly taxing you for using.
   REQUIRE(gold->value == Catch::Approx(3.0F));
   REQUIRE(gold->maxStacks >= 6);
-  // The milestone one is a SMALL number with STACKS, which is the promise the
-  // player can actually plan around: separate takes, each one visible on a
-  // milestone screen, rather than one take that silently applies three times.
-  // And it beats the everyday card on both the per-take and the whole-run number,
-  // which is the price of closing the other two survival axes.
-  REQUIRE(crimson->value == Catch::Approx(9.0F));
-  REQUIRE(crimson->value > gold->value);
-  REQUIRE(crimson->maxStacks >= 2);
-  REQUIRE(crimson->value * static_cast<float>(crimson->maxStacks) >
-          gold->value * static_cast<float>(gold->maxStacks));
+  // The milestone is a MULTIPLIER with a seed, not a bigger flat number, and that
+  // changes what "beats the everyday card" even means. It used to be a straight
+  // per-take and whole-run comparison of two flat numbers. It is now: a run that
+  // takes the everyday card to its ceiling and the milestone once ends up with
+  // (seed + everyday) x 1.6, not seed + everyday, and a run that also walks the
+  // branch tree ends up at x2.2 or x2.8 on top of that. The milestone is worth
+  // taking BECAUSE of what the run put into the axis, which is the entire reason
+  // it is a multiplier -- and which only shows up if the comparison is made on
+  // the multiplied total, so the test makes it there.
+  REQUIRE(crimson->effect == "ms_lifesteal_seed");
+  const float seeded = 7.0F;
+  const float plainTotal = seeded + gold->value * static_cast<float>(gold->maxStacks);
+  const float withPact = plainTotal * (1.0F + crimson->value);
+  CAPTURE(plainTotal);
+  CAPTURE(withPact);
+  REQUIRE(withPact > plainTotal);
+  // Even one take of the milestone carries more lifesteal than one take of the
+  // everyday card, which is the promise the player can plan against before they
+  // have engaged the axis at all. That is what the SEED half is for: a pure
+  // multiplier would be worth literally nothing here.
+  REQUIRE(seeded + gold->value > gold->value);
   REQUIRE(crown->value == Catch::Approx(40.0F));
   REQUIRE(crown->maxStacks >= 2);
   // And the strongest single number in the game for lifesteal is a MILESTONE, so
@@ -2396,13 +2407,27 @@ TEST_CASE("Vampirism is reachable, the milestone stacks it, the trigger is a kil
   }
   REQUIRE(best >= 40.0F);
   // A milestone lifesteal card must be exclusive with the two other survival
-  // answers, and the run has to be able to lean on it more than once.
+  // answers. The tier-1 group is still exactly three cards: the tree hangs off it,
+  // it does not widen the opening question.
   REQUIRE((crown->group == "survivor" || crimson->group == "survivor"));
   int survivor = 0;
   for (const auto& u : content.upgrades) {
     if (u.group == "survivor") ++survivor;
   }
   REQUIRE(survivor == 3);
+  // And the tree is real rather than declared: the crimson line multiplies to
+  // x2.2 at its first branch and x2.8 down the Blood Debt path, so committing to
+  // vampirism pays out across three milestone levels instead of one.
+  const auto* debt = find("m8_blooddebt");
+  const auto* thirst = find("m16_thirstunbound");
+  REQUIRE(debt != nullptr);
+  REQUIRE(thirst != nullptr);
+  REQUIRE(debt->after == "m4_crimson");
+  REQUIRE(thirst->after == "m8_blooddebt");
+  const float deep =
+      (1.0F + crimson->value) * (1.0F + debt->value) * (1.0F + thirst->value);
+  CAPTURE(deep);
+  REQUIRE(deep > 2.5F);
 
   // Still kill-triggered: hitting an enemy many times must not heal at all.
   game::Game g{content, 91};
@@ -7101,21 +7126,99 @@ TEST_CASE("A milestone lays out a whole exclusive group, and taking one closes t
     ++milestoneCards;
     CAPTURE(u.id);
     REQUIRE_FALSE(u.group.empty());
-    // The card you take STACKS. That is the other half of the ask: the siblings
-    // are locked for the run, so if the chosen card were one-stack the group
-    // would be a one-time fork and "vampirism several times over" would have to
-    // mean one card quietly applying three times -- a number the player never
-    // sees. A group whose members cannot all be taken twice is not a group the
-    // player gets to lean on.
-    REQUIRE(u.maxStacks >= 2);
+    // EVERY milestone card in the survivor tree is one stack, and that is a
+    // change of what "several times over" means.
+    //
+    // The old promise was: the card you take keeps coming back at later
+    // milestones with a STACKS counter, so "vampirism several times" was a card
+    // you could lean on. The new promise is: the card you take opens a LINE, and
+    // the line has three tiers of its own, each a different question. Depth comes
+    // from the tree rather than from repeats of one number -- which is the whole
+    // point, because a fourth take of "+9% lifesteal" is not a decision and a
+    // fourth tier is.
+    //
+    // The distinction that matters for the CONTENT is that a repeat and a branch
+    // are not the same mechanic wearing different clothes. A repeat re-applies one
+    // effect and the player can compute it; a branch asks something new. So the
+    // stacks rule and the branch rule are stated together here rather than one
+    // being allowed to imply the other.
+    const bool inTree = u.group.rfind("survivor", 0) == 0;
+    if (inTree) {
+      REQUIRE(u.maxStacks == 1);
+    } else {
+      // The three groups not yet converted still lean on repeats, and the carry
+      // path in buildChoices is what feeds them.
+      REQUIRE(u.maxStacks >= 2);
+    }
+    if (!u.after.empty()) {
+      // A branch is only reachable through its parent, and the parent has to
+      // exist: a branch naming a card nothing declares is a card nobody can ever
+      // see, which is the quietest possible content bug there is.
+      bool parentFound = false;
+      for (const auto& p2 : content.upgrades) {
+        if (p2.id != u.after) continue;
+        parentFound = true;
+        // And the parent must be a MILESTONE. A branch off an ordinary stat card
+        // would be a second card for one axis, which is the duplicate-item problem
+        // wearing a hat.
+        REQUIRE(p2.kind == "milestone");
+      }
+      CAPTURE(u.id);
+      REQUIRE(parentFound);
+      // And a branch group is a group of its own, never the parent's: sharing one
+      // would let taking a branch block its own parent, which is how a tree
+      // becomes a single take.
+      REQUIRE(u.group != u.after);
+    }
     if (std::find(groups.begin(), groups.end(), u.group) == groups.end()) {
       groups.push_back(u.group);
     }
   }
   CAPTURE(milestoneCards);
   // Six levels of ladder, and the two the player named plus the kill chain and
-  // contact are all in there.
-  REQUIRE(groups.size() == 6);
+  // contact are all in there. The count is now ABOVE six, because the survivor
+  // tree hangs seven branch groups off its one tier-1 group: a group is no longer
+  // the unit of a milestone, it is the unit of a LINE.
+  REQUIRE(groups.size() >= 6);
+  REQUIRE(std::count(groups.begin(), groups.end(), "survivor") == 1);
+  // Six branch groups hanging off it: one per LINE per TIER, so three lines
+  // times two tiers. The count is on the survivor groups specifically and NOT
+  // "every group that is not survivor" -- the first version of this predicate
+  // counted the other five milestone groups too and reported eleven, which is a
+  // number about the whole game rather than about the tree.
+  int branchGroups = 0;
+  for (const auto& gname2 : groups) {
+    if (gname2.rfind("survivor.", 0) == 0) ++branchGroups;
+  }
+  CAPTURE(branchGroups);
+  REQUIRE(branchGroups == 9);
+  // NINE branch groups: three per tier, and every one of them exactly two cards.
+  // Two is not a style choice, it is the minimum that makes a branch a decision.
+  // A one-card group is a reward with no question attached, and the first version
+  // of this tree had one -- the lifesteal/echo line had a single tier-3 answer --
+  // and it read on the screen as a card the game had decided for the player.
+  //
+  // The groups are per TIER-2 CARD and not per LINE, and getting that wrong is a
+  // bug rather than a tidiness issue: two tier-2 branches on one line are
+  // different answers, so sharing a group between their tier-3 questions means
+  // taking one silently closes a card the run never earned and may not even be
+  // able to reach.
+  for (const auto& gname2 : groups) {
+    if (gname2.rfind("survivor.", 0) != 0) continue;
+    CAPTURE(gname2);
+    int members = 0;
+    std::vector<std::string> parents;
+    for (const auto& u : content.upgrades) {
+      if (u.group != gname2) continue;
+      ++members;
+      parents.push_back(u.after);
+    }
+    REQUIRE(members == 2);
+    // Both members of a branch group descend from the SAME parent, which is the
+    // other half of the rule above.
+    REQUIRE(parents.size() == 2);
+    REQUIRE(parents[0] == parents[1]);
+  }
   for (const char* want : {"survivor", "execution", "element", "momentum", "bulwark",
                            "apotheosis"}) {
     CAPTURE(want);
@@ -7147,9 +7250,15 @@ TEST_CASE("A milestone lays out a whole exclusive group, and taking one closes t
 
 TEST_CASE("A milestone screen shows every card of the group it drew, and the rest stay locked") {
   const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  // The group a LEVEL introduces, which is its tier-1 group. Not "the first card
+  // at that level": since the survivor tree was added, level 8 opens with a
+  // branch card, and a helper that took the first match asked about
+  // `survivor.crimson` (two cards) while the game correctly offered the whole
+  // three-card execution group. The helper was wrong, the game was right, and the
+  // test was the only thing that noticed.
   const auto groupOf = [&content](int level) -> std::string {
     for (const auto& u : content.upgrades) {
-      if (u.kind == "milestone" && u.level == level) return u.group;
+      if (u.kind == "milestone" && u.level == level && u.after.empty()) return u.group;
     }
     return {};
   };
@@ -7263,70 +7372,609 @@ TEST_CASE("A group is only closed by taking one of its cards, not by passing the
     REQUIRE(g.testUpgradeBlocked(g.testUpgradeContentIndex(u.id)));
   }
 
-  // L8 is a fresh question, and the leftover slot carries the L4 answer forward.
+  // L8 is a fresh question AND the branch the run has earned. Both fit, but not
+  // at the old numbers, and the change is deliberate rather than a squeeze: the
+  // branch is placed first and unconditionally, because the player took a tier-1
+  // card and is OWED a tier-2 question. Letting a shuffle drop it in favour of a
+  // group the run never committed to would mean the tree silently stops growing,
+  // which is a far worse bug than one card of a four-card group going unshown for
+  // a single level.
   g.testSetLevel(8);
   int freshGroup = 0;
-  int carried = 0;
+  int branchOnScreen = 0;
   for (const auto& c : g.upgradeChoices()) {
     if (c.index < 0) continue;
     const auto& u = content.upgrades[static_cast<std::size_t>(c.index)];
     CAPTURE(u.id);
     if (u.group == "execution") ++freshGroup;
-    if (u.id == takenId) ++carried;
-    // Nothing from a closed group except the card that was taken.
-    if (u.group == "survivor") REQUIRE(u.id == takenId);
+    if (u.after == takenId) ++branchOnScreen;
+    // Nothing from the closed tier-1 group, and nothing from another LINE: a
+    // player on the pact line is never shown the regen or shield branches.
+    REQUIRE(u.group != "survivor");
+    if (u.after == takenId) REQUIRE(u.group.rfind("survivor.", 0) == 0);
   }
   CAPTURE(freshGroup);
-  CAPTURE(carried);
-  REQUIRE(freshGroup == 3);
-  REQUIRE(carried == 1);
+  CAPTURE(branchOnScreen);
+  REQUIRE(branchOnScreen == 2);
+  // The two branches are the only cards that had to be here, and the screen is
+  // full: three execution cards would have needed five slots, so exactly two of
+  // them made it. That is the trade, and it is the right way round.
+  REQUIRE(freshGroup == 2);
+  REQUIRE(g.upgradeChoices().size() == game::Game::kMaxMilestoneSlots);
+
+  // Taking one branch closes its sibling and does NOT close the run's other
+  // lines' futures outright -- it just means this line's next question is a
+  // reply to the branch, not to the pact.
+  const auto branchIds = g.testChoiceIds();
+  int branchToTake = -1;
+  for (std::size_t i = 0; i < branchIds.size(); ++i) {
+    if (branchIds[i] == "<skip>") continue;
+    for (const auto& u : content.upgrades) {
+      if (u.id == branchIds[i] && u.after == takenId) branchToTake = g.testUpgradeContentIndex(u.id);
+    }
+  }
+  REQUIRE(branchToTake >= 0);
+  const std::string branchId = content.upgrades[static_cast<std::size_t>(branchToTake)].id;
+  const std::string branchGroup = content.upgrades[static_cast<std::size_t>(branchToTake)].group;
+  REQUIRE(g.testGrantUpgrade(branchToTake));
+  // The sibling is closed for good.
+  for (const auto& u : content.upgrades) {
+    if (u.group != branchGroup || u.id == branchId) continue;
+    CAPTURE(u.id);
+    REQUIRE(g.testUpgradeBlocked(g.testUpgradeContentIndex(u.id)));
+  }
+  // The parent is still held and still not blocked. A branch blocking its own
+  // parent is how a three-tier tree silently becomes a one-tier fork.
+  REQUIRE_FALSE(g.testUpgradeBlocked(g.testUpgradeContentIndex(takenId)));
+  REQUIRE(g.testHoldsCard(takenId));
 }
 
-TEST_CASE("A milestone card that improves vampirism several times really can") {
-  // "An item that improves vampirism several times" is a promise about HOW MANY
-  // TIMES the card can drop, not a bigger number on a card that lands once. So
-  // the card has stacks, every take applies the effect once, and the effect stops
-  // being offered when the stacks run out -- all three of which is the difference
-  // between "several times over" as a mechanic and as a description.
+TEST_CASE("A milestone tree is three tiers deep, and only the line you took is ever shown") {
+  // "An item that improves vampirism several times" was originally read as a
+  // promise about HOW MANY TIMES a card drops, and it was implemented as stacks:
+  // the same card, a STACKS counter, the same effect again. That is a number the
+  // player can add up in their head, which is a real virtue, and it is also not
+  // what makes vampirism interesting -- the fourth take of "+9% lifesteal" is
+  // arithmetic, not a decision.
+  //
+  // The tree replaces the repeats with three tiers of DIFFERENT questions, and
+  // the test is here to say what the tree promises rather than what it used to:
+  //
+  //   - the tier-1 card multiplies the axis and seeds it, so it is worth taking
+  //     cold AND worth deepening, which a flat bump is not;
+  //   - a branch is shown only to a run that holds its parent, so a player on the
+  //     lifesteal line is never asked the regen question;
+  //   - a branch is a different question, so it does not stack, and taking one
+  //     closes its sibling for the run without closing its own parent.
   const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
-  int idx = -1;
-  for (std::size_t i = 0; i < content.upgrades.size(); ++i) {
-    if (content.upgrades[i].id == "m4_crimson") idx = static_cast<int>(i);
-  }
-  REQUIRE(idx >= 0);
-  const auto& def = content.upgrades[static_cast<std::size_t>(idx)];
-  REQUIRE(def.effect == "lifesteal_add");
-  REQUIRE(def.maxStacks >= 2);
+  const auto find = [&content](const char* id) {
+    for (const auto& u : content.upgrades) {
+      if (u.id == id) return &u;
+    }
+    return static_cast<const game::UpgradeDef*>(nullptr);
+  };
+  const auto* pact = find("m4_crimson");
+  const auto* debt = find("m8_blooddebt");
+  const auto* echo = find("m8_woundecho");
+  const auto* thirst = find("m16_thirstunbound");
+  const auto* ironblood = find("m16_ironblood");
+  REQUIRE(pact != nullptr);
+  REQUIRE(debt != nullptr);
+  REQUIRE(echo != nullptr);
+  REQUIRE(thirst != nullptr);
+  REQUIRE(ironblood != nullptr);
+  // The two branches of one line are each other's siblings, and the two lines'
+  // tier-2 groups are different groups. If they shared one, taking a lifesteal
+  // branch would also close the regen branches, and the run would lose a
+  // question it had not answered -- which is the difference between a line and a
+  // chapter.
+  REQUIRE(debt->group == echo->group);
+  REQUIRE(debt->group != pact->group);
+  REQUIRE(thirst->group == ironblood->group);
+  REQUIRE(thirst->group != debt->group);
+  // A tier-3 card branches off the tier-2 card, not off the tier-1 one. Branching
+  // off the tier-1 card would put the same tier-3 pair on the board twice, once
+  // for each route through tier 2, and the second pair would be two cards the
+  // player has already refused.
+  REQUIRE(thirst->after == debt->id);
+  REQUIRE(ironblood->after == debt->id);
 
   game::Game g{content, 7};
   g.testClearWeapons();
-  const float before = g.stats().lifesteal;
-  // One take is ONE application. A card that quietly applied three would make the
-  // STACKS line on the card a lie.
-  REQUIRE(g.testGrantUpgrade(idx));
-  REQUIRE(g.stats().lifesteal == Catch::Approx(before + def.value));
+  const float lifestealBefore = g.stats().lifesteal;
+  const float mulBefore = g.stats().milestone.lifesteal;
 
-  // It can be taken again, and again, up to maxStacks -- and the group siblings
-  // stay locked out the whole time, which is the other half of the promise.
-  for (int take = 1; take < def.maxStacks; ++take) {
-    REQUIRE(g.upgradeStacks(static_cast<std::size_t>(idx)) == take);
-    REQUIRE(g.testGrantUpgrade(idx));
-    REQUIRE(g.stats().lifesteal == Catch::Approx(before + def.value * (take + 1)));
-    // The other two survival answers are still closed.
-    for (const char* sib : {"m4_renewal", "m4_aegis"}) {
-      int s = -1;
-      for (std::size_t i = 0; i < content.upgrades.size(); ++i) {
-        if (content.upgrades[i].id == sib) s = static_cast<int>(i);
+  // The tier-1 card does BOTH halves in one take: a seed that opens the axis and a
+  // multiplier on it. The seed is not decoration -- x1.6 on zero lifesteal is
+  // zero lifesteal, which would be a dead card on the only screen it can first
+  // appear on.
+  const int pactIdx = g.testUpgradeContentIndex(pact->id);
+  REQUIRE(g.testGrantUpgrade(pactIdx));
+  REQUIRE(g.stats().lifesteal == Catch::Approx(lifestealBefore + 7.0F));
+  REQUIRE(g.stats().milestone.lifesteal == Catch::Approx(mulBefore + pact->value));
+  // One take is one application. A card that quietly applied three would make the
+  // STACKS line on it a lie, and there is no STACKS line any more, which is the
+  // point: the depth moved into the tree where it can ask something new.
+  REQUIRE(g.upgradeStacks(static_cast<std::size_t>(pactIdx)) == 1);
+  REQUIRE_FALSE(g.testGrantUpgrade(pactIdx));
+  // The other two survival answers are closed for the run, permanently.
+  for (const char* sib : {"m4_renewal", "m4_aegis"}) {
+    CAPTURE(sib);
+    REQUIRE(g.testUpgradeBlocked(g.testUpgradeContentIndex(sib)));
+  }
+
+  // L8: the run is asked about ITS line. Both branches, and not one of the four
+  // belonging to lines it never entered.
+  g.testSetLevel(8);
+  int shownForPact = 0;
+  for (const auto& id : g.testChoiceIds()) {
+    if (id == "<skip>") continue;
+    for (const auto& u : content.upgrades) {
+      if (u.id != id) continue;
+      if (u.after == pact->id) {
+        ++shownForPact;
+      } else if (!u.after.empty()) {
+        // A branch off a card this run does not hold. Never legal, at any level,
+        // for any reason -- this is the whole eligibility rule.
+        CAPTURE(id);
+        REQUIRE(false);
       }
-      REQUIRE(s >= 0);
-      REQUIRE(g.testUpgradeBlocked(s));
     }
   }
-  // Maxed. A further take is refused, and the total is exactly the stacks.
-  REQUIRE(g.upgradeStacks(static_cast<std::size_t>(idx)) == def.maxStacks);
-  REQUIRE_FALSE(g.testGrantUpgrade(idx));
-  REQUIRE(g.stats().lifesteal ==
-          Catch::Approx(before + def.value * static_cast<float>(def.maxStacks)));
+  CAPTURE(shownForPact);
+  REQUIRE(shownForPact == 2);
+
+  // Take one and the two multipliers ADD, they do not compound. x1.6 then x1.6
+  // is x2.2, and that is exactly what the card prints ("60% stronger AGAIN.
+  // Totals 2.2x") -- the test is what holds the two to each other, because
+  // "a multiplier" is the kind of word that makes a reader assume x2.56 and then
+  // discovers otherwise in a run.
+  const int debtIdx = g.testUpgradeContentIndex(debt->id);
+  REQUIRE(g.testGrantUpgrade(debtIdx));
+  const float pactTotal = 1.0F + pact->value;
+  const float compounded = pactTotal + debt->value;
+  REQUIRE(g.stats().milestone.lifesteal == Catch::Approx(compounded - 1.0F));
+  // And explicitly NOT the compounded figure, because the difference is exactly
+  // the kind of thing that gets "fixed" later by someone who assumed otherwise.
+  const float wouldHaveCompounded = pactTotal * (1.0F + debt->value);
+  REQUIRE(compounded < wouldHaveCompounded);
+  REQUIRE(compounded == Catch::Approx(2.2F).margin(0.001F));
+  // The sibling of the branch is closed; the parent is untouched.
+  REQUIRE(g.testUpgradeBlocked(g.testUpgradeContentIndex(echo->id)));
+  REQUIRE_FALSE(g.testUpgradeBlocked(pactIdx));
+  // And the branch does not come back: one take, one answer, a third tier instead.
+  REQUIRE_FALSE(g.testGrantUpgrade(debtIdx));
+
+  // L16: the question is a reply to the branch, so only the pair behind the
+  // branch the run actually took may appear.
+  g.testSetLevel(16);
+  int shownForDebt = 0;
+  int shownForPact2 = 0;
+  for (const auto& id : g.testChoiceIds()) {
+    if (id == "<skip>") continue;
+    for (const auto& u : content.upgrades) {
+      if (u.id != id) continue;
+      CAPTURE(id);
+      if (u.after == debt->id) ++shownForDebt;
+      else if (u.after == pact->id) ++shownForPact2;
+    }
+  }
+  CAPTURE(shownForDebt);
+  CAPTURE(shownForPact2);
+  REQUIRE(shownForDebt == 2);
+  REQUIRE(shownForPact2 == 0);
+
+  // The three tiers the run is on, multiplied: x2.8, and the card says so.
+  const int thirstIdx = g.testUpgradeContentIndex(thirst->id);
+  REQUIRE(g.testGrantUpgrade(thirstIdx));
+  const float deep = compounded + thirst->value;
+  REQUIRE(g.stats().milestone.lifesteal == Catch::Approx(deep - 1.0F));
+  // x2.8 across three levels, and the third card prints that number too.
+  REQUIRE(deep == Catch::Approx(2.8F).margin(0.001F));
+}
+
+TEST_CASE("A milestone multiplies the axis, so the same card is worth more the deeper the run went") {
+  // THE CLAIM THIS ROUND EXISTS TO MAKE. A milestone used to add a flat number, and
+  // a flat number is worth exactly the same to a run that engaged one card on an
+  // axis as to a run that engaged eight -- so it was a reward for being at a
+  // milestone rather than a reward for having built something. The fix is that a
+  // milestone MULTIPLIES, which makes its value proportional to what the run put
+  // in.
+  //
+  // Measured on regeneration, because it is the axis with a seed card and a plain
+  // card and therefore the one where the comparison is honest: the same
+  // Verdant Renewal, on a run with no regeneration cards and on a run with eight.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  const auto idx = [&content](const char* id) {
+    for (std::size_t i = 0; i < content.upgrades.size(); ++i) {
+      if (content.upgrades[i].id == id) return static_cast<int>(i);
+    }
+    return -1;
+  };
+  const int renewal = idx("m4_renewal");
+  const int regen = idx("regen");
+  REQUIRE(renewal >= 0);
+  REQUIRE(regen >= 0);
+
+  // What the milestone contributes, measured as regenRate() with it minus regenRate()
+  // without it. Reported as a RATIO because the two runs have wildly different
+  // absolute numbers and the ratio is the thing the design claims.
+  // The milestone's contribution, in HP/s of regeneration, on a run with the given
+  // number of plain cards already taken. Measured as an ABSOLUTE DIFFERENCE
+  // rather than a ratio, because on a cold run the base is zero and a ratio over
+  // zero is the number a diagnostic prints when it has divided by something it
+  // should have checked.
+  const auto worthOf = [&content, renewal, regen](int plainTakes) {
+    game::Game g{content, 11};
+    g.testClearWeapons();
+    for (int t = 0; t < plainTakes; ++t) {
+      REQUIRE(g.testGrantUpgrade(regen));
+    }
+    const float before = g.regenRate();
+    REQUIRE(g.testGrantUpgrade(renewal));
+    return g.regenRate() - before;
+  };
+
+  // With the axis empty the milestone's own seed carries it, so the card is still
+  // worth taking cold. A pure multiplier here would be worth literally nothing --
+  // x1.75 on zero regeneration is zero -- which is why the tier-1 cards seed.
+  const float cold = worthOf(0);
+  // With the axis full the SAME card is worth a great deal more, because it is
+  // scaling nine HP/s instead of one.
+  const float deep = worthOf(8);
+  CAPTURE(cold);
+  CAPTURE(deep);
+  REQUIRE(cold > 0.0F);
+  REQUIRE(deep > cold * 3.0F);
+
+  // And the numbers behind the claim, so a future edit to either card is caught
+  // here rather than in a run.
+  game::Game shallow{content, 11};
+  shallow.testClearWeapons();
+  REQUIRE(shallow.testGrantUpgrade(renewal));
+  const float seededOnly = shallow.regenRate();
+  game::Game deepRun{content, 11};
+  deepRun.testClearWeapons();
+  for (int t = 0; t < 8; ++t) REQUIRE(deepRun.testGrantUpgrade(regen));
+  REQUIRE(deepRun.testGrantUpgrade(renewal));
+  CAPTURE(seededOnly);
+  CAPTURE(deepRun.regenRate());
+  // 1.0 seeded x1.75 = 1.75.  (1.0 seed + 8.0 cards) x1.75 = 15.75.
+  REQUIRE(seededOnly == Catch::Approx(1.75F));
+  REQUIRE(deepRun.regenRate() == Catch::Approx(15.75F));
+
+  // Damage takes the same shape, and it goes through ONE choke point: twenty-odd
+  // places produce a point of damage and all of them read playerDamageScale(). A
+  // milestone that reached nineteen of them would be a card that silently does
+  // less than it says, which is the failure this accessor exists to prevent.
+  game::Game dmg{content, 11};
+  dmg.testClearWeapons();
+  const float coldScale = dmg.playerDamageScale();
+  dmg.stats().milestone.damage = 1.0F;
+  const float doubled = dmg.playerDamageScale();
+  CAPTURE(coldScale);
+  CAPTURE(doubled);
+  REQUIRE(doubled == Catch::Approx(coldScale * 2.0F));
+  // The kill chain is still OUTSIDE the milestone, so a live chain is not taxed
+  // by a milestone: the milestone scales what the build did, and the chain then
+  // scales what the milestone made.
+  REQUIRE(dmg.playerDamageScale() ==
+          Catch::Approx(dmg.stats().damageMul * 2.0F * dmg.momentumDamageMul()));
+}
+
+TEST_CASE("Regeneration can be made conditional on standing still, and on being nearly dead") {
+  // The two branch shapes that are not numbers. Both are CONDITIONAL multipliers
+  // rather than plain ones, and that is the design: they make the player's
+  // POSITION part of the build, so a survival line stops being a stat you have
+  // and becomes a way you have to play.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  const auto find = [&content](const char* id) {
+    for (std::size_t i = 0; i < content.upgrades.size(); ++i) {
+      if (content.upgrades[i].id == id) return static_cast<int>(i);
+    }
+    return -1;
+  };
+  const int stillBloom = find("m8_stillbloom");
+  const int deepStill = find("m16_deepstill");
+  const int warmblood = find("m16_warmblood");
+  REQUIRE(stillBloom >= 0);
+  REQUIRE(deepStill >= 0);
+  REQUIRE(warmblood >= 0);
+
+  const int regen = find("regen");
+  REQUIRE(regen >= 0);
+
+  // Off by default. Measured over a real second rather than off a stat, for the
+  // same reason the assertions below are: the number the player gets is health,
+  // and a card that sets a flag the stat ignores is a card that does nothing.
+  const auto gainOver = [&content, regen](int card, bool moving, float healthFrac) {
+    game::Game g{content, 61};
+    g.testDisableWaves();
+    g.testClearWeapons();
+    for (int t = 0; t < 4; ++t) REQUIRE(g.testGrantUpgrade(regen));
+    if (card >= 0) REQUIRE(g.testGrantUpgrade(card));
+    g.testSetPlayerHp(g.maxHealth() * healthFrac);
+    const float before = g.testPlayerHp();
+    g.testSetMove(moving ? 1.0F : 0.0F, 0.0F);
+    g.testAdvance(1.0F);
+    return g.testPlayerHp() - before;
+  };
+  // Four regen cards is the base rate: 4 HP/s, so 4 HP in a second.
+  // A margin, not equality: 4 HP/s applied as sixty separate 1/60 additions is
+  // 3.99994, and a test that demands exactly 4.0 is a test that will fail on a
+  // different compiler and be "fixed" by loosening a real assertion.
+  const float tol = 0.01F;
+  const float base = 4.0F;
+  const float idleHealthy = gainOver(-1, false, 0.9F);
+  const float idleHurt = gainOver(-1, false, 0.2F);
+  const float idleMoving = gainOver(-1, true, 0.4F);
+  CAPTURE(idleHealthy);
+  CAPTURE(idleHurt);
+  CAPTURE(idleMoving);
+  REQUIRE(idleHealthy == Catch::Approx(base).margin(tol));
+  REQUIRE(idleHurt == Catch::Approx(base).margin(tol));
+  REQUIRE(idleMoving == Catch::Approx(base).margin(tol));
+
+  // The stillness factor is NOT in regenRate(), on purpose: regenRate() is the
+  // axis, and the condition is applied where the regen is actually spent. So the
+  // assertions below measure HEALTH OVER TIME, which is the claim the card makes,
+  // rather than a stat that happens to feed it. A test that read regenRate() would
+  // have been reading a number the player never sees.
+  //
+  // One second, no input, at 40% health so the low-health mirror is inert here.
+  const float baseGain = gainOver(-1, false, 0.4F);
+  CAPTURE(baseGain);
+  REQUIRE(baseGain == Catch::Approx(base).margin(tol));
+  // x4 while still, x1 while moving.
+  const float stillGain = gainOver(stillBloom, false, 0.4F);
+  const float movingGain = gainOver(stillBloom, true, 0.4F);
+  CAPTURE(stillGain);
+  CAPTURE(movingGain);
+  REQUIRE(stillGain == Catch::Approx(base * 4.0F).margin(tol));
+  REQUIRE(movingGain == Catch::Approx(base).margin(tol));
+  // And the tier-3 sibling is its own factor, not a bigger one: tier-2 then
+  // tier-3 is x4 then x9, NOT x4+9. The factor compounding is the test.
+  game::Game deepStillRun{content, 61};
+  deepStillRun.testDisableWaves();
+  deepStillRun.testClearWeapons();
+  for (int t = 0; t < 4; ++t) REQUIRE(deepStillRun.testGrantUpgrade(regen));
+  REQUIRE(deepStillRun.testGrantUpgrade(stillBloom));
+  REQUIRE(deepStillRun.testGrantUpgrade(deepStill));
+  deepStillRun.testSetPlayerHp(deepStillRun.maxHealth() * 0.4F);
+  const float deepBefore = deepStillRun.testPlayerHp();
+  deepStillRun.testAdvance(1.0F);
+  const float deepGain = deepStillRun.testPlayerHp() - deepBefore;
+  CAPTURE(deepGain);
+  REQUIRE(deepGain == Catch::Approx(base * 9.0F).margin(tol));
+
+  // The low-health mirror, which is the same mechanic on the other end of the bar.
+  // The low-health mirror, which is the same mechanic on the other end of the bar.
+  // 90% health is inert and 20% is active, both still and unmoving, so the only
+  // thing that differs between the two numbers is the health bar.
+  const float healthyGain = gainOver(warmblood, false, 0.9F);
+  const float nearlyDeadGain = gainOver(warmblood, false, 0.2F);
+  CAPTURE(healthyGain);
+  CAPTURE(nearlyDeadGain);
+  REQUIRE(healthyGain == Catch::Approx(base).margin(tol));
+  REQUIRE(nearlyDeadGain == Catch::Approx(base * 4.0F).margin(tol));
+
+  // The two conditions multiply rather than add, and a player who is BOTH still
+  // and nearly dead earns both. Adding the factors would have made standing still
+  // worth less the closer you were to dying, which is backwards from every other
+  // conditional in the game and from the card's own promise.
+  //
+  // Measured over a QUARTER SECOND on purpose. Both cards at once is 64 HP/s, and
+  // from 20 HP that crosses the half-health line in under half a second -- so a
+  // one-second window measures the band switching off partway through rather than
+  // the multiplier, and the first version of this test did exactly that and read
+  // the shortfall as a bug in the code. It is not. The condition is LIVE, which
+  // is the whole character of the card: the reward for being nearly dead stops
+  // the moment you stop being nearly dead, and a player can feel that as a change
+  // in the rate rather than having to look it up.
+  const auto gainOverQuarter = [&content, regen, stillBloom, warmblood](bool moving,
+                                                                     float healthFrac) {
+    game::Game g{content, 61};
+    g.testDisableWaves();
+    g.testClearWeapons();
+    for (int t = 0; t < 4; ++t) REQUIRE(g.testGrantUpgrade(regen));
+    REQUIRE(g.testGrantUpgrade(stillBloom));
+    REQUIRE(g.testGrantUpgrade(warmblood));
+    g.testSetPlayerHp(g.maxHealth() * healthFrac);
+    const float before = g.testPlayerHp();
+    g.testSetMove(moving ? 1.0F : 0.0F, 0.0F);
+    g.testAdvance(0.25F);
+    return g.testPlayerHp() - before;
+  };
+  const float bothGain = gainOverQuarter(false, 0.2F);
+  const float bothMoving = gainOverQuarter(true, 0.2F);
+  CAPTURE(bothGain);
+  CAPTURE(bothMoving);
+  // Still and dying: 4 HP/s times x4 times x4 is 64 HP/s, and a quarter of that.
+  REQUIRE(bothGain == Catch::Approx(base * 16.0F * 0.25F).margin(tol));
+  // Moving and dying: only the health one, because a dash is not standing still.
+  REQUIRE(bothMoving == Catch::Approx(base * 4.0F * 0.25F).margin(tol));
+
+  // And over a full second from the same 20%, the band gives way partway through,
+  // so the run gets LESS than sixteen times the base rate. Asserted explicitly
+  // because it is the property that makes the card honest: a flat x16 would be
+  // the larger number, and it is the wrong one -- a player who is climbing out of
+  // danger is not still owed the reward for being in it.
+  game::Game settling{content, 61};
+  settling.testDisableWaves();
+  settling.testClearWeapons();
+  for (int t = 0; t < 4; ++t) REQUIRE(settling.testGrantUpgrade(regen));
+  REQUIRE(settling.testGrantUpgrade(stillBloom));
+  REQUIRE(settling.testGrantUpgrade(warmblood));
+  settling.testSetPlayerHp(settling.maxHealth() * 0.2F);
+  const float settlingBefore = settling.testPlayerHp();
+  settling.testAdvance(1.0F);
+  const float settlingGain = settling.testPlayerHp() - settlingBefore;
+  CAPTURE(settlingGain);
+  REQUIRE(settlingGain < base * 16.0F);
+  REQUIRE(settlingGain > base * 4.0F);
+}
+
+TEST_CASE("The mercy heal pays out once per injury, and a hit re-arms it") {
+  // "Heal to full after three seconds untouched" is the shape the design asked
+  // for by name. The detail that makes it a mechanic rather than a health bar
+  // that stops being a health bar is ONCE PER INJURY: you earn it by surviving
+  // something, and the next one has to be earned by nearly dying again.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  const int echo = [&content] {
+    for (std::size_t i = 0; i < content.upgrades.size(); ++i) {
+      if (content.upgrades[i].id == "m8_woundecho") return static_cast<int>(i);
+    }
+    return -1;
+  }();
+  REQUIRE(echo >= 0);
+
+  game::Game g{content, 51};
+  g.testDisableWaves();
+  g.testClearWeapons();
+  // Off with no card: a long quiet stretch must not heal anybody.
+  g.testSetPlayerHp(g.maxHealth() * 0.25F);
+  g.testAdvance(8.0F);
+  const float untouchedByNothing = g.testPlayerHp();
+  REQUIRE(untouchedByNothing == Catch::Approx(g.maxHealth() * 0.25F));
+
+  REQUIRE(g.testGrantUpgrade(echo));
+  // Both sides of the threshold, and the reason for asking is that three seconds
+  // of 1/60 additions lands at 2.99999 rather than 3.0 on some builds, so a test
+  // written at exactly 3.0s is asserting a knife edge. The rule is "three
+  // seconds", which means "not before three seconds" and "yes by three and a bit".
+  g.testSetPlayerHp(g.maxHealth() * 0.25F);
+  g.testAdvance(2.5F);
+  const float tooSoon = g.testPlayerHp();
+  CAPTURE(tooSoon);
+  REQUIRE(tooSoon == Catch::Approx(g.maxHealth() * 0.25F));
+  g.testAdvance(1.0F);
+  const float afterWait = g.testPlayerHp();
+  CAPTURE(afterWait);
+  REQUIRE(afterWait == Catch::Approx(g.maxHealth()));
+
+  // Once per injury. A long quiet stretch heals exactly once, because a repeating
+  // version is a health bar that stops mattering.
+  g.testSetPlayerHp(g.maxHealth() * 0.30F);
+  g.testAdvance(10.0F);
+  const float afterSecondQuiet = g.testPlayerHp();
+  CAPTURE(afterSecondQuiet);
+  REQUIRE(afterSecondQuiet == Catch::Approx(g.maxHealth() * 0.30F));
+
+  // And a hit re-arms it. This is the part that keeps the branch from being
+  // out-ranged: if the timer did not reset, a player could walk away from a fight
+  // and collect the heal for free, which would make the card an argument for
+  // running rather than for surviving.
+  g.testHurtPlayer(10.0F);
+  g.testAdvance(3.5F);
+  const float afterReArm = g.testPlayerHp();
+  CAPTURE(afterReArm);
+  REQUIRE(afterReArm == Catch::Approx(g.maxHealth()));
+
+  // A damage-over-time tick must NOT re-arm it, and that exclusion is deliberate:
+  // a DoT ticks every frame, so if it counted, standing inside your own fire
+  // would switch the branch off permanently -- found out in the worst possible
+  // moment. The same rule the kill chain already uses.
+  game::Game d{content, 51};
+  d.testDisableWaves();
+  d.testClearWeapons();
+  REQUIRE(d.testGrantUpgrade(echo));
+  d.testSetPlayerHp(d.maxHealth() * 0.30F);
+  d.testAdvance(1.0F);
+  d.testDirectPlayerDamage(1.0F);
+  d.testAdvance(3.5F);
+  const float afterDot = d.testPlayerHp();
+  CAPTURE(afterDot);
+  REQUIRE(afterDot == Catch::Approx(d.maxHealth()));
+
+  // The shield comes back with the health, because a mercy heal that left the
+  // buffer empty would hand the next hit straight through -- which is the exact
+  // opposite of the promise on the card.
+  game::Game s{content, 51};
+  s.testDisableWaves();
+  s.testClearWeapons();
+  const int aegis = [&content] {
+    for (std::size_t i = 0; i < content.upgrades.size(); ++i) {
+      if (content.upgrades[i].id == "m4_aegis") return static_cast<int>(i);
+    }
+    return -1;
+  }();
+  REQUIRE(aegis >= 0);
+  REQUIRE(s.testGrantUpgrade(aegis));
+  REQUIRE(s.testGrantUpgrade(echo));
+  s.testSetPlayerHp(s.maxHealth() * 0.30F);
+  s.testAdvance(3.5F);
+  REQUIRE(s.testPlayerHp() == Catch::Approx(s.maxHealth()));
+  const float shieldBack = s.testShield();
+  CAPTURE(shieldBack);
+  REQUIRE(shieldBack == Catch::Approx(s.shieldCap()));
+}
+
+TEST_CASE("A branch card cannot reach a run through any of the four doors") {
+  // Branches are gated in upgradeIsUsable, which every door goes through. A gate
+  // that only the screen you are looking at respects is a gate the chest will lie
+  // about three screens later, and the absolute fallback -- the thing that fires
+  // when the pool is dry and nobody is checking -- is exactly the door most likely
+  // to be forgotten.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  const auto find = [&content](const char* id) {
+    for (std::size_t i = 0; i < content.upgrades.size(); ++i) {
+      if (content.upgrades[i].id == id) return static_cast<int>(i);
+    }
+    return -1;
+  };
+  const int debt = find("m8_blooddebt");
+  const int pact = find("m4_crimson");
+  REQUIRE(debt >= 0);
+  REQUIRE(pact >= 0);
+
+  game::Game g{content, 71};
+  g.testDisableWaves();
+  g.testClearWeapons();
+
+  // Door one: the level-up pool. Four different levels, because a branch card is
+  // only relevant at its own level and a gate that only works at one level is a
+  // gate that will be found out at another.
+  for (const int level : {4, 8, 16, 32, 64, 128}) {
+    CAPTURE(level);
+    g.testSetLevel(level);
+    for (const auto& id : g.testChoiceIds()) {
+      REQUIRE(id != "m8_blooddebt");
+      REQUIRE(id != "m8_woundecho");
+      REQUIRE(id != "m16_thirstunbound");
+    }
+  }
+
+  // Door two: the chest pool. A chest may never give a milestone or a branch, but
+  // the predicate is asked anyway and a stale answer here would surface as a
+  // branch appearing in a box.
+  for (const int card : g.testLegalChestItems()) {
+    const auto& u = content.upgrades[static_cast<std::size_t>(card)];
+    REQUIRE(u.after.empty());
+  }
+
+  // Door three: the applier refuses it, which is what makes the test above
+  // meaningful rather than cosmetic. testGrantUpgrade deliberately bypasses
+  // eligibility for milestone reasons, so this one is a different door and needs
+  // its own line.
+  REQUIRE(g.testUpgradeUsable(debt) == false);
+  REQUIRE(g.testUpgradeUsable(pact));
+
+  // And once the parent is held, the branch is live everywhere. A gate that never
+  // opens is as broken as one that never closes.
+  REQUIRE(g.testGrantUpgrade(pact));
+  REQUIRE(g.testUpgradeUsable(debt));
+  REQUIRE(g.testUpgradeUsable(find("m8_woundecho")));
+  // ...but only ITS parent's, never another line's.
+  REQUIRE(g.testUpgradeUsable(find("m8_stillbloom")) == false);
+  REQUIRE(g.testUpgradeUsable(find("m8_bulwark")) == false);
+
+  g.testSetLevel(8);
+  int onScreen = 0;
+  for (const auto& id : g.testChoiceIds()) {
+    if (id == "m8_blooddebt" || id == "m8_woundecho") ++onScreen;
+  }
+  CAPTURE(onScreen);
+  REQUIRE(onScreen == 2);
 }
 
 TEST_CASE("The four on-hit marks are exclusive, real, and none of them is free") {
