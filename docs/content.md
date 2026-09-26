@@ -437,7 +437,7 @@ Shown in the game with **F1** (main menu, live run, or the pause screen). **17 p
 - `evolutions` — EVOLUTIONS (21 lines)
 - `abilities` — ABILITIES JKL (23 lines)
 - `stats` — YOUR STATS (32 lines)
-- `cards` — CARDS (27 lines)
+- `cards` — CARDS (39 lines)
 - `enemies` — ENEMIES (30 lines)
 - `sandbox` — TEST SANDBOX (19 lines)
 - `profile` — PROFILE (17 lines)
@@ -803,6 +803,18 @@ Shown in the game with **F1** (main menu, live run, or the pause screen). **17 p
     A WEAPON CARD ONLY APPEARS WHILE THAT
     WEAPON IS EQUIPPED.
 
+    # ITEM SLOTS
+    THE PLAIN STAT CARDS SHARE A BAR THAT
+    OPENS ONE SLOT AT A TIME:
+
+    L1:1 L2:2 L4:3 L8:4 L16:5 L32:6 L64:7 L128:8
+
+    ENGAGING A NEW AXIS SPENDS A SLOT. RE-
+    TAKING A CARD YOU ALREADY HOLD IS FREE:
+    THE BAR LIMITS HOW MANY AXES YOU ENGAGE,
+    NEVER HOW DEEP YOU LEAN INTO ONE. WEAPON
+    CARDS, TREASURES AND MILESTONES COST NO SLOT.
+
     # VIOLET UNIQUES
     ONE-TIME, RULE-CHANGING, RARE. EVERY
     WEAPON HAS AT LEAST ONE OF ITS OWN, SO
@@ -822,9 +834,9 @@ Shown in the game with **F1** (main menu, live run, or the pause screen). **17 p
     STACKING ON ITS OWN.
 
     # THE POOL NEVER DRIES UP
-    AN EXHAUSTED OR FULLY MAXED POOL FALLS
-    BACK TO THE FIRST STILL-APPLICABLE
-    CARD RATHER THAN LEAVING YOU STUCK.
+    WHEN EVERY AXIS IS SPENT AND MAXED A
+    TREASURE IS OFFERED FOR CERTAIN, SO A
+    LEVEL-UP IS NEVER JUST A CONTINUE.
 ```
 
 ### ENEMIES

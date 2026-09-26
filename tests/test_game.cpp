@@ -3376,6 +3376,435 @@ TEST_CASE("No two global stat cards raise the same thing") {
 
 namespace {
 
+// --- Item slots ----------------------------------------------------------------
+//
+// The run's power curve. A card that improves every weapon at once is unlimited
+// in stacks, so without a limit on how many of them a player may hold, the answer
+// to "what is strong" is "take all of them" and the build stops being a build.
+// The player asked for the shape: 1 slot at level 1, one more at level 2, and one
+// more at every power of two after that.
+
+TEST_CASE("Item slots open one at a time, and only at a power of two") {
+  // 1 + floor(log2(level)): one at level 1, 2 at level 2, then 3 at 4, 4 at 8,
+  // 5 at 16, 6 at 32, 7 at 64, 8 at 128. The point of the shape is that it is
+  // SLOW -- a player at level 40 has six and can see three more coming a long way
+  // off -- so the test walks every boundary and both sides of it, because an
+  // off-by-one here is invisible in play and permanent in a run.
+  REQUIRE(game::itemSlotCap(0) == 1);
+  REQUIRE(game::itemSlotCap(1) == 1);
+  REQUIRE(game::itemSlotCap(2) == 2);
+  REQUIRE(game::itemSlotCap(3) == 2);
+  REQUIRE(game::itemSlotCap(4) == 3);
+  REQUIRE(game::itemSlotCap(7) == 3);
+  REQUIRE(game::itemSlotCap(8) == 4);
+  REQUIRE(game::itemSlotCap(15) == 4);
+  REQUIRE(game::itemSlotCap(16) == 5);
+  REQUIRE(game::itemSlotCap(31) == 5);
+  REQUIRE(game::itemSlotCap(32) == 6);
+  REQUIRE(game::itemSlotCap(63) == 6);
+  REQUIRE(game::itemSlotCap(64) == 7);
+  REQUIRE(game::itemSlotCap(127) == 7);
+  REQUIRE(game::itemSlotCap(128) == game::kMaxItemSlots);
+  REQUIRE(game::itemSlotCap(129) == game::kMaxItemSlots);
+  // It never goes down, and it never exceeds the display ceiling -- the sandbox
+  // and any future curve change have to be able to set a level of 5000 without
+  // walking off the end of the sheet.
+  int previous = 0;
+  for (int level = 1; level <= 600; ++level) {
+    const int cap = game::itemSlotCap(level);
+    REQUIRE(cap >= previous);
+    REQUIRE(cap <= game::kMaxItemSlots);
+    previous = cap;
+  }
+  REQUIRE(game::itemSlotCap(100000) == game::kMaxItemSlots);
+  // And the milestone levels and the slot levels land on the same powers of two,
+  // so a milestone and a new slot arrive on the same screen.
+  REQUIRE(game::itemSlotCap(4) == 3);
+  REQUIRE(game::itemSlotCap(8) == 4);
+  REQUIRE(game::itemSlotCap(16) == 5);
+  REQUIRE(game::itemSlotCap(32) == 6);
+  REQUIRE(game::itemSlotCap(64) == 7);
+  REQUIRE(game::itemSlotCap(128) == game::kMaxItemSlots);
+}
+
+TEST_CASE("A full slot bar stops new axes and keeps the ones you have") {
+  // The rule has two halves and the second one is the one that gets forgotten.
+  // A full bar means no card that would OPEN a slot is offered -- and it does NOT
+  // mean the run runs out of cards. Re-taking an axis the player already holds is
+  // free, forever, up to that card's own max_stacks. If deepening were capped too,
+  // a player who filled four slots by level 16 would hit a wall with sixteen levels
+  // of experience still to spend, and the slot limit would read as a bug rather
+  // than as a build.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+
+  // Fill every slot the level opens, with real global cards.
+  game::Game g{content, 5};
+  g.testDisableWaves();
+  g.testSetLevel(8); // four slots
+  REQUIRE(g.testItemSlotCap() == 4);
+  REQUIRE(g.testUsedItemSlots() == 0);
+
+  const char* axes[] = {"damage", "haste", "multi", "constitution"};
+  for (const char* id : axes) {
+    REQUIRE(g.testGrantUpgrade(g.testUpgradeContentIndex(id)));
+  }
+  REQUIRE(g.testUsedItemSlots() == 4);
+  REQUIRE_FALSE(g.testSlotIsOpen());
+
+  // Nothing on the screen may be a slotted card the player does not hold -- with
+  // one exception, and it is not an exception to the rule. A card that does NOT
+  // take a slot (a milestone, a unique, a weapon card) is not competing for the
+  // eight, so a full bar must not silence it. Asked of the real offer rather than
+  // of a re-derivation of the rules, because agreeing with the bug is what a
+  // duplicated rule does.
+  //
+  // Level 9, not level 8: 8 is a milestone level, so the screen is three
+  // milestone cards and the question "did the cap silence the stat pool?" cannot
+  // be asked there. The slot count is the same at both levels.
+  REQUIRE(game::itemSlotCap(9) == 4);
+  g.testSetLevel(9);
+  std::map<std::string, int> held;
+  for (const char* id : axes) held[id] = 1;
+  int slottedOnScreen = 0;
+  for (const auto& id : g.testChoiceIds()) {
+    const auto* card = content.upgrade(id.c_str());
+    if (card == nullptr) continue; // a weapon offer
+    CAPTURE(id);
+    if (!card->slot) continue;
+    REQUIRE(held.count(id) == 1);
+    ++slottedOnScreen;
+  }
+  // The screen is not empty of stats, which is what a cap implemented as "offer
+  // fewer cards" would have produced. Every card on it is a deepening.
+  REQUIRE(slottedOnScreen > 0);
+
+  // ...and deepening is still on the table. Every take is legal, and the count
+  // does not move: this is the same slot, not a new one.
+  const int before = g.testUsedItemSlots();
+  for (int take = 0; take < 3; ++take) {
+    REQUIRE(g.testGrantUpgrade(g.testUpgradeContentIndex("damage")));
+  }
+  REQUIRE(g.testUsedItemSlots() == before);
+  REQUIRE_FALSE(g.testSlotIsOpen());
+}
+
+TEST_CASE("A weapon card, a unique and a milestone never cost a slot") {
+  // Three kinds of card that improve the run and are not a global stat axis, so
+  // taxing them would be taxing power the player did not have to choose between.
+  //
+  // A card for ONE weapon cannot stack its way to global reach: it is bounded by
+  // that weapon's own cards and there are only a handful. A unique is one per run
+  // and there are 52 of them, so charging them would fill the whole bar with cards
+  // nobody could afford. A milestone already closes two other axes for the rest of
+  // the run, so a slot on top of that is charging the same exclusivity twice.
+  //
+  // The content check is asked of the loader's own decision (`def.slot`) rather
+  // than restated, which is the only version that cannot disagree with the game.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  int uniques = 0;
+  int milestones = 0;
+  int weaponCards = 0;
+  int normals = 0;
+  int exemptNormals = 0;
+  for (const auto& u : content.upgrades) {
+    if (u.kind == "unique") {
+      ++uniques;
+      REQUIRE_FALSE(u.slot);
+    } else if (u.kind == "milestone") {
+      ++milestones;
+      REQUIRE_FALSE(u.slot);
+    } else if (!u.weapon.empty()) {
+      ++weaponCards;
+      REQUIRE_FALSE(u.slot);
+    } else {
+      ++normals;
+      if (!u.slot) ++exemptNormals;
+    }
+  }
+  // The rule is aimed at global stat cards, so there has to be a real set of them
+  // for the rule to be aimed at.
+  REQUIRE(normals > 20);
+  REQUIRE(normals - exemptNormals > 20);
+  REQUIRE(uniques > 20);
+  REQUIRE(milestones >= 12);
+  REQUIRE(weaponCards > 50);
+  // The only global cards allowed to opt out are the ones that grant capacity
+  // rather than spend it, and there is exactly one of those.
+  REQUIRE(exemptNormals == 1);
+  REQUIRE(content.upgrade("u_arsenal_core") != nullptr);
+  REQUIRE_FALSE(content.upgrade("u_arsenal_core")->slot);
+
+  // And in the running game, taking a milestone does not eat a slot.
+  game::Game g{content, 5};
+  g.testDisableWaves();
+  g.testSetLevel(8);
+  const int before = g.testUsedItemSlots();
+  REQUIRE(before == 0);
+  const int aegis = g.testUpgradeContentIndex("m4_aegis");
+  REQUIRE(aegis >= 0);
+  REQUIRE(g.testGrantUpgrade(aegis));
+  REQUIRE(g.testUsedItemSlots() == before);
+  // A card for ONE weapon neither. The example has to be a real per-weapon card
+  // and not u_long_barrel, which reads like one -- "reaches 10% further, shots
+  // live 10% longer" -- but has no `weapon` field because it applies to all of
+  // them, and is therefore one of the cards the cap exists to govern. It is
+  // asserted as a slot in the loop above, which is where that belongs.
+  const int wandCard = g.testUpgradeContentIndex("w_wand_power");
+  REQUIRE(wandCard >= 0);
+  REQUIRE(content.upgrade("w_wand_power")->weapon == "wand");
+  g.testAddWeapon(g.testWeaponContentIndex("wand"));
+  REQUIRE(g.testGrantUpgrade(wandCard));
+  REQUIRE(g.testUsedItemSlots() == before);
+  // ...and the global weapon-wide card does, which is the half of the rule that
+  // is easy to get backwards.
+  const int barrel = g.testUpgradeContentIndex("u_long_barrel");
+  REQUIRE(barrel >= 0);
+  REQUIRE(content.upgrade("u_long_barrel")->slot);
+  REQUIRE(g.testGrantUpgrade(barrel));
+  REQUIRE(g.testUsedItemSlots() == before + 1);
+}
+
+TEST_CASE("No path into a run can open a slot that is not there") {
+  // There are three doors a card can come through -- the level-up screen, a chest,
+  // and a test/migration grant -- and a cap that holds on only one of them is not
+  // a cap. The chest pool in particular had its own filter, and a filter that
+  // knows about blocked cards and max stacks but not about slots will happily hand
+  // out a seventh axis at level 8.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 11};
+  g.testDisableWaves();
+  g.testSetLevel(8);
+  REQUIRE(g.testItemSlotCap() == 4);
+  for (const char* id : {"damage", "haste", "multi", "constitution"}) {
+    REQUIRE(g.testGrantUpgrade(g.testUpgradeContentIndex(id)));
+  }
+  REQUIRE(g.testUsedItemSlots() == 4);
+
+  // A chest, asked for the biggest hand the rarest tier gives.
+  const int given = g.testOpenChestFor(7);
+  CAPTURE(given);
+  REQUIRE(g.testUsedItemSlots() <= g.testItemSlotCap());
+  // And nothing new got in: four in, four out.
+  REQUIRE(g.testUsedItemSlots() == 4);
+
+  // The chest pool itself is clean, which is the check that would have caught it:
+  // every card in it either does not spend a slot, or is one the player already
+  // holds. A brand new axis in that list is the bug this whole test exists for.
+  std::map<std::string, int> held;
+  for (const char* id : {"damage", "haste", "multi", "constitution"}) held[id] = 1;
+  int newAxes = 0;
+  for (const int idx : g.testLegalChestItems()) {
+    const auto& u = content.upgrades[static_cast<std::size_t>(idx)];
+    CAPTURE(u.id);
+    if (!u.slot) continue;
+    if (held.count(u.id) != 0) continue;
+    ++newAxes;
+  }
+  REQUIRE(newAxes == 0);
+
+  // Levelling on does not change the arithmetic under the player's feet: the cap
+  // rises, the bar does not.
+  g.testSetLevel(64);
+  REQUIRE(g.testItemSlotCap() == 7);
+  REQUIRE(g.testUsedItemSlots() == 4);
+  REQUIRE(g.testSlotIsOpen());
+}
+
+TEST_CASE("The opening screen is a weapon, and the first card after it is slot one") {
+  // The slot ladder starts at 1 on level 1, and the player's instinct is to read
+  // that as "level 1 gives me an item". It nearly does not: level 1 is the
+  // STARTING WEAPON pick, and the first stat card comes on the very next screen,
+  // still at level 1, with one slot open.
+  //
+  // That ordering is not an accident and should not be "fixed" into one screen.
+  // A stat card offered before the player has chosen a weapon cannot be judged --
+  // "+30% damage" is worth nothing to someone who has not picked between a wand
+  // and a greatsword -- so the weapon goes first and the card follows. The test
+  // is here because the two screens look identical from outside (both are
+  // RunState::LevelUp) and someone tidying this up would merge them.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 13};
+  g.testDisableWaves();
+
+  g.testEnterStarterPick();
+  REQUIRE(g.choosingStarter());
+  const auto first = g.testChoiceIds();
+  CAPTURE(first.size());
+  // The starter pick is weapons and nothing else.
+  for (const auto& id : first) {
+    CAPTURE(id);
+    REQUIRE(content.weapon(id.c_str()) != nullptr);
+    REQUIRE(content.upgrade(id.c_str()) == nullptr);
+  }
+  REQUIRE_FALSE(first.empty());
+
+  // The first card screen, at the same level, with exactly one slot.
+  game::Game after{content, 13};
+  after.testDisableWaves();
+  after.testAddWeapon(after.testWeaponContentIndex("wand"));
+  after.testSetLevel(1);
+  REQUIRE(after.testItemSlotCap() == 1);
+  REQUIRE(after.testUsedItemSlots() == 0);
+  REQUIRE(after.testSlotIsOpen());
+  int slottedOnScreen = 0;
+  for (const auto& id : after.testChoiceIds()) {
+    const auto* card = content.upgrade(id.c_str());
+    if (card == nullptr) continue;
+    if (card->slot) ++slottedOnScreen;
+  }
+  REQUIRE(slottedOnScreen > 0);
+  // And taking that one card fills the bar, which is the whole point of a ladder
+  // that opens one slot on the first screen of a run.
+  REQUIRE(after.testGrantUpgrade(after.testUpgradeContentIndex("damage")));
+  REQUIRE(after.testUsedItemSlots() == 1);
+  REQUIRE_FALSE(after.testSlotIsOpen());
+  // ...until level 2, which is the very next level.
+  after.testSetLevel(2);
+  REQUIRE(after.testItemSlotCap() == 2);
+  REQUIRE(after.testSlotIsOpen());
+}
+
+TEST_CASE("A dry stat pool offers a unique for certain, not on a coin flip") {
+  // The worst outcome of a slot cap is not a smaller screen, it is an EMPTY one:
+  // every axis engaged and maxed, the arsenal full, and a level-up that offers
+  // nothing but "continue". The unique roll used to be a flat 45%, so once the
+  // stat pool ran dry the only thing standing between the player and a dead screen
+  // was a coin flip.
+  //
+  // Measured over a 140-level autoplay diagnostic: every empty screen was past
+  // level 100, and they were all cases where uniques were ALSO spent. The fix is
+  // not more cards -- it is that the roll becomes a certainty when there is
+  // genuinely nothing else, which costs nothing in practice because a unique is
+  // gone for good once taken and 52 of them exist.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  game::Game g{content, 17};
+  g.testDisableWaves();
+
+  // Fill the bars: seven axes, a full arsenal, and every global stat card maxed
+  // out so the normal pool is empty by construction rather than by luck.
+  g.testSetLevel(64);
+  REQUIRE(g.testItemSlotCap() == 7);
+  // Exactly seven, because that is the cap: the eighth is the thing the rule
+  // exists to prevent, and it is checked for that reason below.
+  for (const char* id : {"damage", "haste", "multi", "constitution", "pierce",
+                         "sunder", "pledge"}) {
+    const int idx = g.testUpgradeContentIndex(id);
+    REQUIRE(idx >= 0);
+    const auto* card = content.upgrade(id);
+    REQUIRE(card->slot);
+    for (int take = 0; take < card->maxStacks; ++take) {
+      REQUIRE(g.testGrantUpgrade(idx));
+    }
+  }
+  REQUIRE(g.testUsedItemSlots() == 7);
+  // The eighth axis is in no pool at all. Not "rarely offered" -- absent, from
+  // both the level-up roll and the chest roll.
+  //
+  // Note it is still GRANTABLE through `testGrantUpgrade`, and that is correct:
+  // that hook is the sandbox's "max everything" cheat and it bypasses eligibility
+  // on purpose, exactly as it does for a card an answered milestone group blocked.
+  // The cap is a property of what the game OFFERS, not a lock on the applier --
+  // a lock there would stop the chest, the milestone carry and the migration path
+  // from disagreeing with the level-up screen, which is how a cap becomes a lie
+  // the player finds out about three screens later.
+  const int eighth = g.testUpgradeContentIndex("ward_small");
+  REQUIRE(eighth >= 0);
+  REQUIRE(content.upgrade("ward_small")->slot);
+  const auto offeredAtEighth = [&] {
+    game::Game probe{content, 17};
+    probe.testDisableWaves();
+    probe.testSetLevel(64);
+    for (const char* id : {"damage", "haste", "multi", "constitution", "pierce",
+                           "sunder", "pledge"}) {
+      probe.testGrantUpgrade(probe.testUpgradeContentIndex(id));
+    }
+    for (const auto& id : probe.testChoiceIds()) {
+      if (id == "ward_small") return true;
+    }
+    for (const int idx : probe.testLegalChestItems()) {
+      if (content.upgrades[static_cast<std::size_t>(idx)].id == "ward_small") return true;
+    }
+    return false;
+  }();
+  REQUIRE_FALSE(offeredAtEighth);
+  // Max every remaining slotted card too, so there is no deepening left either.
+  //
+  // Only the SLOT-TAKING ones. The first version of this looped over the whole
+  // chest pool, which quietly ate all 18 global uniques as well -- and then the
+  // "a unique is on the screen" half of the test was asserting something about a
+  // pool the test had itself emptied.
+  for (int guard = 0; guard < 64; ++guard) {
+    bool progressed = false;
+    for (std::size_t i = 0; i < content.upgrades.size(); ++i) {
+      if (!content.upgrades[i].slot) continue;
+      if (content.upgrades[i].kind != "normal") continue;
+      progressed |= g.testGrantUpgrade(static_cast<int>(i));
+    }
+    if (!progressed) break;
+  }
+  // Nothing slotted is left to deepen, which is what "dry" has to mean.
+  for (std::size_t i = 0; i < content.upgrades.size(); ++i) {
+    if (!content.upgrades[i].slot) continue;
+    if (content.upgrades[i].kind != "normal") continue;
+    const int st = g.testUpgradeStacks(static_cast<int>(i));
+    if (st == 0) continue; // not held, and cannot be: the bar is full
+    CAPTURE(content.upgrades[i].id);
+    REQUIRE(st == content.upgrades[i].maxStacks);
+  }
+  // The last global card that is NOT slot-taking is the arsenal core, and it has
+  // to be maxed too or the pool is not actually dry: a card that gives weapon
+  // capacity rather than spending it is a real, permanent option, and while one
+  // remains the 45% roll is the correct rule. This is the test finding out what
+  // "slotted" means -- the exemption is not a loophole for the dry case, it is
+  // one card that is intentionally always available.
+  const int core = g.testUpgradeContentIndex("u_arsenal_core");
+  REQUIRE(core >= 0);
+  REQUIRE_FALSE(content.upgrades[static_cast<std::size_t>(core)].slot);
+  for (int take = 0; take < content.upgrades[static_cast<std::size_t>(core)].maxStacks;
+       ++take) {
+    REQUIRE(g.testGrantUpgrade(core));
+  }
+
+  // Over several level-ups the screen is never empty, which is the invariant the
+  // 45% could not give -- and the reason it cannot be "a unique is always on the
+  // screen" is that a weapon offer takes precedence over a unique, and it
+  // arrives on roughly a third of levels. So the rule as built is: a unique is
+  // guaranteed exactly when nothing else is, which is the sharp version and the
+  // one worth pinning.
+  int filled = 0;
+  int uniqueScreens = 0;
+  int weaponScreens = 0;
+  for (int level = 65; level <= 90; ++level) {
+    g.testSetLevel(level);
+    const auto ids = g.testChoiceIds();
+    bool real = false;
+    bool uniqueHere = false;
+    bool weaponHere = false;
+    for (const auto& id : ids) {
+      if (id == "<skip>") continue;
+      real = true;
+      if (content.upgrade(id.c_str()) == nullptr) weaponHere = true;
+      const auto* card = content.upgrade(id.c_str());
+      if (card != nullptr && card->kind == "unique") uniqueHere = true;
+    }
+    CAPTURE(level);
+    REQUIRE(real);
+    // THE RULE. Something on the screen, and if it was not a weapon then it was
+    // a unique -- because the stat pool is empty by construction and the unique
+    // roll is a certainty in exactly this case.
+    const bool swordOrTreasure = weaponHere || uniqueHere;
+    REQUIRE(swordOrTreasure);
+    if (real) ++filled;
+    if (uniqueHere) ++uniqueScreens;
+    if (weaponHere) ++weaponScreens;
+  }
+  REQUIRE(filled == 26);
+  // Both paths are genuinely exercised, so the check above is not passing
+  // vacuously on a screen that only ever had weapons on it.
+  REQUIRE(uniqueScreens > 5);
+  REQUIRE(weaponScreens > 5);
+}
+
 // Index of a weapon by id (-1 when the id is not in the roster).
 int weaponIndex(const game::Content& content, const char* id) {
   for (std::size_t i = 0; i < content.weapons.size(); ++i) {

@@ -248,6 +248,20 @@ int tierEventCap(int tier) {
   return (tier >= 1 && tier < 4) ? Game::kTierLiveCap[static_cast<std::size_t>(tier)] : 0;
 }
 
+int itemSlotCap(int level) {
+  // 1 + floor(log2(level)), by counting powers of two rather than calling log2:
+  // an int loop cannot disagree with itself at a boundary, and level 1 is the
+  // case that matters (log2(1) is 0, so the answer is 1 -- one slot, offered on
+  // the same screen as the starting weapon).
+  if (level < 1) return 1;
+  int slots = 1;
+  for (int step = 2; step <= level; step *= 2) {
+    if (slots >= kMaxItemSlots) break;
+    ++slots;
+  }
+  return std::min(slots, kMaxItemSlots);
+}
+
 // The rate at which a tier is being handled right now, above which the next
 // arrival comes as a group rather than a pair.
 //
@@ -4820,12 +4834,18 @@ std::vector<int> Game::legalWeaponCards(int weaponSlot) const {
 // cards whose weapon is not equipped, which would be dead picks.
 std::vector<int> Game::legalItemCards() const {
   std::vector<int> out;
+  // A chest may not open a slot either. The chest pool is one of the three ways
+  // a card reaches a run (level-up, chest, milestone) and the cap has to hold for
+  // all of them, or the rule is only true on the screen where it is easiest to
+  // see it broken.
+  const bool openSlot = slotIsOpen();
   for (std::size_t i = 0; i < content_.upgrades.size(); ++i) {
     const auto& u = content_.upgrades[i];
     if (u.kind == "milestone" || !u.weapon.empty()) continue;
     if (blocked_[i]) continue;
     if (stacks_[i] >= u.maxStacks) continue;
     if (!upgradeIsUsable(static_cast<int>(i))) continue;
+    if (u.slot && stacks_[i] == 0 && !openSlot) continue;
     out.push_back(static_cast<int>(i));
   }
   return out;
@@ -6062,6 +6082,23 @@ void Game::buildStarterChoices() {
   }
 }
 
+int Game::usedItemSlots() const {
+  // Counted, never stored. A counter is a second copy of a fact the stacks
+  // already hold, and the two drift the moment a card is granted through a path
+  // that forgot to bump it -- which is how a run ends up telling the player it
+  // has a free slot it does not have, or hiding a full one. 160 cards, once per
+  // level-up, is not a cost worth optimising away.
+  int used = 0;
+  for (std::size_t i = 0; i < content_.upgrades.size(); ++i) {
+    if (content_.upgrades[i].slot && stacks_[i] > 0) ++used;
+  }
+  return used;
+}
+
+bool Game::slotIsOpen() const {
+  return usedItemSlots() < itemSlotCap(level_);
+}
+
 void Game::buildChoices() {
   choices_.clear();
   std::uniform_real_distribution<float> unit(0.0F, 1.0F);
@@ -6212,23 +6249,9 @@ void Game::buildChoices() {
     }
   }
 
-  // A unique treasure card can replace the weapon offer.
-  if (choices_.empty() || choices_.front().kind == Choice::Kind::Upgrade) {
-    std::vector<int> uniques;
-    for (std::size_t i = 0; i < content_.upgrades.size(); ++i) {
-      const auto& u = content_.upgrades[i];
-      if (u.kind != "unique" || stacks_[i] >= u.maxStacks || blocked_[i]) continue;
-      // A weapon's unique item only makes sense if that weapon is equipped.
-      if (!u.weapon.empty() && findWeaponSlot(u.weapon) < 0) continue;
-      uniques.push_back(static_cast<int>(i));
-    }
-    if (!uniques.empty() && unit(rng_) < 0.45F) {
-      std::shuffle(uniques.begin(), uniques.end(), rng_);
-      choices_.push_back({Choice::Kind::Upgrade, uniques[0]});
-    }
-  }
-
-  // Normal pool fills the remaining cards.
+  // The normal pool is collected BEFORE the unique roll, not after, because the
+  // roll has to be able to ask whether there is anything else to offer.
+  const bool openSlot = slotIsOpen();
   std::vector<int> normals;
   normals.reserve(content_.upgrades.size());
   for (std::size_t i = 0; i < content_.upgrades.size(); ++i) {
@@ -6240,9 +6263,51 @@ void Game::buildChoices() {
     // be the thing every pool goes through rather than a guard on one path.
     if (blocked_[i]) continue;
     if (!u.weapon.empty() && findWeaponSlot(u.weapon) < 0) continue;
+    // THE SLOT RULE. A slotted card the player does not already hold would open
+    // a new slot, and there is a fixed number of those. A card they DO already
+    // hold is free: re-taking Whetstone deepens an axis the player already chose,
+    // which is the other half of the promise -- the limit is on how many axes you
+    // may engage, never on how deep you may lean into one.
+    //
+    // It is checked here, on the pool, rather than on the pick. Offering a card
+    // the player cannot take is the same defect as offering a weapon-specific
+    // card for a weapon they do not own: the card looks real, reads real, and
+    // selecting it does nothing.
+    if (u.slot && stacks_[i] == 0 && !openSlot) continue;
     normals.push_back(static_cast<int>(i));
   }
   std::shuffle(normals.begin(), normals.end(), rng_);
+
+  // A unique treasure card can replace the weapon offer.
+  //
+  // The 45% is the rarity of a unique, and it is the right number while the stat
+  // pool has something in it. It is the wrong number when the pool is EMPTY: the
+  // slot cap means a run that has engaged and maxed every axis it has room for
+  // runs out of stat cards, and at that point a coin-flip is what stands between
+  // the player and a level-up screen with nothing on it but a "continue". That is
+  // the worst possible outcome of the cap -- not a smaller screen, an EMPTY one --
+  // so the roll is a certainty when there is genuinely nothing else. Measured
+  // over a 140-level diagnostic, this is the difference between 38 dead screens
+  // and none, and it costs nothing: 52 uniques exist and every one of them is
+  // gone for good once taken, so "offer one when there is nothing else" cannot
+  // flood a run with uniques.
+  if (choices_.empty() || choices_.front().kind == Choice::Kind::Upgrade) {
+    std::vector<int> uniques;
+    for (std::size_t i = 0; i < content_.upgrades.size(); ++i) {
+      const auto& u = content_.upgrades[i];
+      if (u.kind != "unique" || stacks_[i] >= u.maxStacks || blocked_[i]) continue;
+      // A weapon's unique item only makes sense if that weapon is equipped.
+      if (!u.weapon.empty() && findWeaponSlot(u.weapon) < 0) continue;
+      uniques.push_back(static_cast<int>(i));
+    }
+    if (!uniques.empty() && (normals.empty() || unit(rng_) < 0.45F)) {
+      // Shuffled even though only the first is taken, because the walk order is
+      // content order and without it the same unique would be the only one ever
+      // offered until it was maxed.
+      std::shuffle(uniques.begin(), uniques.end(), rng_);
+      choices_.push_back({Choice::Kind::Upgrade, uniques[0]});
+    }
+  }
 
   const std::size_t want = static_cast<std::size_t>(std::max(1, baseChoices));
   std::size_t fill = want > choices_.size() ? want - choices_.size() : 0;
@@ -6254,11 +6319,13 @@ void Game::buildChoices() {
   // Absolute fallback so a level-up never bricks silently. Only cards that can
   // ACTUALLY be applied are eligible: a weapon-specific card whose weapon is not
   // equipped used to be picked here, and choosing it silently failed, leaving
-  // the player on the level-up screen forever.
+  // the player on the level-up screen forever. The slot rule is the same kind of
+  // eligibility, so it gets the same kind of check.
   if (choices_.empty()) {
     for (std::size_t i = 0; i < content_.upgrades.size(); ++i) {
       if (stacks_[i] >= content_.upgrades[i].maxStacks || blocked_[i]) continue;
       if (!upgradeIsUsable(static_cast<int>(i))) continue;
+      if (content_.upgrades[i].slot && stacks_[i] == 0 && !openSlot) continue;
       choices_.push_back({Choice::Kind::Upgrade, static_cast<int>(i)});
       break;
     }
@@ -8077,6 +8144,23 @@ int Game::testUpgradeContentIndex(std::string_view id) const {
   return -1;
 }
 
+std::vector<std::string> Game::testChoiceIds() const {
+  std::vector<std::string> ids;
+  ids.reserve(choices_.size());
+  for (const auto& c : choices_) {
+    if (c.kind == Choice::Kind::Upgrade &&
+        static_cast<std::size_t>(c.index) < content_.upgrades.size()) {
+      ids.push_back(content_.upgrades[static_cast<std::size_t>(c.index)].id);
+    } else if (c.kind == Choice::Kind::Weapon &&
+               static_cast<std::size_t>(c.index) < content_.weapons.size()) {
+      ids.push_back(content_.weapons[static_cast<std::size_t>(c.index)].id);
+    } else {
+      ids.push_back("<skip>");
+    }
+  }
+  return ids;
+}
+
 void Game::testOpenFirstChest() {
   auto view = registry_.view<Chest>();
   if (view.empty()) return;
@@ -9104,6 +9188,37 @@ void Game::renderPlayerStats(core::render::Batcher& b, float px, float py) {
   rows.push_back(speedRow);
   rows.push_back("PROJECTILES +" + std::to_string(stats_.projAdd) + "   PIERCE +" +
                  std::to_string(stats_.pierceAdd));
+  {
+    // The item slots, and what is in them. This is the run's power curve, so it
+    // belongs on the sheet next to the numbers it produced -- a player who cannot
+    // see why the level-up screen stopped offering a sixth stat cannot tell a
+    // full build from a finished one.
+    //
+    // The names are the whole point. "ITEM SLOTS 6/8" tells the player they are
+    // capped; it does not tell them that the two axes they wanted are the two
+    // they did not buy, which is the decision the next four levels are about. The
+    // empty slots are printed as "EMPTY" so a half-empty bar reads as unfinished
+    // rather than as a smaller number.
+    std::string slotRow = "ITEM SLOTS " + std::to_string(usedItemSlots()) + "/" +
+                          std::to_string(itemSlotCap(level_)) + "  ";
+    std::vector<std::string> names;
+    for (std::size_t i = 0; i < content_.upgrades.size(); ++i) {
+      if (!content_.upgrades[i].slot || stacks_[i] <= 0) continue;
+      names.push_back(content_.upgrades[i].name + "x" + std::to_string(stacks_[i]));
+    }
+    for (int s = static_cast<int>(names.size()); s < itemSlotCap(level_); ++s) {
+      names.emplace_back("EMPTY");
+    }
+    if (names.empty()) {
+      slotRow += "NONE";
+    } else {
+      for (std::size_t k = 0; k < names.size(); ++k) {
+        if (k > 0) slotRow += ", ";
+        slotRow += names[k];
+      }
+    }
+    rows.push_back(slotRow);
+  }
   {
     // The three buttons, with what the build has done to them. Printed even at
     // their base numbers: they are always available, and a player who has never

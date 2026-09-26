@@ -400,11 +400,19 @@ Content loadContent(const std::filesystem::path& dir) {
       def.weapon = (*t)["weapon"].value<std::string>().value_or("");
       def.level = static_cast<int>((*t)["level"].value_or(0));
       def.group = (*t)["group"].value_or(std::string());
-      // A unique is a once-per-run treasure, not a stacking stat axis, so it
-      // never spends a slot. Everything else does unless the file says otherwise
-      // -- see the `slot` field's comment in content.hpp for why the limit is
-      // aimed at global stat cards specifically.
-      def.slot = (*t)["slot"].value_or(def.kind != "unique");
+      // Only a GLOBAL card can occupy an item slot: kind "normal", and no weapon
+      // of its own. A card for one weapon is `kind = "normal"` too, and keying the
+      // rule off `kind` alone charged all 92 of them -- which is the exact
+      // mistake this comment exists to prevent, because a per-weapon card is the
+      // one kind of upgrade that provably cannot stack its way to global reach.
+      //
+      // A unique is a once-per-run treasure and a milestone already closes two
+      // other axes for the rest of the run, so neither competes for the eight
+      // slots: charging them would fill the pool with cards nobody could take, and
+      // charging a milestone would bill the player twice for the same exclusivity.
+      // Everything else does, unless the file says otherwise; see the `slot`
+      // field's comment in content.hpp for what the limit is actually for.
+      def.slot = (*t)["slot"].value_or(def.kind == "normal" && def.weapon.empty());
       content.upgrades.push_back(std::move(def));
     }
   }

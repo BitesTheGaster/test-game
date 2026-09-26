@@ -345,6 +345,35 @@ constexpr float kChainSkyDrop = 4.2F;
 // never exceed the number the ladder can carry.
 [[nodiscard]] int tierEventCap(int tier);
 
+// The ITEM SLOT ladder, and how many slots a given level opens up.
+//
+// This is the run's power curve. A card that improves EVERY weapon at once --
+// damage, fire rate, projectile count, max HP, pierce -- is unlimited in stacks,
+// so without a limit on how many of them a player may hold, the answer to "what
+// is strong in this game" is "take all of them" and the build stops being a
+// build. The limit is deliberately slow: one slot at level 1, one more at level
+// 2, and then one more at every power of two, so eight slots exist at level 128
+// and a player who reaches level 40 has six. The player is meant to spend the
+// first twenty levels discovering that the sixth best stat is not available to
+// them.
+//
+// The shape is `1 + floor(log2(level))`, which is 1 at level 1, 2 at level 2,
+// 3 at level 4, 4 at level 8, 5 at 16, 6 at 32, 7 at 64 and 8 at 128. Free
+// function and not a member because the pause sheet, the level-up screen, the
+// chest roll and the tests all need the same answer and none of them should own
+// a private copy of the arithmetic.
+//
+// Note what does NOT spend a slot, because each of these is unlimited anyway and
+// taxing them would be a tax on power the player did not have to choose: a card
+// for one weapon (it cannot stack its way to global reach), a unique (one per run,
+// and there are 52 of them), a milestone (it already closes two other axes), and
+// anything the data file marks `slot = false`.
+[[nodiscard]] int itemSlotCap(int level);
+// The hard ceiling on the ladder. Eight is where the curve above lands at level
+// 128, which is a level almost nobody reaches; the cap exists so a sandbox or a
+// future curve change cannot walk off the end of the display.
+inline constexpr int kMaxItemSlots = 8;
+
 // Where the sky end of a chain bolt's drop is, and how far down it has got.
 //
 // The two ends of one lightning effect, in one function, because they used to be
@@ -786,6 +815,12 @@ public:
   // sides if the weapon side is not empty -- and each was otherwise re-deriving
   // that by snapshotting slot 0 and hoping.
   [[nodiscard]] int testWeaponCount() const { return weaponCount_; }
+  [[nodiscard]] int testWeaponCap() const { return weaponCap(); }
+  // Test helper: jump straight into the opening weapon pick, the way the first
+  // frame of a real run does. `testSetLevel` deliberately does NOT reach it --
+  // it calls buildChoices() -- so a test that wants to know what the FIRST screen
+  // of a run looks like has no way to get there without this.
+  void testEnterStarterPick() { enterStarterPick(); }
   // Test helper: a comparable copy of one weapon slot's whole CONFIGURABLE stat
   // block, so a test can assert that taking a card actually MOVED something
   // instead of silently doing nothing. Comparing two snapshots with == covers
@@ -966,6 +1001,22 @@ public:
   // Test helper: content index of the weapon with this id (-1 if unknown), so a
   // test can add a NAMED weapon instead of trusting a row order.
   [[nodiscard]] int testWeaponContentIndex(std::string_view id) const;
+  // Test helpers for the item-slot ladder. `testItemSlotCap` is asked of the free
+  // function so a test cannot pass against a private copy of the arithmetic, and
+  // `testChoiceIds` returns what is actually on the level-up screen so a test can
+  // ask the real question -- "is a card I have no room for being offered?" --
+  // instead of re-deriving the offer rules and agreeing with the bug.
+  [[nodiscard]] int testItemSlotCap() const { return itemSlotCap(level_); }
+  [[nodiscard]] int testUsedItemSlots() const { return usedItemSlots(); }
+  [[nodiscard]] bool testSlotIsOpen() const { return slotIsOpen(); }
+  [[nodiscard]] std::vector<std::string> testChoiceIds() const;
+  // Is this weapon equipped right now. Distinct from testWeaponContentIndex,
+  // which answers "does this weapon exist in the content" and is therefore always
+  // true -- a test that asked the wrong one to mean "do I own it" would report a
+  // full arsenal for a run that owns nothing.
+  [[nodiscard]] bool testOwnsWeapon(std::string_view id) const {
+    return findWeaponSlot(id) >= 0;
+  }
   // Test helper: which effect ids belong to the weapon-wide set. Public so the
   // effect-coverage test asks the applier instead of keeping its own copy of the
   // list -- which is exactly how a card ships that prints a promise and does
@@ -991,6 +1042,10 @@ public:
   [[nodiscard]] std::vector<int> testLegalWeaponCards(int slot) const {
     return legalWeaponCards(slot);
   }
+  // Test helper: every card a chest could hand out right now, as content indices.
+  // Public so the slot test can ask the chest pool directly rather than trusting
+  // that a chest which behaved correctly did not also contain a seventh axis.
+  [[nodiscard]] std::vector<int> testLegalChestItems() const { return legalItemCards(); }
   // Test helper: open the first chest on the floor and remove it, which is what
   // the pickup does.
   void testOpenFirstChest();
@@ -1047,6 +1102,15 @@ public:
   [[nodiscard]] bool testUpgradeBlocked(int index) const {
     return index < 0 || static_cast<std::size_t>(index) >= blocked_.size() ||
            blocked_[static_cast<std::size_t>(index)] != 0;
+  }
+  // Test helper: how many stacks a card currently has. The slot rule turns on
+  // exactly this being zero or not -- a slotted card at zero would open a new
+  // slot, one above zero is a deepening -- so a test needs to ask the game rather
+  // than keep its own tally of what it granted.
+  [[nodiscard]] int testUpgradeStacks(int index) const {
+    return index < 0 || static_cast<std::size_t>(index) >= stacks_.size()
+               ? 0
+               : stacks_[static_cast<std::size_t>(index)];
   }
   // Test helper: the speed multiplier each body is currently pinned to (its own
   // slowMul while a chill is running, 1.0 otherwise), and the chill's seconds
@@ -1740,10 +1804,20 @@ private:
   // `weaponSlot` and not yet maxed.
   [[nodiscard]] std::vector<int> legalWeaponCards(int weaponSlot) const;
   // Every ITEM card a box may hand out: no weapon of its own, not a milestone,
-  // not blocked by an answered milestone group, not maxed, and usable as things
-  // stand. This is the half of a chest that improves the run rather than one
-  // weapon -- health, shields, the on-hit marks, the weapon-wide items.
+  // not blocked by an answered milestone group, not maxed, usable as things
+  // stand, and -- if it takes a slot and the player does not hold it -- only when
+  // a slot is actually open. This is the half of a chest that improves the run
+  // rather than one weapon: health, shields, the on-hit marks, the weapon-wide
+  // items.
   [[nodiscard]] std::vector<int> legalItemCards() const;
+
+  // --- Item slots --------------------------------------------------------------
+  //
+  // How many of the eight slots are spoken for, and whether there is room for one
+  // more. Derived from the stacks on every call rather than kept in a counter,
+  // because a counter is a second copy of a fact the stacks already hold.
+  [[nodiscard]] int usedItemSlots() const;
+  [[nodiscard]] bool slotIsOpen() const;
 
   // Edits one weapon's own numbers for a weapon-wide item. Separate from
   // applyWeaponEffect because the weapon-wide set answers a different question --
