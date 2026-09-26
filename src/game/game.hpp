@@ -970,9 +970,16 @@ public:
   // effect-coverage test asks the applier instead of keeping its own copy of the
   // list -- which is exactly how a card ships that prints a promise and does
   // nothing.
+  //
+  // Damage and fire rate used to be in here, as `w_all_damage` and `w_all_rate`:
+  // cards that scaled each weapon's own numbers instead of the player's, which
+  // put "Every weapon you own hits 8% harder" in the pool right next to "+15%
+  // damage". Two cards, one axis, and nothing on screen said so. They are gone --
+  // `damageMul` and `fireRateBonus` are applied at every damage site and every
+  // cooldown respectively, so the surviving cards reach strictly more -- and with
+  // them went the reason this list needed four entries.
   [[nodiscard]] static bool isWeaponWideEffect(std::string_view effect) {
-    return effect == "w_all_damage" || effect == "w_all_rate" ||
-           effect == "w_all_reach" || effect == "w_all_knockback";
+    return effect == "w_all_reach" || effect == "w_all_knockback";
   }
   // Test helper: the content index of an upgrade card by id, or -1. Every other
   // "find this card" in the tests is a hand-rolled loop over the vector, which

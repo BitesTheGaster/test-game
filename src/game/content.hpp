@@ -328,6 +328,18 @@ struct UpgradeDef {
   // again. "You may have this axis, or that one" and "and then keep leaning on
   // it" are both true at once, and neither one costs the other.
   std::string group;
+  // Whether this card occupies one of the player's limited ITEM SLOTS.
+  //
+  // The slot count is the run's power curve: 1 at level 1 and one more at every
+  // power of two, so eight by level 128 and never more. What the slots have to
+  // limit is a card that improves EVERY weapon at once, because that is the card
+  // that would make a player with too many of them too strong. So the default is
+  // "yes, this is a stat axis" for every card except a `unique` -- a one-per-run
+  // treasure cannot stack its way to power, and there are 52 of them, so charging
+  // them would fill the whole pool -- and the file opts individual cards out with
+  // `slot = false` where the card is not a stat axis at all (u_arsenal_core, for
+  // one, which grants the capacity rather than spending it).
+  bool slot = true;
 };
 
 // One screen of the in-game manual (assets/data/manual.toml).

@@ -574,15 +574,21 @@ def upgrades_md() -> str:
         for u in us:
             if u.get("kind", "normal") != kind:
                 continue
+            # `slot` defaults to true for everything except a unique, exactly as
+            # the loader reads it -- printed here so the table says which cards
+            # are competing for the run's eight item slots and which are not.
+            takes_slot = u.get("slot", u.get("kind", "normal") != "unique")
             rows.append([u["name"], f"`{u['id']}`", u["effect"], fmt(u["value"]),
                          fmt(u.get("max_stacks", 1)), u.get("weapon", ""),
                          str(u.get("level", "")), u.get("group", ""),
+                         "yes" if takes_slot else "no",
                          md_escape(u["desc"])])
         if not rows:
             continue
         parts.append(heading + "\n\n" +
                      table(["Name", "ID", "Effect", "Value", "Max stacks",
-                            "Weapon", "Level", "Group", "Description"], rows))
+                            "Weapon", "Level", "Group", "Slot", "Description"],
+                           rows))
     s = "\n\n".join(parts)
 
     # The groups, spelled out. A milestone group is the design: every member is
@@ -600,12 +606,16 @@ def upgrades_md() -> str:
 
     # summary counts
     counts = {}
+    slotted = 0
     for u in us:
         counts[u.get("kind", "normal")] = counts.get(u.get("kind", "normal"), 0) + 1
+        if u.get("slot", u.get("kind", "normal") != "unique"):
+            slotted += 1
     summary = (f"\n\n**Totals:** {len(us)} upgrades "
                f"({counts.get('normal', 0)} normal, "
                f"{counts.get('unique', 0)} unique, "
-               f"{counts.get('milestone', 0)} milestones).\n")
+               f"{counts.get('milestone', 0)} milestones), "
+               f"{slotted} of which take an item slot.\n")
     return s + summary
 
 

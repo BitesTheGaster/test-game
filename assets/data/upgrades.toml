@@ -1,6 +1,25 @@
 # Level-up upgrades. effect = id understood by applyUpgrade() (global) or
 # applyWeaponEffect() (when `weapon` is set), value = per-stack magnitude.
-# Multiple entries may share an effect; max_stacks keeps each variant bounded.
+#
+# ONE CARD PER AXIS. Two cards may share an `effect` only if they are for
+# different `weapon` slots; among the global cards every effect appears exactly
+# once. This used to be the other way round -- four damage cards, four fire-rate
+# cards, four max-HP cards, three pierce-range cards -- and it read to the player
+# as fourteen separate items when it was thirteen axes, because nothing said they
+# were the same thing. A card list is not a build menu. Each family is now one
+# card with a raised `max_stacks`, and the per-stack `value` is re-derived so the
+# family still ends near where it used to: 4x0.15 + 4x0.25 + 2x0.35 = +2.60
+# damage became 8x0.30 = +2.40, a little under the old ceiling because the card
+# is now competing for one of eight slots instead of being one of four cards that
+# all said the same thing.
+#
+# The plain card's new CEILING is what the milestone numbers are checked against,
+# and raising max_stacks moved it: an 8-take fire-rate card reaches +144% where
+# the old family reached +147% across ten takes, and a milestone that used to beat
+# its axis on the whole run no longer does. The four that lost were re-tuned up
+# rather than the plain cards tuned down, because a milestone is the reward for
+# closing two other axes and it costs no slot -- it has to be worth more, not
+# less, now that the repeatable card is competing for a scarce one.
 #
 # kind:
 #   normal    - everyday pool
@@ -9,6 +28,13 @@
 #               64, 128, ...); def.level gates which level it belongs to.
 # weapon: non-empty => the card only appears while that weapon is owned, and
 #   applies to that weapon slot instead of the player.
+# slot: whether the card occupies one of the player's limited ITEM SLOTS. True by
+#   default for every kind except `unique`; set `slot = false` to exempt a card
+#   that is not a stat axis (see u_arsenal_core). The slot count is the run's
+#   power curve -- 1 at level 1, then one more at every power of two -- so the
+#   thing worth limiting is a card that improves EVERY weapon at once. A card for
+#   one weapon cannot stack its way to that, and a unique is a once-per-run
+#   treasure, so neither of them spends a slot.
 #
 # Attack speed uses the ADDITIVE fire-rate model: the final delay between
 # shots is `base / (1 + totalBonus)` (see attackCooldown in game.hpp). All
@@ -18,19 +44,19 @@
 
 [[upgrade]]
 id = "damage"
-name = "Sharpened Bolts"
-desc = "+15% damage"
+name = "Whetstone"
+desc = "+30% damage"
 effect = "damage_mul"
-value = 0.15
-max_stacks = 6
+value = 0.30
+max_stacks = 8
 
 [[upgrade]]
 id = "haste"
 name = "Battle Haste"
-desc = "+9% fire rate"
+desc = "+18% fire rate"
 effect = "fire_rate"
-value = 0.09
-max_stacks = 5
+value = 0.18
+max_stacks = 8
 
 [[upgrade]]
 id = "multi"
@@ -38,7 +64,7 @@ name = "Split Shot"
 desc = "+1 projectile"
 effect = "proj_add"
 value = 1
-max_stacks = 4
+max_stacks = 6
 
 [[upgrade]]
 id = "impact"
@@ -49,28 +75,12 @@ value = 0.45
 max_stacks = 3
 
 [[upgrade]]
-id = "boots"
-name = "Swift Boots"
-desc = "+12% move speed"
-effect = "speed_mul"
-value = 0.12
-max_stacks = 2
-
-[[upgrade]]
-id = "vigor"
-name = "Vigor"
-desc = "+20 max HP and heal 20"
-effect = "max_hp_add"
-value = 20
-max_stacks = 4
-
-[[upgrade]]
 id = "magnet"
 name = "Soul Magnet"
-desc = "+60% pickup range"
+desc = "+30% pickup range"
 effect = "pickup_mul"
-value = 0.60
-max_stacks = 2
+value = 0.30
+max_stacks = 8
 
 [[upgrade]]
 id = "scholar"
@@ -78,15 +88,7 @@ name = "Scholar"
 desc = "+12% experience gained"
 effect = "xp_mul"
 value = 0.12
-max_stacks = 3
-
-[[upgrade]]
-id = "lorekeeper"
-name = "Lorekeeper"
-desc = "+30% experience gained"
-effect = "xp_mul"
-value = 0.30
-max_stacks = 2
+max_stacks = 8
 
 [[upgrade]]
 id = "pierce"
@@ -94,7 +96,7 @@ name = "Piercing Shots"
 desc = "+1 pierce"
 effect = "pierce_add"
 value = 1
-max_stacks = 3
+max_stacks = 6
 
 [[upgrade]]
 id = "surge_chain"
@@ -154,32 +156,8 @@ id = "regen"
 name = "Regeneration"
 desc = "+1 HP per second"
 effect = "regen_add"
-value = 1.0
-max_stacks = 4
-
-[[upgrade]]
-id = "might"
-name = "Might"
-desc = "+25% damage"
-effect = "damage_mul"
-value = 0.25
-max_stacks = 4
-
-[[upgrade]]
-id = "quickdraw"
-name = "Quickdraw"
-desc = "+13% fire rate"
-effect = "fire_rate"
-value = 0.13
-max_stacks = 3
-
-[[upgrade]]
-id = "twin_shot"
-name = "Twin Cast"
-desc = "+1 projectile"
-effect = "proj_add"
 value = 1
-max_stacks = 2
+max_stacks = 8
 
 [[upgrade]]
 id = "windrunner"
@@ -187,142 +165,31 @@ name = "Windrunner"
 desc = "+8% move speed"
 effect = "speed_mul"
 value = 0.08
-max_stacks = 3
+max_stacks = 6
 
 [[upgrade]]
 id = "constitution"
 name = "Iron Constitution"
-desc = "+35 max HP and heal 35"
+desc = "+45 max HP and heal 45"
 effect = "max_hp_add"
-value = 35
-max_stacks = 3
-
-[[upgrade]]
-id = "bulwark"
-name = "Bulwark"
-desc = "+50 max HP and heal 50"
-effect = "max_hp_add"
-value = 50
-max_stacks = 2
-
-[[upgrade]]
-id = "vitality"
-name = "Vitality"
-desc = "+2 HP per second"
-effect = "regen_add"
-value = 2.0
-max_stacks = 2
-
-[[upgrade]]
-id = "treasure"
-name = "Treasure Sense"
-desc = "+100% pickup range"
-effect = "pickup_mul"
-value = 1.0
-max_stacks = 1
-
-[[upgrade]]
-id = "harvester"
-name = "Harvester"
-desc = "+80% pickup range"
-effect = "pickup_mul"
-value = 0.80
-max_stacks = 1
-
-[[upgrade]]
-id = "garrote"
-name = "Garrote Bolts"
-desc = "+2 pierce"
-effect = "pierce_add"
-value = 2
-max_stacks = 1
-
-[[upgrade]]
-id = "echoes"
-name = "Battle Echoes"
-desc = "+19% fire rate"
-effect = "fire_rate"
-value = 0.19
-max_stacks = 2
-
-[[upgrade]]
-id = "barrage"
-name = "Barrage"
-desc = "+2 projectiles"
-effect = "proj_add"
-value = 2
-max_stacks = 1
-
-[[upgrade]]
-id = "fervor"
-name = "Fervor"
-desc = "+35% damage"
-effect = "damage_mul"
-value = 0.35
-max_stacks = 2
-
-[[upgrade]]
-id = "gale"
-name = "Gale Steps"
-desc = "+15% move speed"
-effect = "speed_mul"
-value = 0.15
-max_stacks = 1
-
-[[upgrade]]
-id = "heartwood"
-name = "Heartwood"
-desc = "+70 max HP and heal 70"
-effect = "max_hp_add"
-value = 70
-max_stacks = 1
-
-[[upgrade]]
-id = "surge"
-name = "Surge"
-desc = "+25% fire rate"
-effect = "fire_rate"
-value = 0.25
-max_stacks = 1
-
-# --- Defense / shield / lifesteal tree ---------------------------------------
+value = 45
+max_stacks = 8
 
 [[upgrade]]
 id = "pledge"
 name = "Stony Pledge"
-desc = "+10 defense"
+desc = "+12 defense"
 effect = "defense_add"
-value = 10
-max_stacks = 4
-
-[[upgrade]]
-id = "conviction"
-name = "Iron Conviction"
-desc = "+25 defense"
-effect = "defense_add"
-value = 25
-max_stacks = 2
+value = 12
+max_stacks = 8
 
 [[upgrade]]
 id = "ward_small"
-name = "Minor Ward"
-desc = "+15 regenerating shield"
-effect = "shield_add"
-value = 15
-max_stacks = 3
-
-[[upgrade]]
-id = "ward_great"
 name = "Runic Ward"
-desc = "+30 regenerating shield"
+desc = "+13 regenerating shield"
 effect = "shield_add"
-value = 30
-max_stacks = 2
-
-# A shield is a pool AND a clock. Until these two existed the pool could grow
-# but the refill could not, so a burst build simply re-took the same 80 HP five
-# seconds later and the shield card felt dead. Both numbers are on the character
-# sheet now, so what they buy is visible.
+value = 13
+max_stacks = 8
 
 [[upgrade]]
 id = "aegis_flow"
@@ -351,49 +218,18 @@ max_stacks = 2
 [[upgrade]]
 id = "leech_gold"
 name = "Gilded Fangs"
-desc = "+4% lifesteal"
+desc = "+3% lifesteal"
 effect = "lifesteal_add"
-value = 4
-max_stacks = 3
-
-[[upgrade]]
-id = "leech_soul"
-name = "Soulfeed"
-desc = "+6% lifesteal"
-effect = "lifesteal_add"
-value = 6
-max_stacks = 2
-
-# --- Armor pierce tree --------------------------------------------------------
-# Armor pierce subtracts from an enemy's defense before its flat+percent
-# mitigation runs, so these are the anti-armour answer to late-game defense
-# (including the Armored trait and champion/overlord defense scaling).
+value = 3
+max_stacks = 8
 
 [[upgrade]]
 id = "sunder"
 name = "Sunder Edge"
-desc = "+15 armor pierce"
+desc = "+28 armor pierce"
 effect = "armor_pierce_add"
-value = 15
-max_stacks = 4
-
-[[upgrade]]
-id = "sunder_great"
-name = "Keen Sunder"
-desc = "+40 armor pierce"
-effect = "armor_pierce_add"
-value = 40
-max_stacks = 2
-
-[[upgrade]]
-id = "armor_cracker"
-name = "Armor-Cracker"
-desc = "+80 armor pierce"
-effect = "armor_pierce_add"
-value = 80
-max_stacks = 1
-
-# --- Weapon-focused cards (only appear for owned weapons) ---------------------
+value = 28
+max_stacks = 8
 
 [[upgrade]]
 id = "w_wand_power"
@@ -820,6 +656,11 @@ kind = "unique"
 # It used to exist twice -- a common 3-stack card and a unique 1-stack one that
 # promised "your arsenal holds eight". That is two level-up screens spent on the
 # same decision, and the second one was wrong about the number too: 4 + 3 is 7.
+#
+# `slot = false`, and this is the reason the flag exists. Spending one of a
+# scarce pool of item slots on "you may hold one more weapon" is a tax on the
+# exact card that widens the build, so the card that adds capacity is never
+# charged for it.
 [[upgrade]]
 id = "u_arsenal_core"
 name = "Arsenal Core"
@@ -827,6 +668,7 @@ desc = "+1 weapon slot"
 effect = "weapon_slot_add"
 value = 1
 max_stacks = 3
+slot = false
 # --- Improving your weapons is an ITEM ----------------------------------------
 #
 # A weapon gets better because you picked a card off the level-up screen, and
@@ -834,35 +676,27 @@ max_stacks = 3
 # per-level upgrade to every weapon is a stat axis nobody chose, and it hands out
 # more than the cards the player actually picked by the end of a long run.
 #
-# These four are the axes the player-stat cards do not cover, because they are
-# the WEAPON's own geometry rather than a multiplier on the damage coming out of
-# it. `w_all_damage` and `w_all_rate` overlap with the global damage and fire-rate
-# cards on purpose: they edit each weapon's own number, which is what the sheet
-# shows and what a weapon's derived numbers (a Nova's tick, a Zone's dps) are
-# built from, so they keep paying after a later card changes the multiplier.
+# These are the axes the player-stat cards do not cover, because they are the
+# WEAPON's own geometry rather than a multiplier on the damage coming out of it.
 #
-# All four are ORDINARY items: they come up in the normal pool, they are not
-# milestones, and nothing about them is exclusive.
-[[upgrade]]
-id = "u_whetstone"
-name = "Whetstone"
-desc = "Every weapon you own hits 8% harder"
-effect = "w_all_damage"
-value = 0.08
-max_stacks = 6
-
-[[upgrade]]
-id = "u_oiled_gear"
-name = "Oiled Gears"
-desc = "Every weapon you own fires 7% faster"
-effect = "w_all_rate"
-value = 0.07
-max_stacks = 6
-
+# There used to be four of them, and two of those four (`w_all_damage`,
+# `w_all_rate`) were the global damage and fire-rate cards wearing a hat. They
+# scaled each weapon's own `damage` and `cdBonus` instead of `damageMul` and
+# `fireRateBonus`, which is a real difference to the code and no difference at all
+# to the player reading the card -- hence "Every weapon you own hits 8% harder"
+# sitting in the pool next to "+15% damage", two cards for one axis. Both are
+# gone. `stats_.damageMul` is multiplied in at every damage site and
+# `fireRateBonus` at every cooldown, so the surviving cards reach everything the
+# deleted ones did, and the pause sheet now prints the EFFECTIVE number
+# (weapon damage x damageMul) so the sheet cannot drift away from the truth again.
+#
+# What is left is genuinely orthogonal: reach, how far something is thrown, and
+# the weapon count itself. All three are ORDINARY items: they come up in the
+# normal pool, they are not milestones, and nothing about them is exclusive.
 [[upgrade]]
 id = "u_long_barrel"
 name = "Long Barrel"
-desc = "Every weapon you own reaches 10% further and its shots live 10% longer"
+desc = "Reaches 10% further and its shots live 10% longer"
 effect = "w_all_reach"
 value = 0.10
 max_stacks = 5
@@ -870,7 +704,7 @@ max_stacks = 5
 [[upgrade]]
 id = "u_heavy_stock"
 name = "Heavy Stock"
-desc = "Everything all your weapons hit is thrown 20% further"
+desc = "Throws what it hits 20% further"
 effect = "w_all_knockback"
 value = 0.20
 max_stacks = 4
@@ -1594,9 +1428,9 @@ group = "survivor"
 [[upgrade]]
 id = "m4_aegis"
 name = "Aegis"
-desc = "Shield +50, filled to the brim at once"
+desc = "Shield +55, filled to the brim at once"
 effect = "shield_add"
-value = 50
+value = 55.0
 max_stacks = 2
 kind = "milestone"
 level = 4
@@ -1613,9 +1447,9 @@ group = "survivor"
 # and over the whole run -- see the test that enforces it.
 id = "m8_overload"
 name = "Overload"
-desc = "All damage +55%"
+desc = "All damage +125%"
 effect = "damage_mul"
-value = 0.55
+value = 1.25
 max_stacks = 2
 kind = "milestone"
 level = 8
@@ -1624,9 +1458,9 @@ group = "execution"
 [[upgrade]]
 id = "m8_frenzy"
 name = "Frenzy"
-desc = "Fire rate +40%"
+desc = "Fire rate +75%"
 effect = "fire_rate"
-value = 0.40
+value = 0.75
 max_stacks = 2
 kind = "milestone"
 level = 8
@@ -1635,7 +1469,7 @@ group = "execution"
 [[upgrade]]
 id = "m8_tempest"
 name = "Tempest"
-desc = "Every weapon fires 3 more projectiles"
+desc = "Every weapon fires 4 more projectiles"
 effect = "proj_add"
 # +3, and a whole number on purpose. This used to be +1 -- the exact number a
 # plain Twin Shot hands out for a repeatable card, and half of a plain Barrage --
@@ -1647,7 +1481,7 @@ effect = "proj_add"
 # tempting +2.5 here truncates to +2 and the card silently does less than it
 # says, and anything under 1.0 truncates to nothing at all. There is a test for
 # that, and it is why the number is 3 and not 2.5.
-value = 3
+value = 4
 max_stacks = 2
 kind = "milestone"
 level = 8

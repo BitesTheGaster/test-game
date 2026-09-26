@@ -400,6 +400,11 @@ Content loadContent(const std::filesystem::path& dir) {
       def.weapon = (*t)["weapon"].value<std::string>().value_or("");
       def.level = static_cast<int>((*t)["level"].value_or(0));
       def.group = (*t)["group"].value_or(std::string());
+      // A unique is a once-per-run treasure, not a stacking stat axis, so it
+      // never spends a slot. Everything else does unless the file says otherwise
+      // -- see the `slot` field's comment in content.hpp for why the limit is
+      // aimed at global stat cards specifically.
+      def.slot = (*t)["slot"].value_or(def.kind != "unique");
       content.upgrades.push_back(std::move(def));
     }
   }

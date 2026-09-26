@@ -6328,11 +6328,7 @@ void Game::chooseUpgrade(int slot) {
 }
 
 void Game::applyWeaponWide(WeaponSlot& w, std::string_view effect, float value) {
-  if (effect == "w_all_damage") {
-    w.damage *= 1.0F + value;
-  } else if (effect == "w_all_rate") {
-    w.cdBonus += value;
-  } else if (effect == "w_all_reach") {
+  if (effect == "w_all_reach") {
     // EVERY reach-ish field the roster has, so the card means the same thing on
     // a beam, a crescent, a boomerang and a well. A card that widened four of
     // them and quietly skipped the other nine would be worse than none.
@@ -6471,10 +6467,22 @@ float Game::testWeaponStat(int slot, std::string_view name) const {
   if (slot < 0 || slot >= weaponCount_) return -1.0F;
   const auto& w = weapons_[slot];
   if (name == "damage") return w.damage;
+  // The numbers the pause sheet prints, which is what the player reads a weapon
+  // by. Kept separate from the raw fields above on purpose: "Levelling changes a
+  // weapon on its own" is about the base number never moving, and folding the
+  // player multipliers in here would make that test pass for the wrong reason.
+  if (name == "effectiveDamage") return w.damage * stats_.damageMul;
+  if (name == "effectiveCooldown") {
+    return attackCooldown(w.cooldown, stats_.fireRateBonus + w.cdBonus);
+  }
   if (name == "cdBonus") return w.cdBonus;
   if (name == "cooldown") return w.cooldown;
   if (name == "projectiles") return static_cast<float>(w.projectiles);
   if (name == "pierce") return static_cast<float>(w.pierce);
+  // Reach-ish field for the weapon-wide reach card. `projLife` is the one every
+  // weapon in the roster has, so a test can assert the card moves the weapon's
+  // OWN numbers without each weapon needing its own case.
+  if (name == "projLife") return w.life;
   return -1.0F;
 }
 
@@ -9144,9 +9152,24 @@ void Game::renderPlayerStats(core::render::Batcher& b, float px, float py) {
   for (int i = 0; i < weaponCount_; ++i) {
     const auto& w = weapons_[i];
     const auto& def = content_.weapons[static_cast<std::size_t>(w.def)];
+    // EFFECTIVE numbers, not the weapon's base ones. The sheet used to print
+    // `w.damage` and `w.cooldown` straight out of the content file, which meant
+    // it did not move when the player took the damage or fire-rate card -- and
+    // the only reason that was not visible for so long is that those two cards
+    // used to be `w_all_damage` and `w_all_rate`, which scaled the WEAPON's own
+    // fields and so did move this line. Now that they are one `damage_mul` card
+    // and one `fire_rate` card, a sheet printing the base numbers would go
+    // permanently stale on the two axes the player spends the most slots on.
+    //
+    // The kill-chain multipliers are deliberately left out: they come and go with
+    // the chain, and a build summary that flickers is not a summary. What is
+    // printed is what the weapon is worth while the chain is cold.
+    const float shownDamage = w.damage * stats_.damageMul;
+    const float shownCooldown =
+        attackCooldown(w.cooldown, stats_.fireRateBonus + w.cdBonus);
     rows.push_back(def.name + " [" + attackTypeName(w.attackType) + "] D" +
-                   std::to_string(static_cast<int>(w.damage)) + " N" +
-                   std::to_string(w.projectiles) + " CD" + fit1(w.cooldown) + "S");
+                   std::to_string(static_cast<int>(shownDamage + 0.5F)) + " N" +
+                   std::to_string(w.projectiles) + " CD" + fit1(shownCooldown) + "S");
   }
 
   const float lineH = 17.0F;

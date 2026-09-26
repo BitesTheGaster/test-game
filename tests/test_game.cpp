@@ -2355,23 +2355,35 @@ TEST_CASE("Vampirism is reachable, the milestone stacks it, the trigger is a kil
   // way that is done is the milestone group: vampirism, regeneration and a shield
   // are three mutually exclusive answers, so the build that takes the lifesteal
   // one takes a much bigger number than the old flat card ever did.
+  //
+  // There used to be TWO everyday lifesteal cards here, Gilded Fangs and
+  // Soulfeed, at +4% and +6%. That is the duplicate problem the player named,
+  // in the one place where it also cost something real: two cards for one axis
+  // meant the survival group had a repeatable answer that was quietly better than
+  // the milestone, and the milestone's whole promise is that committing to
+  // vampirism beats dabbling in it. One card now, and it is not the milestone.
   const auto* gold = find("leech_gold");
-  const auto* soul = find("leech_soul");
   const auto* crimson = find("m4_crimson");
   const auto* crown = find("m128_crown");
   REQUIRE(gold != nullptr);
-  REQUIRE(soul != nullptr);
   REQUIRE(crimson != nullptr);
   REQUIRE(crown != nullptr);
-  // The everyday cards are still modest, so vampirism is not simply strong
-  // everywhere -- it is a build you commit to.
-  REQUIRE(gold->value == Catch::Approx(4.0F));
-  REQUIRE(soul->value == Catch::Approx(6.0F));
+  // The everyday card is still modest, so vampirism is not simply strong
+  // everywhere -- it is a build you commit to. Eight takes, because the family
+  // collapsed into one card and a card you can only take three times is a card
+  // the slot system is quietly taxing you for using.
+  REQUIRE(gold->value == Catch::Approx(3.0F));
+  REQUIRE(gold->maxStacks >= 6);
   // The milestone one is a SMALL number with STACKS, which is the promise the
-  // player can actually plan around: three separate takes, each one visible on a
+  // player can actually plan around: separate takes, each one visible on a
   // milestone screen, rather than one take that silently applies three times.
+  // And it beats the everyday card on both the per-take and the whole-run number,
+  // which is the price of closing the other two survival axes.
   REQUIRE(crimson->value == Catch::Approx(9.0F));
+  REQUIRE(crimson->value > gold->value);
   REQUIRE(crimson->maxStacks >= 2);
+  REQUIRE(crimson->value * static_cast<float>(crimson->maxStacks) >
+          gold->value * static_cast<float>(gold->maxStacks));
   REQUIRE(crown->value == Catch::Approx(40.0F));
   REQUIRE(crown->maxStacks >= 2);
   // And the strongest single number in the game for lifesteal is a MILESTONE, so
@@ -3252,40 +3264,112 @@ TEST_CASE("Momentum cards bend the chain and the chain is capped") {
 
 TEST_CASE("The upgrade pool is not dominated by dead stat cards") {
   const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
-  // Pickup range and XP are the real dead picks: they never change how the
-  // game plays, they only make it faster to sweep up. Flat HP and move speed
-  // are legitimate but must stay a minority, and the offensive core plus the
-  // momentum axis have to keep real weight.
+  // Two different questions, and they need two different measures.
+  //
+  // REACH -- how much of the pool an axis occupies -- is a count of CARDS. It
+  // used to be counted in stacks, back when "+15% damage" and "+25% damage"
+  // were two cards on the same axis and three stacks of one of them really did
+  // mean three times the exposure. Now there is one damage card, so a stack is
+  // a re-take of a card the player has already seen and stacks say nothing about
+  // how much of the pool the axis owns.
+  //
+  // DEPTH -- how far one axis can be leaned on -- is still a sum of stacks, and
+  // that is the number the caps below are about.
+  //
+  // Pickup range and XP are the real dead picks: they never change how the game
+  // plays, they only make it faster to sweep up. Flat HP and move speed are
+  // legitimate but must stay a minority, and the offensive core has to be the
+  // deepest commitment in the game or the build you are offered is a build you
+  // cannot build.
   int normal = 0;
-  int pickupXp = 0;
+  int pickupXpCards = 0;
   int hp = 0;
   int speed = 0;
   int offense = 0;
+  int deepestOther = 0;
   int momentum = 0;
   for (const auto& u : content.upgrades) {
     if (u.kind != "normal") continue;
     ++normal;
-    if (u.effect == "pickup_mul" || u.effect == "xp_mul") pickupXp += u.maxStacks;
+    if (u.effect == "pickup_mul" || u.effect == "xp_mul") ++pickupXpCards;
     if (u.effect == "max_hp_add") hp += u.maxStacks;
     if (u.effect == "speed_mul") speed += u.maxStacks;
     if (u.effect == "damage_mul" || u.effect == "fire_rate" || u.effect == "proj_add") {
       offense += u.maxStacks;
+    } else {
+      deepestOther = std::max(deepestOther, u.maxStacks);
     }
   }
   for (const auto& u : content.upgrades) {
     if (u.effect.rfind("momentum_", 0) == 0) momentum += u.maxStacks;
   }
   CAPTURE(normal);
-  CAPTURE(pickupXp);
+  CAPTURE(pickupXpCards);
+  CAPTURE(hp);
+  CAPTURE(speed);
+  CAPTURE(offense);
+  CAPTURE(deepestOther);
+  CAPTURE(momentum);
   REQUIRE(normal > 20);
   // At most a fifth of the pool may be pure convenience.
-  REQUIRE(pickupXp * 5 <= normal);
+  REQUIRE(pickupXpCards * 5 <= normal);
   // No defensive family may outnumber the whole offensive core.
   REQUIRE(hp <= 12);
   REQUIRE(speed <= 6);
-  REQUIRE(offense >= 25);
+  // The offensive core must be the deepest thing in the game, and by a clear
+  // margin rather than a hair. Collapsing thirteen stat families into one card
+  // each took this ceiling from 30 to 22, because ten cards became three; the
+  // ratio is the part that has to survive that, and it is the part a player
+  // feels -- offense goes further than anything else they could take.
+  REQUIRE(offense >= deepestOther * 2);
   // Momentum is a real build axis, not one lonely card.
   REQUIRE(momentum >= 4);
+}
+
+TEST_CASE("No two global stat cards raise the same thing") {
+  // "There are items in the game that increase the same thing but for some
+  // reason are not one item. Fix it." The player found fourteen of them: four
+  // damage cards, four fire-rate cards, four max-HP cards, three pierce-range
+  // cards, and a pair (`multi` and `twin_shot`) that were byte-identical text.
+  // Nothing in the data said they were the same axis, so to the player they were
+  // fourteen items and the build they were assembling had no shape.
+  //
+  // This is the check that keeps them from creeping back. It asks the CONTENT for
+  // the answer rather than restating the list, so a new duplicate fails here and
+  // not in a player's hour.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  std::map<std::string, std::vector<std::string>> byEffect;
+  for (const auto& u : content.upgrades) {
+    // Per-weapon cards are allowed to share an effect: `w_damage_add` on the
+    // wand and on the dagger are two different purchases for two different
+    // slots, and merging them would delete a weapon's upgrade. Only the global
+    // cards -- the ones that improve everything at once -- have to be unique.
+    if (!u.weapon.empty()) continue;
+    if (u.kind == "milestone") continue; // milestones are exclusive by group
+    byEffect[u.effect].push_back(u.id);
+  }
+  int checked = 0;
+  for (const auto& [effect, ids] : byEffect) {
+    CAPTURE(effect);
+    if (effect == "weapon_slot_add" || effect == "extra_choice" ||
+        effect == "reroll_add") {
+      continue; // one-time structural unlocks, deliberately repeatable
+    }
+    // The uniques are exempt by policy (see `slot` in content.hpp): a unique is
+    // a once-per-run treasure, so two of them on one axis is a choice, not a
+    // duplicate. What must not happen is a unique colliding with a REPEATABLE
+    // card, which is the old Whetstone/"+15% damage" bug wearing a new hat.
+    const bool allUnique =
+        std::all_of(ids.begin(), ids.end(), [&](const std::string& id) {
+          const auto* c = content.upgrade(id);
+          return c != nullptr && c->kind == "unique";
+        });
+    if (allUnique) continue;
+    REQUIRE(ids.size() == 1);
+    ++checked;
+  }
+  // The check is not vacuous: it really walked the global pool.
+  REQUIRE(checked >= 20);
 }
 
 // --- Second-wave weapons, abilities and the fixes on top ---------------------
@@ -7120,26 +7204,31 @@ TEST_CASE("Improving your weapons is an item, and it stacks") {
   // So the promise is three things: the card exists as an ordinary item, every
   // take lands once, and a late weapon improves exactly like an early one.
   const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
-  const auto* stone = content.upgrade("u_whetstone");
-  REQUIRE(stone != nullptr);
-  REQUIRE(stone->kind == "normal");
-  REQUIRE(stone->group.empty());
-  REQUIRE(stone->maxStacks >= 3);
+  // Reach, because that is the axis that still edits the WEAPON's own fields.
+  // Damage and fire rate used to be here too, as u_whetstone and u_oiled_gear,
+  // and the reason they are not is the whole subject of this test's sibling: they
+  // scaled the weapon instead of the player, which put "Every weapon you own hits
+  // 8% harder" in the pool beside "+15% damage" as two items for one axis.
+  const auto* barrel = content.upgrade("u_long_barrel");
+  REQUIRE(barrel != nullptr);
+  REQUIRE(barrel->kind == "normal");
+  REQUIRE(barrel->group.empty());
+  REQUIRE(barrel->maxStacks >= 3);
 
   game::Game g{content, 31};
   g.testClearWeapons();
   g.testAddWeapon(g.testWeaponContentIndex("wand"));
-  const float baseDamage = g.testWeaponStat(0, "damage");
+  const float baseLife = g.testWeaponStat(0, "projLife");
 
   // One take, one application. The card's number is the number on the card.
-  REQUIRE(g.testGrantUpgrade(g.testUpgradeContentIndex("u_whetstone")));
-  const float afterOne = g.testWeaponStat(0, "damage");
-  REQUIRE(afterOne == Catch::Approx(baseDamage * (1.0F + stone->value)));
+  REQUIRE(g.testGrantUpgrade(g.testUpgradeContentIndex("u_long_barrel")));
+  const float afterOne = g.testWeaponStat(0, "projLife");
+  REQUIRE(afterOne == Catch::Approx(baseLife * (1.0F + barrel->value)));
 
-  // It stacks, multiplicatively, and every take is visible on the weapon.
-  REQUIRE(g.testGrantUpgrade(g.testUpgradeContentIndex("u_whetstone")));
-  const float afterTwo = g.testWeaponStat(0, "damage");
-  REQUIRE(afterTwo == Catch::Approx(baseDamage * (1.0F + stone->value) * (1.0F + stone->value)));
+  // It stacks, and every take is visible on the weapon.
+  REQUIRE(g.testGrantUpgrade(g.testUpgradeContentIndex("u_long_barrel")));
+  const float afterTwo = g.testWeaponStat(0, "projLife");
+  REQUIRE(afterTwo == Catch::Approx(baseLife * (1.0F + barrel->value) * (1.0F + barrel->value)));
   REQUIRE(afterTwo > afterOne);
 
   // A weapon picked up at 6:00 is worth exactly what the same weapon was worth
@@ -7150,17 +7239,70 @@ TEST_CASE("Improving your weapons is an item, and it stacks") {
     game::Game fresh{content, 31};
     fresh.testClearWeapons();
     fresh.testAddWeapon(dagger);
-    return fresh.testWeaponStat(0, "damage");
+    return fresh.testWeaponStat(0, "projLife");
   }();
   g.testAddWeapon(dagger);
-  REQUIRE(g.testWeaponStat(1, "damage") == Catch::Approx(daggerFresh));
-  REQUIRE(g.testGrantUpgrade(g.testUpgradeContentIndex("u_whetstone")));
-  REQUIRE(g.testWeaponStat(1, "damage") == Catch::Approx(daggerFresh * (1.0F + stone->value)));
+  REQUIRE(g.testWeaponStat(1, "projLife") == Catch::Approx(daggerFresh));
+  REQUIRE(g.testGrantUpgrade(g.testUpgradeContentIndex("u_long_barrel")));
+  REQUIRE(g.testWeaponStat(1, "projLife") == Catch::Approx(daggerFresh * (1.0F + barrel->value)));
   // ...and both weapons moved together on the very next take.
-  const float wandBefore = g.testWeaponStat(0, "damage");
-  REQUIRE(g.testGrantUpgrade(g.testUpgradeContentIndex("u_whetstone")));
-  REQUIRE(g.testWeaponStat(0, "damage") > wandBefore);
-  REQUIRE(g.testWeaponStat(1, "damage") == Catch::Approx(daggerFresh * (1.0F + stone->value) * (1.0F + stone->value)));
+  const float wandBefore = g.testWeaponStat(0, "projLife");
+  REQUIRE(g.testGrantUpgrade(g.testUpgradeContentIndex("u_long_barrel")));
+  REQUIRE(g.testWeaponStat(0, "projLife") > wandBefore);
+  REQUIRE(g.testWeaponStat(1, "projLife") ==
+          Catch::Approx(daggerFresh * (1.0F + barrel->value) * (1.0F + barrel->value)));
+}
+
+TEST_CASE("The number a weapon is worth on the sheet is the number it does") {
+  // The pause sheet used to print `w.damage` and `w.cooldown` straight out of the
+  // content file. That was invisible for as long as the damage and fire-rate
+  // cards were `w_all_damage` and `w_all_rate`, because those scaled the WEAPON
+  // and so moved the printed number. Collapsing them into one `damage_mul` card
+  // and one `fire_rate` card is the right change -- they reached the same
+  // multipliers through the player's own stats, which is where a card that
+  // improves everything belongs -- but it would have left the sheet permanently
+  // frozen on the base numbers of the two axes the player spends the most of
+  // their slots on. So the sheet now prints the effective value, and this is the
+  // test that the two can never drift apart again.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  const auto* damageCard = content.upgrade("damage");
+  const auto* hasteCard = content.upgrade("haste");
+  REQUIRE(damageCard != nullptr);
+  REQUIRE(hasteCard != nullptr);
+
+  game::Game g{content, 37};
+  g.testClearWeapons();
+  g.testAddWeapon(g.testWeaponContentIndex("wand"));
+  const float baseDamage = g.testWeaponStat(0, "effectiveDamage");
+  const float baseCooldown = g.testWeaponStat(0, "effectiveCooldown");
+  // The sheet is not printing a number that happens to equal the base: it is
+  // printing the base times the player's multipliers, and right now those are 1.
+  REQUIRE(g.testWeaponStat(0, "damage") == Catch::Approx(baseDamage));
+
+  REQUIRE(g.testGrantUpgrade(g.testUpgradeContentIndex("damage")));
+  const float hurtDamage = g.testWeaponStat(0, "effectiveDamage");
+  REQUIRE(hurtDamage == Catch::Approx(baseDamage * (1.0F + damageCard->value)));
+  REQUIRE(hurtDamage > baseDamage);
+  // The weapon's own base number did not move, and must not: that is the other
+  // test's promise, and a card that quietly edits it would make the sheet and the
+  // content file disagree about what a wand is.
+  REQUIRE(g.testWeaponStat(0, "damage") == Catch::Approx(baseDamage));
+
+  REQUIRE(g.testGrantUpgrade(g.testUpgradeContentIndex("haste")));
+  const float hurtCooldown = g.testWeaponStat(0, "effectiveCooldown");
+  REQUIRE(hurtCooldown == Catch::Approx(game::attackCooldown(baseCooldown, hasteCard->value)));
+  REQUIRE(hurtCooldown < baseCooldown);
+  REQUIRE(g.testWeaponStat(0, "cooldown") == Catch::Approx(baseCooldown));
+
+  // Both stack, and the sheet keeps up. Damage is ADDITIVE (damageMul is a sum,
+  // fire rate is a sum in a denominator), so two takes of +30% is +60%, not
+  // +69% -- worth pinning, because a card that reads "+30% damage" and quietly
+  // compounds is a card whose ninth stack is a surprise.
+  const float beforeMore = g.testWeaponStat(0, "effectiveDamage");
+  REQUIRE(g.testGrantUpgrade(g.testUpgradeContentIndex("damage")));
+  const float afterMore = g.testWeaponStat(0, "effectiveDamage");
+  REQUIRE(afterMore == Catch::Approx(baseDamage * (1.0F + 2.0F * damageCard->value)));
+  REQUIRE(afterMore > beforeMore);
 }
 
 TEST_CASE("Levelling changes a weapon on its own") {
@@ -7182,19 +7324,31 @@ TEST_CASE("Levelling changes a weapon on its own") {
 }
 
 TEST_CASE("Every weapon-wide item moves the weapon's own numbers, not the player's") {
-  // The four weapon-wide items cover the axes no player-stat card covers, because
-  // they are the weapon's geometry rather than a multiplier on what comes out of
-  // it. Each one has to actually move something on a weapon, or it is a card that
-  // prints a promise and does nothing.
+  // What is left of the weapon-wide set covers the axes no player-stat card
+  // covers, because they are the weapon's geometry rather than a multiplier on
+  // what comes out of it. Each one has to actually move something on a weapon,
+  // or it is a card that prints a promise and does nothing.
+  //
+  // The set used to have four members. `w_all_damage` and `w_all_rate` were
+  // removed because they were the global damage and fire-rate cards in disguise:
+  // the pool showed "Every weapon you own hits 8% harder" next to "+15% damage"
+  // and a player reasonably read two items where there was one axis. This is the
+  // test that would have caught it, and it is kept pointed at the applier rather
+  // than at a literal so the list cannot drift.
   const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
   const auto* wand = content.weapon("wand");
   REQUIRE(wand != nullptr);
-  for (const char* id : {"u_whetstone", "u_oiled_gear", "u_long_barrel", "u_heavy_stock"}) {
+  REQUIRE(game::Game::isWeaponWideEffect("w_all_reach"));
+  REQUIRE(game::Game::isWeaponWideEffect("w_all_knockback"));
+  REQUIRE_FALSE(game::Game::isWeaponWideEffect("w_all_damage"));
+  REQUIRE_FALSE(game::Game::isWeaponWideEffect("w_all_rate"));
+  for (const char* id : {"u_long_barrel", "u_heavy_stock"}) {
     const auto* card = content.upgrade(id);
     CAPTURE(id);
     REQUIRE(card != nullptr);
     REQUIRE(card->kind == "normal");
     REQUIRE(card->maxStacks >= 3);
+    REQUIRE(game::Game::isWeaponWideEffect(card->effect));
   }
   // The reach item is the only one that must widen something every weapon has,
   // and it is a percentage of the weapon's OWN reach, so the content number is
