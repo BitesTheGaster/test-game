@@ -89,6 +89,13 @@ struct EnemyTraits {
   // weapon without also being a reason to only ever field one. Capped by the
   // card that applies it; nothing else writes here.
   float vuln = 0.0F;
+  // BRITTLE: flat extra damage taken, from the Element cards whose second half
+  // rewards standing next to something rather than hitting it harder -- a chilled
+  // body, a body whose armour has been stripped. Kept out of `vuln` on purpose:
+  // vuln RAMPS with every hit and has a ceiling, and a card that says "chilled
+  // bodies take 25% more damage" does not ramp and has no ceiling, so folding the
+  // two together would make one of them quietly behave like the other.
+  float brittle = 0.0F;
   float lifestealRes = 0.0F; // 0..1: scales the player's lifesteal proc chance
   float knockbackRes = 0.0F; // 0..1: scales incoming knockback
   float shootCooldown = 0.0F; // >0 => ranged attacker (TraitArcher)

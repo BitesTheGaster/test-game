@@ -35,17 +35,6 @@ constexpr float kOrbitInnerMul = 0.35F;
 // "gap" would stop being a gap.
 constexpr float kOrbitWindowHalf = 0.42F;
 
-// The on-hit marks' two fixed numbers. A card supplies the SCALE (seconds of
-// chill, burn damage per second, how much hex a hit adds) and these supply the
-// shape, so four cards can never drift into four unrelated behaviours by each
-// picking its own constants.
-constexpr float kMarkChillMul = 0.60F;   // Frostbind's chill depth
-constexpr float kMarkBurnWindow = 4.0F;   // seconds a single hit keeps a body lit
-// How many hits' worth of hex one card is worth. The card sets the per-hit step
-// and this is what turns it into a ceiling, so "Hex" reads as "+12% damage taken
-// per hit, up to 96%" -- a ratchet with a visible end rather than an open ramp.
-constexpr float kMarkVulnHits = 8.0F;
-
 // How close a contracting nova will drag a victim to the player. The Void Nova's
 // whole fantasy is a knot of bodies pulled into a knot and then detonated, and
 // its pull used to obey no floor at all: it dragged everything right onto the
@@ -310,6 +299,7 @@ bool effectIsWholeNumberOnly(std::string_view effect) {
   static constexpr std::string_view kCounts[] = {
       "proj_add",
       "pierce_add",
+      "ms_mark_burn_spread",
       "lifesteal_heal",
       "extra_choice",
       "reroll_add",
@@ -439,8 +429,126 @@ UpgradeEffectResult applyUpgrade(PlayerStats& stats, std::string_view effect, fl
     stats.milestone.defense += value;
     return {true, 0.0F, 0.0F};
   }
-  if (effect == "ms_mark") {
-    stats.milestone.mark += value;
+  // There is no `ms_mark`, and its absence is the point. It scaled all four marks
+  // at once, which was always a multiplier on one: the Element group is exclusive,
+  // so a run holds a single mark root and the other three multipliers had nothing
+  // to reach. The four that replaced it are listed on PlayerStats::Scale, and each
+  // of them is read only by its own mark.
+  // --- ELEMENT: the mark layer. Four roots, one per mark, and every multiplier
+  // below is scoped to the mark it names. See PlayerStats::Scale for why there is
+  // no single `ms_mark` any more.
+  if (effect == "ms_mark_chill_seed") {
+    // SEED AND MULTIPLIER, on the same terms as every other root: a multiplier on
+    // a mark the run does not have is a multiplier on nothing. 2.5s at x1.6 is 4s,
+    // and the card prints the 4 because that is the number the player watches the
+    // debuff last for.
+    stats.markChillTime += 2.5F;
+    stats.milestone.markChill += value;
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "ms_mark_burn_seed") {
+    stats.markBurnDps += 22.0F;
+    stats.milestone.markBurn += value;
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "ms_mark_vuln_seed") {
+    // The CEILING is set from the multiplied step rather than from the raw one, so
+    // the "+X% per hit, up to +Y%" the card prints is the same "+X% per hit" the
+    // first hit after the card actually gives. Setting one from the seed and the
+    // other from the seed-times-the-multiplier is how a card ends up promising a
+    // ramp it cannot reach.
+    stats.markVuln += 0.14F;
+    stats.markVulnMax =
+        std::max(stats.markVulnMax, 0.14F * (1.0F + value) * kMarkVulnHits);
+    stats.milestone.markVuln += value;
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "ms_mark_burn_deeper") {
+    // ACCUMULATING, because the root's multiplier is still in play underneath and a
+    // card that set rather than multiplied would throw it away. 35.2 at x2 is 70.4.
+    stats.markBurnDps *= 1.0F + value;
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "ms_mark_burn_spread") {
+    // A COUNT, and one of the effects the fraction test polices, because half a
+    // body either side is the same as none.
+    stats.markBurnSpread += static_cast<int>(value);
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "ms_mark_burn_window") {
+    // How long a burn outlives its last hit, ADDED to the base rather than
+    // multiplied: the card says "twice as long" and one card saying "twice" is
+    // worth more than two cards saying "60% longer", because the first is a
+    // sentence the player can picture.
+    stats.markBurnWindow += value;
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "ms_mark_burn_chill") {
+    // The burn slows as well as burns, which is the one thing a fire mark
+    // obviously should do and never did: a body that is alight and walking away is
+    // a body the player cannot catch up to.
+    stats.markBurnChill += value;
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "ms_mark_vuln_deeper") {
+    // Both halves together, and they have to move together: a steeper step under an
+    // unchanged ceiling is a card whose ramp gets to its own limit faster and then
+    // does nothing, which is worse than a card that never ramped.
+    stats.markVuln *= 1.0F + value;
+    stats.markVulnMax *= 1.0F + value;
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "ms_mark_vuln_armour") {
+    // Hex and Armour Split in one card, and it is a card rather than a second mark
+    // because the player already chose this line: the body it applies to is the body
+    // they have been softening since L16, and sending them back to a different L16
+    // root to get the other half would be asking them to abandon the tree they are
+    // standing in.
+    //
+    // NO multiplier on the strip, and that is the interesting part of the card. The
+    // four mark multipliers are per-mark, this run has no mark multiplier for the
+    // strip because it never took the card that seeds one, and a card that quietly
+    // borrowed Hex's 60% would be the single place the per-mark rule leaked -- and
+    // would be invisible, because the strip would simply be stronger than the
+    // player had any way to predict.
+    stats.markDefStrip += value;
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "ms_mark_split_seed") {
+    // The Hex branch's second mark, and the only run in the game that carries two.
+    // It seeds AND multiplies its own mark, for the reason every root does.
+    stats.markDefStrip += 22.0F;
+    stats.milestone.markDefStrip += value;
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "ms_mark_defstrip_deeper") {
+    stats.markDefStrip *= 1.0F + value;
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "ms_mark_defstrip_vuln") {
+    // A stripped body takes more from everything. Flat, not a ramp, and stored in
+    // `brittle` rather than added to `vuln` -- see EnemyTraits::brittle for why
+    // folding a constant into a ceiling-limited ramp would be a lie about both.
+    stats.markDefStripVuln += value;
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "ms_mark_chill_deeper") {
+    stats.markChillTime *= 1.0F + value;
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "ms_mark_chill_mul") {
+    // The DEPTH of the slow, not the duration of it: a second axis on the same
+    // card, and the reason a run can be slowed nearly to a stop without any of it
+    // being the ice weapons' own freeze.
+    stats.markChillMul += value;
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "ms_mark_chill_brittle") {
+    stats.markChillBrittle += value;
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "ms_mark_chill_armour") {
+    stats.markChillArmour += value;
     return {true, 0.0F, 0.0F};
   }
   if (effect == "ms_reach") {
@@ -3032,36 +3140,126 @@ void Game::applyChill(entt::entity e, float mul, float time) {
 
 void Game::applyMarks(entt::entity e, float towardX, float towardY) {
   if (!registry_.valid(e)) return;
+  // FOUR multipliers, each scoped to its own mark, and the scoping is the whole
+  // design of the Element tree rather than a detail of it. One shared `markMul`
+  // over all four looked tidier and was unreachable: the group is exclusive, so a
+  // run holds exactly one mark root and "all four" always meant "the one you have".
+  // Split apart, the Hex branch can take Armour Split as well and be the one line
+  // that carries two marks -- which is what makes it a fork rather than a
+  // restatement.
+  const auto& m = stats_.milestone;
+  auto* en = registry_.try_get<Enemy>(e);
+  auto* tr = registry_.try_get<EnemyTraits>(e);
+
   // Frostbind: a hit chills, so a melee build gets an ice weapon's control for
   // free. The chill is shallower than a deep freeze on purpose -- this is meant
   // to be the everyday version of slow, not a second copy of the ice cards.
-  const float markMul = 1.0F + stats_.milestone.mark;
+  //
+  // The DEPTH is the part the multiplier reaches, and not only the duration: a
+  // card that says "counts 60% stronger" while quietly leaving the slow exactly
+  // as weak is a card that spends its whole number on the smaller of the two
+  // things it was scaling.
+  const float chillMul = 1.0F + m.markChill;
+  const float chillDepth = std::max(0.0F, kMarkChillMul + stats_.markChillMul);
   if (stats_.markChillTime > 0.0F) {
-    applyChill(e, kMarkChillMul, stats_.markChillTime * markMul);
+    applyChill(e, chillDepth, stats_.markChillTime * chillMul);
+    // Both second halves go through the chill's own multiplier, and the reason is
+    // that the root says "your burn counts 60% stronger" -- it makes a claim about
+    // everything the mark DOES, and a claim that quietly exempts two of the four
+    // things the mark does is worse than no claim. The cards print the multiplied
+    // number for the same reason every other card in these trees does: the sentence
+    // on the card is the number the body ends up with.
+    if (stats_.markChillBrittle > 0.0F && tr != nullptr) {
+      tr->brittle = std::max(tr->brittle, stats_.markChillBrittle * chillMul);
+    }
+    if (stats_.markChillArmour > 0.0F && tr != nullptr) {
+      tr->defense = std::max(0.0F, tr->defense - stats_.markChillArmour * chillMul);
+    }
   }
   // Emberbrand: a hit lights it up. Refreshed rather than accumulated, so the
   // weapon you field decides whether a target stays alight, and a slow heavy
   // hitter is honestly worse at this than a fast one.
-  if (stats_.markBurnDps > 0.0F) {
-    if (auto* en = registry_.try_get<Enemy>(e); en != nullptr) {
-      en->burnDps = std::max(en->burnDps, stats_.markBurnDps * markMul);
-      en->burnT = std::max(en->burnT, kMarkBurnWindow);
+  const float burnMul = 1.0F + m.markBurn;
+  if (stats_.markBurnDps > 0.0F && en != nullptr) {
+    const float dps = stats_.markBurnDps * burnMul;
+    en->burnDps = std::max(en->burnDps, dps);
+    en->burnT = std::max(en->burnT, kMarkBurnWindow * stats_.markBurnWindow);
+    if (stats_.markBurnChill > 0.0F) {
+      applyChill(e, kMarkChillMul, stats_.markBurnChill * burnMul);
     }
   }
   // Hex: this body is softer than it was. Applied AFTER this hit is resolved, so
   // the ramp costs the first strike nothing and every strike after it more.
-  if (stats_.markVuln > 0.0F) {
-    if (auto* tr = registry_.try_get<EnemyTraits>(e); tr != nullptr) {
-      tr->vuln = std::min(tr->vuln + stats_.markVuln * markMul, stats_.markVulnMax);
-    }
+  const float vulnMul = 1.0F + m.markVuln;
+  if (stats_.markVuln > 0.0F && tr != nullptr) {
+    tr->vuln = std::min(tr->vuln + stats_.markVuln * vulnMul, stats_.markVulnMax);
   }
   // Armour Split: the target's own mitigation is taken off, permanently, a piece
   // at a time. It only bites if the target has any left -- a naked bat cannot be
   // made more naked -- which is what makes it a card for the late game, where the
   // roster finally grows armour to strip.
-  if (stats_.markDefStrip > 0.0F) {
-    if (auto* tr = registry_.try_get<EnemyTraits>(e); tr != nullptr) {
-      tr->defense = std::max(0.0F, tr->defense - stats_.markDefStrip * markMul);
+  const float stripMul = 1.0F + m.markDefStrip;
+  if (stats_.markDefStrip > 0.0F && tr != nullptr) {
+    tr->defense = std::max(0.0F, tr->defense - stats_.markDefStrip * stripMul);
+    if (stats_.markDefStripVuln > 0.0F) {
+      // Through the STRIP's multiplier, not the chill's and not Hex's: this is
+      // something the armour strip does, so the armour strip's "60% stronger"
+      // reaches it and nothing else does.
+      tr->brittle = std::max(tr->brittle, stats_.markDefStripVuln * stripMul);
+    }
+  }
+
+  // Flashover: the burn jumps to the bodies standing BESIDE the one that was hit --
+  // the nearest few, and a fixed few. Both halves are load-bearing and the first
+  // version of this had only the second: the cap was real, but which bodies filled
+  // it came out in spatial-hash CELL order, so the same card lit a different two
+  // bodies on the same frame depending on where the grid happened to fall. A card
+  // that says "the two bodies either side" and means "two bodies the hash saw
+  // first" is a card whose text is a lie with a deterministic pattern, which is the
+  // hardest kind to notice and to report.
+  //
+  // So it is nearest-first, found by keeping a sorted list of the best few as the
+  // query goes. Eight is a hard ceiling rather than the current maximum of four: the
+  // list is a fixed stack array, and a card that asked for twenty bodies must be a
+  // card that says twenty on it rather than one that writes past the end of a buffer
+  // in the middle of a firefight.
+  if (stats_.markBurnSpread > 0 && en != nullptr && stats_.markBurnDps > 0.0F) {
+    const auto* t = registry_.try_get<Transform>(e);
+    if (t != nullptr) {
+      constexpr std::size_t kSpreadCap = 8;
+      const int want = std::min(stats_.markBurnSpread, static_cast<int>(kSpreadCap));
+      float bestDist[kSpreadCap] = {};
+      entt::entity best[kSpreadCap] = {};
+      int found = 0;
+      hash_.forEachNear(t->x, t->y, kMarkBurnSpreadRadius, [&](std::uint32_t id) {
+        const auto other = static_cast<entt::entity>(id);
+        if (other == e || !registry_.valid(other)) return;
+        if (registry_.try_get<Enemy>(other) == nullptr) return;
+        const auto* ot = registry_.try_get<Transform>(other);
+        if (ot == nullptr) return;
+        const float dx = ot->x - t->x;
+        const float dy = ot->y - t->y;
+        const float d2 = dx * dx + dy * dy;
+        if (found == want && d2 >= bestDist[found - 1]) return;
+        // Insertion sort into the first `want` slots, then keep the list's length.
+        int at = found < want ? found : want - 1;
+        while (at > 0 && bestDist[at - 1] > d2) {
+          bestDist[at] = bestDist[at - 1];
+          best[at] = best[at - 1];
+          --at;
+        }
+        bestDist[at] = d2;
+        best[at] = other;
+        if (found < want) ++found;
+      });
+      const float dps = stats_.markBurnDps * burnMul;
+      const float window = kMarkBurnWindow * stats_.markBurnWindow;
+      for (int i = 0; i < found; ++i) {
+        auto* oen = registry_.try_get<Enemy>(best[i]);
+        if (oen == nullptr) continue;
+        oen->burnDps = std::max(oen->burnDps, dps);
+        oen->burnT = std::max(oen->burnT, window);
+      }
     }
   }
   (void)towardX;
@@ -3078,6 +3276,12 @@ void Game::applyEnemyDamage(entt::entity e, float dmg, bool mark) {
   // applied again -- so the ramp is a ratchet that the current hit does not
   // enjoy, only the ones after it.
   if (tr != nullptr && tr->vuln > 0.0F) dmg *= 1.0F + tr->vuln;
+  // BRITTLE, beside Hex and on the same terms: a flat factor read before
+  // mitigation, from a mark that did not ramp. The two are separate fields because
+  // they behave differently and a card that says "chilled bodies take 25% more"
+  // is describing something Hex deliberately is not -- Hex grows with every hit
+  // and stops at a ceiling, brittle is the same number from the first hit on.
+  if (tr != nullptr && tr->brittle > 0.0F) dmg *= 1.0F + tr->brittle;
   // ...and the Execution card, on the same target, read BEFORE defense for the
   // same reason: it should multiply what the hit is, not what survives it. The
   // order between the two is not load-bearing (they are both target-conditional
@@ -6749,11 +6953,32 @@ void Game::buildChoices() {
   // equipped used to be picked here, and choosing it silently failed, leaving
   // the player on the level-up screen forever. The slot rule is the same kind of
   // eligibility, so it gets the same kind of check.
+  //
+  // AND NOT A MILESTONE CARD. This is the one filter above that is a PROMISE
+  // rather than a guard, and it was missing here for two rounds. A milestone card
+  // is the game's one choice-against-alternatives moment: it is chosen on the violet
+  // screen, beside the group it belongs to, at a level where taking it changes what
+  // the run is. This fallback offered them anywhere, which in practice meant a
+  // tier-two card from a tree the run had already entered, eighty levels after the
+  // screen it belonged to, as the ONLY card on an ordinary level-up -- a milestone
+  // chosen against nothing, which is the exact thing the milestone screen exists to
+  // prevent. The 140-level diagnostic caught it as a single line reading
+  // "L112 cards=1 [m32_ember_deep]", which is a card that should not have been on the
+  // screen at all rather than a card that was badly chosen.
+  //
+  // The cost of refusing is that a dry screen becomes an honest empty screen instead
+  // of a screen with one arbitrary card on it. That cost is real and it is the
+  // visible symptom of a pool that has nothing left in it, which is a problem to fix
+  // in the pool (more uniques, deeper chests) and not by handing out a card from a
+  // screen the player never asked for. An empty screen tells the designer the pool
+  // ran out; a milestone card hides it.
   if (choices_.empty()) {
     for (std::size_t i = 0; i < content_.upgrades.size(); ++i) {
-      if (stacks_[i] >= content_.upgrades[i].maxStacks || blocked_[i]) continue;
+      const auto& u = content_.upgrades[i];
+      if (u.kind == "milestone") continue;
+      if (stacks_[i] >= u.maxStacks || blocked_[i]) continue;
       if (!upgradeIsUsable(static_cast<int>(i))) continue;
-      if (content_.upgrades[i].slot && stacks_[i] == 0 && !openSlot) continue;
+      if (u.slot && stacks_[i] == 0 && !openSlot) continue;
       choices_.push_back({Choice::Kind::Upgrade, static_cast<int>(i)});
       break;
     }
@@ -8662,6 +8887,28 @@ void Game::testDespawnEnemies() {
   }
 }
 
+void Game::testSpawnTraitedEnemyAt(float x, float y, float defense, float speed) {
+  const auto e = registry_.create();
+  lastTestSpawn_ = e;
+  registry_.emplace<Transform>(e, x, y, x, y);
+  registry_.emplace<Velocity>(e);
+  registry_.emplace<Radius>(e, 0.3F);
+  // A pool big enough that a test can hit it a dozen times and never watch it die,
+  // because a mark that only applies to living bodies (applyEnemyDamage bails on a
+  // corpse) would otherwise look like a card that works once.
+  registry_.emplace<Health>(e, 100000.0F, 100000.0F);
+  Enemy en{};
+  en.speed = speed;
+  en.touch = 0.0F;
+  registry_.emplace<Enemy>(e, en);
+  EnemyTraits tr{};
+  tr.defense = defense;
+  registry_.emplace<EnemyTraits>(e, tr);
+  Sprite sp{};
+  sp.color = {1.0F, 0.25F, 0.25F, 1.0F};
+  registry_.emplace<Sprite>(e, sp);
+}
+
 void Game::testSpawnTieredEnemyAt(float x, float y, int tier, std::uint32_t traits,
                                   int def) {
   const int t = std::clamp(tier, 0, 3);
@@ -8752,6 +8999,63 @@ float Game::testFirstEnemyMaxHp() const {
   auto view = registry_.view<Health, Enemy>();
   for (const auto e : view) {
     return view.get<Health>(e).max;
+  }
+  return -1.0F;
+}
+
+float Game::testFirstEnemyBurnDps() const {
+  auto view = registry_.view<Enemy>();
+  for (const auto e : view) {
+    return view.get<Enemy>(e).burnDps;
+  }
+  return -1.0F;
+}
+
+float Game::testFirstEnemySlowMul() const {
+  auto view = registry_.view<Enemy>();
+  for (const auto e : view) {
+    return view.get<Enemy>(e).slowMul;
+  }
+  return -1.0F;
+}
+
+float Game::testFirstEnemyVuln() const {
+  auto view = registry_.view<EnemyTraits>();
+  for (const auto e : view) {
+    return view.get<EnemyTraits>(e).vuln;
+  }
+  return -1.0F;
+}
+
+float Game::testFirstEnemySlowT() const {
+  auto view = registry_.view<Enemy>();
+  for (const auto e : view) {
+    return view.get<Enemy>(e).slowT;
+  }
+  return -1.0F;
+}
+
+int Game::testBurningEnemies() const {
+  auto view = registry_.view<Enemy>();
+  int n = 0;
+  for (const auto e : view) {
+    if (view.get<Enemy>(e).burnDps > 0.0F) ++n;
+  }
+  return n;
+}
+
+float Game::testFirstEnemyDefense() const {
+  auto view = registry_.view<EnemyTraits>();
+  for (const auto e : view) {
+    return view.get<EnemyTraits>(e).defense;
+  }
+  return -1.0F;
+}
+
+float Game::testFirstEnemyBrittle() const {
+  auto view = registry_.view<EnemyTraits>();
+  for (const auto e : view) {
+    return view.get<EnemyTraits>(e).brittle;
   }
   return -1.0F;
 }

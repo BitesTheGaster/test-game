@@ -409,10 +409,27 @@ most worth having.
 | Hail | `m32_tempest_hail` | ms_pierce | 2 | 1 |  | 32 | execution.proj.deep | m16_tempest_deep | yes | Pierce +2, and your pierce bonus is tripled. 2 becomes 6. |
 | Spine | `m32_skewer_spine` | ms_pierce_armour | 1 | 1 |  | 32 | execution.proj.pierce | m16_tempest_pierce | yes | Pierce +2, and your pierce bonus is tripled. Half a body's armour stops mattering. |
 | Lattice | `m32_skewer_lattice` | ms_pierce_area | 3 | 1 |  | 32 | execution.proj.pierce | m16_tempest_pierce | yes | Pierce +6, and your pierce bonus is multiplied fivefold. Every blast is 40% wider. |
-| Frostbind | `m16_frostbind` | mark_slow | 2.5 | 3 |  | 16 | element |  | yes | Every hit chills what it strikes for 2.5s |
-| Emberbrand | `m16_emberbrand` | mark_burn | 22 | 3 |  | 16 | element |  | yes | Every hit sets it alight: 22 burning damage a second |
-| Hex | `m16_hex` | mark_vuln | 0.14 | 3 |  | 16 | element |  | yes | Every hit makes that body take 14% more damage, up to +84% |
-| Armour Split | `m16_splitarmor` | mark_defstrip | 22 | 3 |  | 16 | element |  | yes | Every hit strips 22 of the target's own armour, for good |
+| Emberbrand | `m16_emberbrand` | ms_mark_burn_seed | 0.6 | 1 |  | 16 | element |  | yes | Every hit sets it alight: 35 burning damage a second, and your burn counts 60% stronger. |
+| Hex | `m16_hex` | ms_mark_vuln_seed | 0.6 | 1 |  | 16 | element |  | yes | Every hit makes that body take 22% more damage, up to +179%. |
+| Frostbind | `m16_frostbind` | ms_mark_chill_seed | 0.6 | 1 |  | 16 | element |  | yes | Every hit chills what it strikes for 4s, and the chill counts 60% stronger. |
+| Emberbrand Deep | `m32_ember_deep` | ms_mark_burn_deeper | 1 | 1 |  | 32 | element.burn | m16_emberbrand | yes | 35 becomes 70 burning damage a second. |
+| Emberbrand Spread | `m32_ember_spread` | ms_mark_burn_spread | 2 | 1 |  | 32 | element.burn | m16_emberbrand | yes | The burn jumps to two bodies either side. |
+| Hex Deep | `m32_hex_deep` | ms_mark_vuln_deeper | 1 | 1 |  | 32 | element.hex | m16_hex | yes | The ramp is steeper and the ceiling higher: 45% per hit, up to +358%. |
+| Armour Split | `m32_hex_split` | ms_mark_split_seed | 0.6 | 1 |  | 32 | element.hex | m16_hex | yes | Every hit also strips 35 of the target's own armour, and the stripping counts 60% stronger. |
+| Frostbind Deep | `m32_frost_deep` | ms_mark_chill_deeper | 1 | 1 |  | 32 | element.frost | m16_frostbind | yes | 4s becomes 8s of chill. |
+| Frostbind Slow | `m32_frost_slow` | ms_mark_chill_mul | 0.5 | 1 |  | 32 | element.frost | m16_frostbind | yes | Chilled bodies are slowed 50% harder. |
+| Emberbrand Ruin | `m64_ember_ruin` | ms_mark_burn_deeper | 1 | 1 |  | 64 | element.burn.deep | m32_ember_deep | yes | 70 becomes 140 burning damage a second. |
+| Emberbrand Cinder | `m64_ember_cinder` | ms_mark_burn_chill | 1 | 1 |  | 64 | element.burn.deep | m32_ember_deep | yes | Bodies that burn are also slowed, for 1.6s. |
+| Emberbrand Flare | `m64_ember_flare` | ms_mark_burn_spread | 2 | 1 |  | 64 | element.burn.spread | m32_ember_spread | yes | The burn jumps to four bodies either side. |
+| Emberbrand Wildfire | `m64_ember_wildfire` | ms_mark_burn_window | 1 | 1 |  | 64 | element.burn.spread | m32_ember_spread | yes | A burn outlives its last hit for 8s. |
+| Hex Grievous | `m64_hex_grievous` | ms_mark_vuln_deeper | 0.5 | 1 |  | 64 | element.hex.deep | m32_hex_deep | yes | The ramp is steeper and the ceiling higher: 67% per hit, up to +537%. |
+| Hex Rupture | `m64_hex_armour` | ms_mark_vuln_armour | 22 | 1 |  | 64 | element.hex.deep | m32_hex_deep | yes | Every hit also strips 22 of the target's own armour. |
+| Armour Split Ruin | `m64_split_ruin` | ms_mark_defstrip_deeper | 1 | 1 |  | 64 | element.hex.split | m32_hex_split | yes | 35 becomes 70 armour stripped per hit. |
+| Armour Split Brittle | `m64_split_brittle` | ms_mark_defstrip_vuln | 0.2 | 1 |  | 64 | element.hex.split | m32_hex_split | yes | A stripped body takes 32% more damage from everything. |
+| Frostbind Permafrost | `m64_frost_permafrost` | ms_mark_chill_deeper | 1 | 1 |  | 64 | element.frost.deep | m32_frost_deep | yes | 8s becomes 16s of chill. |
+| Frostbind Brittle | `m64_frost_brittle` | ms_mark_chill_brittle | 0.25 | 1 |  | 64 | element.frost.deep | m32_frost_deep | yes | A chilled body takes 40% more damage from everything. |
+| Frostbind Glacier | `m64_frost_glacier` | ms_mark_chill_mul | 0.5 | 1 |  | 64 | element.frost.slow | m32_frost_slow | yes | Chilled bodies are slowed 50% harder again. |
+| Frostbind Hoarfrost | `m64_frost_hoar` | ms_mark_chill_armour | 22 | 1 |  | 64 | element.frost.slow | m32_frost_slow | yes | Every hit also strips 35 of the target's own armour. |
 | Bloodthirst | `m32_bloodthirst` | momentum_bloodthirst | 2 | 2 |  | 32 | momentum |  | yes | The kill chain feeds twice as fast, lasts twice as long, and its top end lifesteals |
 | Momentum | `m32_haste` | momentum_rate | 2 | 2 |  | 32 | momentum |  | yes | The kill chain grants +2% fire rate per stack, up to +60% |
 | Slaughter | `m32_slaughter` | momentum_damage | 8 | 2 |  | 32 | momentum |  | yes | The kill chain grants +8% damage per stack, up to +240% |
@@ -430,7 +447,16 @@ most worth having.
 |---|---|---|
 | apotheosis | Ascendant Skin, Crimson Crown, Perfection, Vanquisher | 4 |
 | bulwark | Barbed Skin, Repulsion, Stone Mantle | 3 |
-| element | Armour Split, Emberbrand, Frostbind, Hex | 4 |
+| element | Emberbrand, Frostbind, Hex | 3 |
+| element.burn | Emberbrand Deep, Emberbrand Spread | 2 |
+| element.burn.deep | Emberbrand Cinder, Emberbrand Ruin | 2 |
+| element.burn.spread | Emberbrand Flare, Emberbrand Wildfire | 2 |
+| element.frost | Frostbind Deep, Frostbind Slow | 2 |
+| element.frost.deep | Frostbind Brittle, Frostbind Permafrost | 2 |
+| element.frost.slow | Frostbind Glacier, Frostbind Hoarfrost | 2 |
+| element.hex | Armour Split, Hex Deep | 2 |
+| element.hex.deep | Hex Grievous, Hex Rupture | 2 |
+| element.hex.split | Armour Split Brittle, Armour Split Ruin | 2 |
 | execution | Frenzy, Overload, Tempest | 3 |
 | execution.dmg | Bloodied, Overdrive | 2 |
 | execution.dmg.deep | Guillotine, Ruin | 2 |
@@ -457,12 +483,21 @@ most worth having.
 
 | Parent | Branches | N |
 |---|---|---|
+| `m16_emberbrand` | Emberbrand Deep (`m32_ember_deep`, group `element.burn`); Emberbrand Spread (`m32_ember_spread`, group `element.burn`) | 2 |
 | `m16_frenzy_deep` | Blizzard (`m32_frenzy_blizzard`, group `execution.rate.deep`); Cadence (`m32_frenzy_cadence`, group `execution.rate.deep`) | 2 |
 | `m16_frenzy_settled` | Anchor (`m32_rooted_anchor`, group `execution.rate.still`); Pillar (`m32_rooted_pillar`, group `execution.rate.still`) | 2 |
+| `m16_frostbind` | Frostbind Deep (`m32_frost_deep`, group `element.frost`); Frostbind Slow (`m32_frost_slow`, group `element.frost`) | 2 |
+| `m16_hex` | Armour Split (`m32_hex_split`, group `element.hex`); Hex Deep (`m32_hex_deep`, group `element.hex`) | 2 |
 | `m16_overload_bloodied` | Second Wind (`m32_bloodied_secondwind`, group `execution.dmg.low`); Wrath (`m32_bloodied_wrath`, group `execution.dmg.low`) | 2 |
 | `m16_overload_deep` | Guillotine (`m32_overload_guillotine`, group `execution.dmg.deep`); Ruin (`m32_overload_ruin`, group `execution.dmg.deep`) | 2 |
 | `m16_tempest_deep` | Hail (`m32_tempest_hail`, group `execution.proj.deep`); Tempest Ruin (`m32_tempest_deep`, group `execution.proj.deep`) | 2 |
 | `m16_tempest_pierce` | Lattice (`m32_skewer_lattice`, group `execution.proj.pierce`); Spine (`m32_skewer_spine`, group `execution.proj.pierce`) | 2 |
+| `m32_ember_deep` | Emberbrand Cinder (`m64_ember_cinder`, group `element.burn.deep`); Emberbrand Ruin (`m64_ember_ruin`, group `element.burn.deep`) | 2 |
+| `m32_ember_spread` | Emberbrand Flare (`m64_ember_flare`, group `element.burn.spread`); Emberbrand Wildfire (`m64_ember_wildfire`, group `element.burn.spread`) | 2 |
+| `m32_frost_deep` | Frostbind Brittle (`m64_frost_brittle`, group `element.frost.deep`); Frostbind Permafrost (`m64_frost_permafrost`, group `element.frost.deep`) | 2 |
+| `m32_frost_slow` | Frostbind Glacier (`m64_frost_glacier`, group `element.frost.slow`); Frostbind Hoarfrost (`m64_frost_hoar`, group `element.frost.slow`) | 2 |
+| `m32_hex_deep` | Hex Grievous (`m64_hex_grievous`, group `element.hex.deep`); Hex Rupture (`m64_hex_armour`, group `element.hex.deep`) | 2 |
+| `m32_hex_split` | Armour Split Brittle (`m64_split_brittle`, group `element.hex.split`); Armour Split Ruin (`m64_split_ruin`, group `element.hex.split`) | 2 |
 | `m4_aegis` | Bulwark (`m8_bulwark`, group `survivor.aegis`); Riposte (`m8_riposte`, group `survivor.aegis`) | 2 |
 | `m4_crimson` | Blood Debt (`m8_blooddebt`, group `survivor.crimson`); Wound Echo (`m8_woundecho`, group `survivor.crimson`) | 2 |
 | `m4_renewal` | Deep Roots (`m8_deeproots`, group `survivor.renewal`); Stillness Bloom (`m8_stillbloom`, group `survivor.renewal`) | 2 |
@@ -476,7 +511,7 @@ most worth having.
 | `m8_tempest` | Skewer (`m16_tempest_pierce`, group `execution.proj`); Tempest Deep (`m16_tempest_deep`, group `execution.proj`) | 2 |
 | `m8_woundecho` | Red Mend (`m16_redmend`, group `survivor.crimson.echo`); Warmblood (`m16_warmblood`, group `survivor.crimson.echo`) | 2 |
 
-**Totals:** 196 upgrades (88 normal, 52 unique, 56 milestones), 143 of which take an item slot.
+**Totals:** 213 upgrades (88 normal, 52 unique, 73 milestones), 160 of which take an item slot.
 
 
 ---

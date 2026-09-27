@@ -8006,54 +8006,124 @@ TEST_CASE("A branch card cannot reach a run through any of the four doors") {
   REQUIRE(onScreen == 2);
 }
 
-TEST_CASE("The four on-hit marks are exclusive, real, and none of them is free") {
+TEST_CASE("The mark roots are exclusive, each one is live, and only one line can carry two") {
   // The mark group is the second question the player asked for: "do you want to
-  // slow them, or set them on fire, or something else?" Four answers, one pick.
+  // slow them, or set them on fire, or make them softer?" It is now THREE roots and
+  // a tree, because a root row of four made the per-mark multiplier unreachable --
+  // an exclusive group means a run holds exactly one root, so "all four marks"
+  // always meant "the one you have".
   const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
 
-  struct Mark {
+  struct Root {
     const char* id;
     const char* effect;
   };
-  const Mark marks[] = {
-      {"m16_frostbind", "mark_slow"}, {"m16_emberbrand", "mark_burn"},
-      {"m16_hex", "mark_vuln"},       {"m16_splitarmor", "mark_defstrip"},
+  const Root roots[] = {
+      {"m16_frostbind", "ms_mark_chill_seed"},
+      {"m16_emberbrand", "ms_mark_burn_seed"},
+      {"m16_hex", "ms_mark_vuln_seed"},
   };
   std::vector<int> idxs;
-  for (const auto& m : marks) {
+  for (const auto& r : roots) {
     int idx = -1;
     for (std::size_t i = 0; i < content.upgrades.size(); ++i) {
-      if (content.upgrades[i].id == m.id) {
+      if (content.upgrades[i].id == r.id) {
         idx = static_cast<int>(i);
-        REQUIRE(content.upgrades[i].effect == m.effect);
+        CAPTURE(r.id);
+        REQUIRE(content.upgrades[i].effect == r.effect);
         REQUIRE(content.upgrades[i].group == "element");
+        REQUIRE(content.upgrades[i].maxStacks == 1);
       }
     }
-    CAPTURE(m.id);
+    CAPTURE(r.id);
     REQUIRE(idx >= 0);
     REQUIRE(content.upgrades[static_cast<std::size_t>(idx)].value > 0.0F);
     idxs.push_back(idx);
   }
-  REQUIRE(idxs.size() == 4);
-  // A run can own exactly one of them: the group closes after the first.
+  REQUIRE(idxs.size() == 3);
+
+  // A run can own exactly one root, and the one it owns must be genuinely live --
+  // exactly one mark field non-zero. A root whose mark never reached the screen
+  // would still close the other two out, so the player would have been charged a
+  // whole tree for nothing and the exclusivity check would have passed.
   for (const int taken : idxs) {
     game::Game g{content, 5};
     g.testClearWeapons();
     REQUIRE(g.testGrantUpgrade(taken));
-    // The three it did not take are exactly the ones that are now closed off.
+    // The two it did not take are exactly the ones that are now closed off.
     for (const int other : idxs) {
       if (other == taken) continue;
       CAPTURE(other);
       REQUIRE(g.testUpgradeBlocked(other));
     }
-    // And the one it took is not.
+    // ...and the one it took is not.
     REQUIRE_FALSE(g.testUpgradeBlocked(taken));
-    // And the one it took is genuinely live: exactly one mark field is non-zero.
     const auto& st = g.stats();
     const int live = (st.markChillTime > 0.0F ? 1 : 0) + (st.markBurnDps > 0.0F ? 1 : 0) +
                      (st.markVuln > 0.0F ? 1 : 0) + (st.markDefStrip > 0.0F ? 1 : 0);
     CAPTURE(live);
     REQUIRE(live == 1);
+    // ...and exactly one mark MULTIPLIER, so a root is not quietly scaling the
+    // other three as well. This is the property the per-mark split exists for, and
+    // it is the one a shared multiplier could not satisfy.
+    const auto& sc = st.milestone;
+    const int scaled = (sc.markChill > 0.0F ? 1 : 0) + (sc.markBurn > 0.0F ? 1 : 0) +
+                       (sc.markVuln > 0.0F ? 1 : 0) + (sc.markDefStrip > 0.0F ? 1 : 0);
+    CAPTURE(scaled);
+    REQUIRE(scaled == 1);
+  }
+
+  // THE SECOND MARK, and the only route to it. Armour Split is not a root any
+  // more; it is a branch under Hex, so exactly one of the three lines can end up
+  // carrying two marks and the other two can never carry a second one at any depth.
+  // That asymmetry is the whole reason the Hex fork is a fork.
+  const auto indexOf = [&content](const std::string& id) {
+    for (std::size_t i = 0; i < content.upgrades.size(); ++i) {
+      if (content.upgrades[i].id == id) return static_cast<int>(i);
+    }
+    return -1;
+  };
+  {
+    game::Game hex{content, 5};
+    hex.testClearWeapons();
+    const int h = indexOf("m16_hex");
+    const int split = indexOf("m32_hex_split");
+    REQUIRE(h >= 0);
+    REQUIRE(split >= 0);
+    REQUIRE(hex.testGrantUpgrade(h));
+    REQUIRE(hex.testGrantUpgrade(split));
+    const auto& st = hex.stats();
+    CAPTURE(st.markVuln);
+    CAPTURE(st.markDefStrip);
+    REQUIRE(st.markVuln > 0.0F);
+    REQUIRE(st.markDefStrip > 0.0F);
+    // Two marks and two multipliers, which is the run this whole refactor is for.
+    const auto& sc = st.milestone;
+    REQUIRE(sc.markVuln > 0.0F);
+    REQUIRE(sc.markDefStrip > 0.0F);
+    // ...and the strip does NOT borrow Hex's 60%. This is the check the comment on
+    // the per-mark fields asks for, and it is the one that would fail first if
+    // anyone ever widened a multiplier to "all the marks the run has".
+    REQUIRE(sc.markDefStrip == Catch::Approx(0.6F).margin(0.001F));
+  }
+  // The other two lines reach a second mark only by being told to, on the record,
+  // in their own branch -- never by accident, and never by depth alone.
+  for (const char* branch : {"element.burn", "element.frost"}) {
+    int live = 0;
+    for (const auto& u : content.upgrades) {
+      if (u.group == branch && u.effect.find("ms_mark_") == 0) ++live;
+    }
+    CAPTURE(branch);
+    REQUIRE(live > 0);
+    for (const auto& u : content.upgrades) {
+      if (u.group == branch) {
+        // Nothing in these two branches may seed a mark the root did not.
+        const bool seedsAnother =
+            u.effect == "ms_mark_split_seed" || u.effect == "ms_mark_vuln_armour" ||
+            u.effect == "ms_mark_chill_armour";
+        REQUIRE_FALSE(seedsAnother);
+      }
+    }
   }
 }
 
@@ -8958,6 +9028,596 @@ TEST_CASE("Every Execution branch card does what it prints, all the way down the
       };
       REQUIRE(plain(0.3F) == Catch::Approx(plain(0.7F)).margin(0.001F));
     }
+  }
+}
+
+TEST_CASE("A milestone card is only ever offered on a milestone screen") {
+  // The promise the violet screen makes is that a milestone is a choice made
+  // AGAINST ITS ALTERNATIVES: the whole group is on screen at once, and the rest of
+  // that group is shut for the run. A milestone card on an ordinary level-up cannot
+  // keep that promise, because there is nothing on the screen to be against -- and the
+  // 140-level diagnostic found it happening for exactly that reason. The absolute
+  // fallback at the end of buildChoices() has no kind filter, so on a level where the
+  // normal pool had run dry it reached into the milestone table and handed out one
+  // tree card, on its own, eighty levels after the screen that card belonged to:
+  // "L112 cards=1 [m32_ember_deep]". A tree card chosen against nothing.
+  //
+  // So the rule is stated here as a rule about EVERY ordinary level, not about the
+  // one that was wrong. The check is a scan, not a reproduction: a reproduction would
+  // pin the level number, and the level number is a property of the seed and the
+  // economy rather than of the promise.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+
+  const auto isMilestone = [&content](const std::string& id) {
+    for (const auto& u : content.upgrades) {
+      if (u.id == id) return u.kind == "milestone";
+    }
+    return false;
+  };
+  // A milestone screen is a power-of-two level from 4 on, so anything else is an
+  // ordinary one. 1 and 2 are the opening screens and 3 is the first ordinary one, so
+  // the scan starts where ordinary level-ups actually start.
+  const auto isMilestoneLevel = [](int level) {
+    return level >= 4 && (level & (level - 1)) == 0;
+  };
+
+  // Three runs of very different shape, because the leak needs a dry pool and a dry
+  // pool needs a built run. An empty run proves nothing here: with the whole table
+  // open, the ordinary pool is never dry and the fallback is never reached.
+  std::vector<std::unique_ptr<game::Game>> runs;
+  for (const int seed : {101, 7717, 31337}) {
+    runs.push_back(std::make_unique<game::Game>(content, seed));
+    // Test mode, because a weapon offer would otherwise pad every screen with two
+    // or three weapon cards and the dry state this test exists to reach would be
+    // invisible behind them. The first draft of this scanned 402 ordinary levels,
+    // passed all 1609 of its own assertions, and never once saw an empty screen --
+    // not because the pool was full but because something was always on the screen.
+    runs.back()->enterTestMode();
+  }
+  // Run one is empty, so every level is well supplied and the ordinary pool is never
+  // dry. It is the control: it shows the scan passes on a run that has everything.
+  //
+  // Runs two and three are the condition the leak needs, and they are built into it
+  // rather than waited for. A 140-level autoplay reaches a dry pool at L107, which
+  // made this a test that only failed on one seed; a maxed run has a dry pool from
+  // the first level, so the fallback is reached on every ordinary screen of the scan.
+  //
+  // The cheat, and the full arsenal first. `testMaxAllItems` is the sandbox "max
+  // everything" and it loops until nothing more can be granted, which matters here: a
+  // single content-order pass leaves a card ungranted whenever a weapon-specific card
+  // comes before the weapon it belongs to, and the first draft of this test granted in
+  // one pass and so never actually reached an empty screen. Run three additionally
+  // answers part of the milestone tree, so the deferred branches are still unclaimed
+  // and still there for a pool that has run out to reach for.
+  for (std::size_t r = 1; r < runs.size(); ++r) {
+    auto& g = runs[r];
+    for (std::size_t i = 0; i < content.weapons.size(); ++i) {
+      g->testAddWeapon(static_cast<int>(i));
+    }
+    g->testMaxAllItems();
+  }
+  for (const char* const id : {"m16_emberbrand", "m32_ember_spread", "m16_hex",
+                               "m32_hex_deep", "m8_overload", "m8_frenzy",
+                               "m4_aegis", "m4_renewal"}) {
+    auto& g = runs[2];
+    for (std::size_t i = 0; i < content.upgrades.size(); ++i) {
+      if (content.upgrades[i].id == id && g->testGrantUpgrade(static_cast<int>(i))) break;
+    }
+  }
+
+  int scanned = 0;
+  int thinScreens = 0;
+  for (auto& g : runs) {
+    for (int level = 1; level <= 140; ++level) {
+      g->testSetLevel(level);
+      const auto ids = g->testChoiceIds();
+      if (ids.size() <= 1) ++thinScreens;
+      if (isMilestoneLevel(level)) continue;
+      ++scanned;
+      for (const auto& id : ids) {
+        CAPTURE(level);
+        CAPTURE(id);
+        // `<skip>` is a level-up with nothing on it, which is honest and is not this
+        // test's business. A milestone card is a broken promise, and this is the only
+        // place either of those two facts is checked.
+        if (id == "<skip>") continue;
+        REQUIRE_FALSE(isMilestone(id));
+      }
+    }
+  }
+  // The scan has to have actually reached the state it exists to reach. A rule test
+  // that only ever saw a full pool would pass on a build where the fallback is
+  // unreachable, which is the same class of test as a card that was never offered.
+  CAPTURE(scanned);
+  CAPTURE(thinScreens);
+  REQUIRE(scanned > 100);
+  REQUIRE(thinScreens > 0);
+
+  // ...and the milestone screens themselves must still offer milestone cards, or the
+  // filter above would be satisfied by a build that had simply stopped offering the
+  // tree at all. Checked at the levels where the tree has something to say.
+  for (const int level : {16, 32, 64}) {
+    auto g = std::make_unique<game::Game>(content, 4242);
+    g->testClearWeapons();
+    int offered = 0;
+    for (int mlevel = 4; mlevel <= level; mlevel <<= 1) {
+      g->testSetLevel(mlevel);
+      for (const auto& id : g->testChoiceIds()) {
+        if (id != "<skip>" && isMilestone(id)) ++offered;
+      }
+    }
+    CAPTURE(level);
+    CAPTURE(offered);
+    REQUIRE(offered > 0);
+  }
+}
+
+TEST_CASE("Every Element card does what it prints, and only to its own mark") {
+  // The Element tree is the first one whose CARDS cannot be checked by reading a
+  // number the player owns, because most of what they do happens to a body rather
+  // than to the sheet. So this walks the tree twice over: once through the accessors
+  // that fold the mark multiplier into the number the card prints, and once by
+  // spawning bodies and asking what the last hit actually did to them.
+  //
+  // The second half is the one that matters. Every bug found so far in this area was
+  // a card that stored something correctly and never spent it, or a multiplier that
+  // was set and read by a different axis than the card named -- and a stored number
+  // is equally happy in all three cases. "The field is right" is not evidence that
+  // the game does the thing.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  const auto indexOf = [&content](const std::string& id) {
+    for (std::size_t i = 0; i < content.upgrades.size(); ++i) {
+      if (content.upgrades[i].id == id) return static_cast<int>(i);
+    }
+    return -1;
+  };
+  using Run = std::unique_ptr<game::Game>;
+  const auto run = [&content, &indexOf](const std::vector<std::string>& path) {
+    auto g = std::make_unique<game::Game>(content, 101);
+    g->testDisableWaves();
+    g->testClearWeapons();
+    for (const auto& id : path) {
+      const int idx = indexOf(id);
+      REQUIRE(idx >= 0);
+      REQUIRE(g->testGrantUpgrade(idx));
+    }
+    return g;
+  };
+  const auto at = [&run](const std::function<float(const game::Game&)>& f,
+                         const std::vector<std::string>& path) {
+    return f(*run(path));
+  };
+
+  // A body, and one hit that lands on it. Zero damage on purpose: `applyEnemyDamage`
+  // applies the marks after the damage is resolved and bails if the body died, so a
+  // hit of 1.0 on a low-health body would measure the mark only on the runs where it
+  // failed to kill. Spawn, one step so the spatial hash exists for the spread, then
+  // the hit.
+  const auto struck = [&content, &indexOf](const std::vector<std::string>& path,
+                                           int bodies = 1) {
+    auto g = std::make_unique<game::Game>(content, 101);
+    g->testDisableWaves();
+    g->testClearWeapons();
+    for (const auto& id : path) {
+      const int idx = indexOf(id);
+      REQUIRE(idx >= 0);
+      REQUIRE(g->testGrantUpgrade(idx));
+    }
+    // A line of bodies, all inside the spread radius. Nothing is parked out of
+    // range on purpose: the "first" enemy is whichever one the registry hands over
+    // first, which is not the one that was spawned first, and an earlier draft
+    // parked a body far away and then discovered the spread was firing on THAT one
+    // and had no neighbours at all. The cap is proved by giving the card more
+    // bodies in range than it may reach, which needs no out-of-range body and does
+    // not depend on which body was hit.
+    for (int i = 0; i < bodies; ++i) {
+      // With traits, not the bare stub: half of what the Element cards do is written
+      // to EnemyTraits, so a body without one is a body the cards cannot act on and
+      // the assertion silently measures a card writing to nothing.
+      g->testSpawnTraitedEnemyAt(static_cast<float>(i) * 1.0F, 0.0F);
+    }
+    g->testAdvance(1.0F / 60.0F);
+    g->testDamageFirstEnemy(0.0F);
+    return g;
+  };
+
+  // --- the three roots ----------------------------------------------------------
+  // "Every hit sets it alight: 35 burning damage a second, and your burn counts 60%
+  // stronger." The 35 is 22 seeded at x1.6, and it is asserted twice: as the number
+  // the sheet would show, and as the number a body is actually left burning at.
+  const std::vector<std::string> ember{"m16_emberbrand"};
+  REQUIRE(at([](const game::Game& g) { return g.playerMarkBurnDps(); }, ember) ==
+          Catch::Approx(35.2F).margin(0.05F));
+  REQUIRE(struck(ember)->testFirstEnemyBurnDps() == Catch::Approx(35.2F).margin(0.05F));
+  // "Every hit makes that body take 22% more damage, up to +179%."
+  const std::vector<std::string> hex{"m16_hex"};
+  REQUIRE(at([](const game::Game& g) { return g.playerMarkVulnStep(); }, hex) ==
+          Catch::Approx(0.224F).margin(0.002F));
+  REQUIRE(at([](const game::Game& g) { return g.playerMarkVulnCeiling(); }, hex) ==
+          Catch::Approx(1.792F).margin(0.01F));
+  // "Every hit chills what it strikes for 4s, and the chill counts 60% stronger."
+  const std::vector<std::string> frost{"m16_frostbind"};
+  REQUIRE(at([](const game::Game& g) { return g.playerMarkChillTime(); }, frost) ==
+          Catch::Approx(4.0F).margin(0.01F));
+  REQUIRE(at([](const game::Game& g) { return g.playerMarkChillDepth(); }, frost) ==
+          Catch::Approx(0.60F).margin(0.01F));
+  // The depth, asserted on a body rather than on the field, because the multiplier
+  // reaching the SLOW and not just the DURATION was the specific thing that could
+  // have gone wrong and would have looked fine on a card that only mentions seconds.
+  REQUIRE(struck(frost)->testFirstEnemySlowMul() == Catch::Approx(0.60F).margin(0.01F));
+  REQUIRE(struck(frost)->testFirstEnemySlowT() == Catch::Approx(4.0F).margin(0.05F));
+
+  // A ROOT SCALES ONE MARK. The per-mark split is the whole reason the Element tree
+  // has three roots and not four, so this is asserted for all three rather than once:
+  // a root that quietly scaled the sibling marks would be invisible on its own card
+  // and would make the Hex branch's second mark free.
+  for (const std::vector<std::string>& root : {ember, hex, frost}) {
+    const Run g = run(root);
+    const auto& st = g->stats();
+    int live = 0;
+    live += st.markBurnDps > 0.0F ? 1 : 0;
+    live += st.markChillTime > 0.0F ? 1 : 0;
+    live += st.markVuln > 0.0F ? 1 : 0;
+    live += st.markDefStrip > 0.0F ? 1 : 0;
+    CAPTURE(live);
+    REQUIRE(live == 1);
+    int scaled = 0;
+    scaled += st.milestone.markBurn > 0.0F ? 1 : 0;
+    scaled += st.milestone.markChill > 0.0F ? 1 : 0;
+    scaled += st.milestone.markVuln > 0.0F ? 1 : 0;
+    scaled += st.milestone.markDefStrip > 0.0F ? 1 : 0;
+    CAPTURE(scaled);
+    REQUIRE(scaled == 1);
+  }
+
+  // --- the burn branch ----------------------------------------------------------
+  // "35 becomes 70 burning damage a second." / "70 becomes 140."
+  REQUIRE(at([](const game::Game& g) { return g.playerMarkBurnDps(); },
+             {"m16_emberbrand", "m32_ember_deep"}) == Catch::Approx(70.4F).margin(0.05F));
+  REQUIRE(at([](const game::Game& g) { return g.playerMarkBurnDps(); },
+             {"m16_emberbrand", "m32_ember_deep", "m64_ember_ruin"}) ==
+          Catch::Approx(140.8F).margin(0.05F));
+  // "The burn jumps to two bodies either side." / "four bodies either side."
+  //
+  // Measured as a COUNT OF BODIES ON FIRE, with more bodies in range than either
+  // card is allowed to reach. A card that jumped to everything in range would pass a
+  // test that only looked at one body, and a card that jumped to nothing passes a
+  // test that only looked at whether the target lit up.
+  {
+    // Four bodies, a card that may reach two: the one that was hit plus two.
+    const Run g = struck({"m16_emberbrand", "m32_ember_spread"}, 4);
+    CAPTURE(g->testBurningEnemies());
+    REQUIRE(g->testBurningEnemies() == 3);
+  }
+  {
+    // The same four, with the card that may reach four: all of them, because only
+    // three others were standing there. Which is the control for the count above --
+    // a spread that ignored its cap would also give three here, so the pair only
+    // means something because the two numbers differ.
+    const Run g = struck({"m16_emberbrand", "m32_ember_spread", "m64_ember_flare"}, 4);
+    CAPTURE(g->testBurningEnemies());
+    REQUIRE(g->testBurningEnemies() == 4);
+  }
+  // ...and with no spread card at all, exactly the one that was hit burns. This is
+  // the control that makes the two numbers above a measurement: without it, a build
+  // that set the whole screen alight would look identical to one that jumped to two.
+  REQUIRE(struck({"m16_emberbrand"}, 4)->testBurningEnemies() == 1);
+  // "A burn outlives its last hit for 8s." The base window is 4, so this is a claim
+  // about seconds and is asserted as one.
+  REQUIRE(at([](const game::Game& g) { return g.playerMarkBurnWindow(); },
+             {"m16_emberbrand", "m32_ember_spread", "m64_ember_wildfire"}) ==
+          Catch::Approx(8.0F).margin(0.01F));
+  // ...and the plain branch leaves the window alone, because a "deeper" card that
+  // quietly also stretched the burn's life would make the fork arithmetic.
+  REQUIRE(at([](const game::Game& g) { return g.playerMarkBurnWindow(); },
+             {"m16_emberbrand", "m32_ember_deep"}) == Catch::Approx(4.0F).margin(0.01F));
+  // "Bodies that burn are also slowed, for 1.6s."
+  {
+    const Run g = struck({"m16_emberbrand", "m32_ember_deep", "m64_ember_cinder"});
+    REQUIRE(g->testFirstEnemySlowMul() == Catch::Approx(0.60F).margin(0.01F));
+    REQUIRE(g->testFirstEnemySlowT() == Catch::Approx(1.6F).margin(0.05F));
+  }
+  // ...and the burn's own damage is untouched by its sibling, which is the other half
+  // of "these are two different cards".
+  REQUIRE(at([](const game::Game& g) { return g.playerMarkBurnDps(); },
+             {"m16_emberbrand", "m32_ember_deep", "m64_ember_cinder"}) ==
+          Catch::Approx(70.4F).margin(0.05F));
+
+  // --- the Hex branch -----------------------------------------------------------
+  // "The ramp is steeper and the ceiling higher: 45% per hit, up to +358%."
+  REQUIRE(at([](const game::Game& g) { return g.playerMarkVulnStep(); },
+             {"m16_hex", "m32_hex_deep"}) == Catch::Approx(0.448F).margin(0.002F));
+  REQUIRE(at([](const game::Game& g) { return g.playerMarkVulnCeiling(); },
+             {"m16_hex", "m32_hex_deep"}) == Catch::Approx(3.584F).margin(0.01F));
+  // "67% per hit, up to +537%." Half the second tier's step, and the reason is the
+  // ceiling -- so both numbers are asserted, because a card whose step doubled and
+  // whose ceiling did not is a ratchet that stalls.
+  REQUIRE(at([](const game::Game& g) { return g.playerMarkVulnStep(); },
+             {"m16_hex", "m32_hex_deep", "m64_hex_grievous"}) ==
+          Catch::Approx(0.672F).margin(0.002F));
+  REQUIRE(at([](const game::Game& g) { return g.playerMarkVulnCeiling(); },
+             {"m16_hex", "m32_hex_deep", "m64_hex_grievous"}) ==
+          Catch::Approx(5.376F).margin(0.01F));
+
+  // THE RAMP, on a body, over several hits, and then at its ceiling. The printed
+  // "+22% per hit, up to +179%" is a claim about a sequence and not about one hit,
+  // and the two halves fail independently: a ratchet that never rises is a flat
+  // bonus, and one that rises without a ceiling is a trap for a slow weapon.
+  {
+    const Run g = run(hex);
+    g->testSpawnTraitedEnemyAt(0.0F, 0.0F);
+    g->testAdvance(1.0F / 60.0F);
+    for (int hit = 1; hit <= 3; ++hit) {
+      g->testDamageFirstEnemy(0.0F);
+      CAPTURE(hit);
+      // The current hit does not enjoy the ramp, so after N hits the body carries
+      // N steps. This is the ratchet the comment on EnemyTraits::vuln describes.
+      REQUIRE(g->testFirstEnemyVuln() == Catch::Approx(0.224F * hit).margin(0.002F));
+    }
+  }
+  {
+    // ...and it stops. Twelve hits at a 0.224 step would be +269% if it were an open
+    // ramp; the ceiling says +179% and the ceiling is the whole reason the card can
+    // promise one.
+    const Run g = run(hex);
+    g->testSpawnTraitedEnemyAt(0.0F, 0.0F);
+    g->testAdvance(1.0F / 60.0F);
+    for (int hit = 0; hit < 12; ++hit) {
+      g->testDamageFirstEnemy(0.0F);
+    }
+    CAPTURE(g->testFirstEnemyVuln());
+    REQUIRE(g->testFirstEnemyVuln() == Catch::Approx(1.792F).margin(0.002F));
+  }
+
+  // "Every hit also strips 35 of the target's own armour, and the stripping counts
+  // 60% stronger." The second mark, and the only route to it.
+  REQUIRE(at([](const game::Game& g) { return g.playerMarkDefStrip(); },
+             {"m16_hex", "m32_hex_split"}) == Catch::Approx(35.2F).margin(0.05F));
+  // ...and the Hex it was taken beside is UNCHANGED. A branch card that quietly
+  // deepened its parent would make the second mark arrive with a bonus nobody chose.
+  REQUIRE(at([](const game::Game& g) { return g.playerMarkVulnStep(); },
+             {"m16_hex", "m32_hex_split"}) == Catch::Approx(0.224F).margin(0.002F));
+  // "Every hit also strips 22 of the target's own armour." -- Hex Rupture, and the
+  // exact number is the assertion. This run has no strip multiplier, because it never
+  // took the card that seeds one, so 22 is what the card says and 35 would be Hex's
+  // 60% leaking into a mark it does not name. The one place the per-mark rule could
+  // fail quietly.
+  REQUIRE(at([](const game::Game& g) { return g.playerMarkDefStrip(); },
+             {"m16_hex", "m32_hex_deep", "m64_hex_armour"}) ==
+          Catch::Approx(22.0F).margin(0.05F));
+  REQUIRE(at([](const game::Game& g) { return g.playerMarkDefStrip(); },
+             {"m16_hex", "m32_hex_split", "m64_split_ruin"}) ==
+          Catch::Approx(70.4F).margin(0.05F));
+  // ...and the sibling of the deeper strip leaves the strip alone.
+  REQUIRE(at([](const game::Game& g) { return g.playerMarkDefStrip(); },
+             {"m16_hex", "m32_hex_split", "m64_split_brittle"}) ==
+          Catch::Approx(35.2F).margin(0.05F));
+
+  // --- the Frostbind branch -----------------------------------------------------
+  // "4s becomes 8s of chill." / "8s becomes 16s."
+  REQUIRE(at([](const game::Game& g) { return g.playerMarkChillTime(); },
+             {"m16_frostbind", "m32_frost_deep"}) == Catch::Approx(8.0F).margin(0.01F));
+  REQUIRE(at([](const game::Game& g) { return g.playerMarkChillTime(); },
+             {"m16_frostbind", "m32_frost_deep", "m64_frost_permafrost"}) ==
+          Catch::Approx(16.0F).margin(0.01F));
+  // "Chilled bodies are slowed 50% harder." / "50% harder again."
+  REQUIRE(at([](const game::Game& g) { return g.playerMarkChillDepth(); },
+             {"m16_frostbind", "m32_frost_slow"}) == Catch::Approx(1.10F).margin(0.01F));
+  REQUIRE(at([](const game::Game& g) { return g.playerMarkChillDepth(); },
+             {"m16_frostbind", "m32_frost_slow", "m64_frost_glacier"}) ==
+          Catch::Approx(1.60F).margin(0.01F));
+  // The DURATION is a second axis on the same pair, and the deeper card must not
+  // touch it -- a chill that is both longer and harder is not a fork.
+  REQUIRE(at([](const game::Game& g) { return g.playerMarkChillTime(); },
+             {"m16_frostbind", "m32_frost_slow"}) == Catch::Approx(4.0F).margin(0.01F));
+  REQUIRE(at([](const game::Game& g) { return g.playerMarkChillTime(); },
+             {"m16_frostbind", "m32_frost_slow", "m64_frost_glacier"}) ==
+          Catch::Approx(4.0F).margin(0.01F));
+  REQUIRE(at([](const game::Game& g) { return g.playerMarkChillDepth(); },
+             {"m16_frostbind", "m32_frost_deep"}) == Catch::Approx(0.60F).margin(0.01F));
+  // "Every hit also strips 22 of the target's own armour." -- Frostbind Hoarfrost.
+  // The same WORDS as Hex Rupture and a different rule, and the rule is the whole
+  // reason the two cards are not one: Rupture strips on every hit, Hoarfrost strips
+  // only while it is chilling, which is to say never for a run that does not hold
+  // Frostbind. So the two are asserted on DIFFERENT accessors, and the run that took
+  // Hoarfrost is asserted to have an Armour Split of exactly zero -- a shared field
+  // would have given it 22 as well and quietly answered a question nobody asked.
+  REQUIRE(at([](const game::Game& g) { return g.playerMarkChillArmourStrip(); },
+             {"m16_frostbind", "m32_frost_slow", "m64_frost_hoar"}) ==
+          Catch::Approx(35.2F).margin(0.05F));
+  REQUIRE(at([](const game::Game& g) { return g.playerMarkDefStrip(); },
+             {"m16_frostbind", "m32_frost_slow", "m64_frost_hoar"}) == 0.0F);
+  // ...and the run that took it has a chill AND a strip, which is the one thing the
+  // per-mark design was supposed to make possible without giving every root two
+  // marks at its root.
+  {
+    const Run g = run({"m16_frostbind", "m32_frost_slow", "m64_frost_hoar"});
+    CAPTURE(g->playerMarkChillTime());
+    CAPTURE(g->playerMarkChillArmourStrip());
+    REQUIRE(g->playerMarkChillTime() == Catch::Approx(4.0F).margin(0.01F));
+    REQUIRE(g->playerMarkChillArmourStrip() == Catch::Approx(35.2F).margin(0.05F));
+  }
+
+  // ...and Armour Split, for the pair: it strips on EVERY hit, from a body that has
+  // armour, and 35 of it -- 22 seeded at x1.6.
+  {
+    const Run g = run({"m16_hex", "m32_hex_split"});
+    g->testSpawnTraitedEnemyAt(0.0F, 0.0F, 100.0F);
+    g->testAdvance(1.0F / 60.0F);
+    g->testDamageFirstEnemy(0.0F);
+    CAPTURE(g->testFirstEnemyDefense());
+    REQUIRE(g->testFirstEnemyDefense() == Catch::Approx(100.0F - 35.2F).margin(0.05F));
+  }
+  {
+    // ...and a second hit takes it again, because the card says "every hit" and a
+    // strip that only fired once would be a card with a hidden total.
+    const Run g = run({"m16_hex", "m32_hex_split"});
+    g->testSpawnTraitedEnemyAt(0.0F, 0.0F, 100.0F);
+    g->testAdvance(1.0F / 60.0F);
+    g->testDamageFirstEnemy(0.0F);
+    g->testDamageFirstEnemy(0.0F);
+    CAPTURE(g->testFirstEnemyDefense());
+    REQUIRE(g->testFirstEnemyDefense() == Catch::Approx(100.0F - 70.4F).margin(0.05F));
+  }
+  {
+    // ...and it floors at zero rather than going negative, because a body cannot be
+    // made more naked and a defence of -5 would be a mitigation that helps the enemy.
+    const Run g = run({"m16_hex", "m32_hex_split"});
+    g->testSpawnTraitedEnemyAt(0.0F, 0.0F, 20.0F);
+    g->testAdvance(1.0F / 60.0F);
+    for (int hit = 0; hit < 5; ++hit) {
+      g->testDamageFirstEnemy(0.0F);
+    }
+    CAPTURE(g->testFirstEnemyDefense());
+    REQUIRE(g->testFirstEnemyDefense() == 0.0F);
+  }
+  {
+    // Hoarfrost strips 35 from a body rather than 22, and the reason is printed on
+    // the card: 22 at Frostbind's x1.6. Armour Split strips 35 too, from 22 at the
+    // strip's x1.6 -- the same number arrived at twice, from two fields a run can
+    // never hold at once, which is a coincidence on a card screen and not a shared
+    // stat.
+    const Run g = run({"m16_frostbind", "m32_frost_slow", "m64_frost_hoar"});
+    g->testSpawnTraitedEnemyAt(0.0F, 0.0F, 100.0F);
+    g->testAdvance(1.0F / 60.0F);
+    g->testDamageFirstEnemy(0.0F);
+    CAPTURE(g->testFirstEnemyDefense());
+    REQUIRE(g->testFirstEnemyDefense() == Catch::Approx(100.0F - 35.2F).margin(0.05F));
+  }
+
+  // --- the two brittle cards, through the damage funnel -------------------------
+  // "A stripped body takes 32% more damage from everything." /
+  // "A chilled body takes 40% more damage from everything."
+  //
+  // These two are the only Element cards whose promise is not visible on the body's
+  // own health bar, so they are measured by putting damage on it -- and by the ratio
+  // between a marked and an unmarked body, because a stored factor that was never
+  // multiplied in would read back at exactly 0.20 and pass every other assertion in
+  // this test.
+  //
+  // The body is dropped to a small, well-resolved health pool before the measured hit.
+  // The spawn hook makes bodies with 100000 HP so a test can hit them a dozen times
+  // without watching them die, and at that magnitude a float32 can only represent
+  // differences of about 0.0156 -- which is 1% of the damage this test is trying to
+  // resolve. The first draft measured against the big pool and got 1.6171875 where it
+  // wanted 1.32 times a base of 1.2265625, and the whole discrepancy was the
+  // quantisation of the subtraction, not a bug in the card. A measurement whose
+  // precision is worse than the effect it is measuring is a coin flip with extra steps.
+  const auto dealt = [&content, &indexOf](const std::vector<std::string>& path) {
+    game::Game g{content, 101};
+    g.testDisableWaves();
+    g.testClearWeapons();
+    for (const auto& id : path) {
+      const int idx = indexOf(id);
+      REQUIRE(idx >= 0);
+      REQUIRE(g.testGrantUpgrade(idx));
+    }
+    g.testSpawnTraitedEnemyAt(0.0F, 0.0F);
+    g.testAdvance(1.0F / 60.0F);
+    // The marking hit, which is what puts the body in the state the card describes.
+    g.testDamageFirstEnemy(0.0F);
+    g.testSetFirstEnemyHp(10.0F);
+    g.testDamageFirstEnemy(1.0F);
+    return 10.0F - g.testFirstEnemyHp();
+  };
+  // The control is the SAME LINE WITHOUT THE CARD UNDER TEST, not an empty run. That
+  // was the first attempt and it was wrong for the strip branch: Armour Split can only
+  // be reached through Hex, so an empty control meant the measured ratio was Hex's own
+  // first-step 22% multiplied into the brittle 32% -- 1.617 against an expected 1.32 --
+  // and the honest reading of that failure is "this assertion is not measuring the card
+  // it names", which is exactly what it was. Taking the parent as the control isolates
+  // the one card, and a factor that was stored and never multiplied in would still be
+  // caught, because a stored factor does not reach the funnel at all.
+  {
+    const Run g = struck({"m16_hex", "m32_hex_split", "m64_split_brittle"});
+    REQUIRE(g->testFirstEnemyBrittle() == Catch::Approx(0.32F).margin(0.001F));
+    const float base = dealt({"m16_hex", "m32_hex_split"});
+    const float marked = dealt({"m16_hex", "m32_hex_split", "m64_split_brittle"});
+    CAPTURE(base);
+    CAPTURE(marked);
+    REQUIRE(base > 0.0F);
+    // The ratio IS the card's 32% -- 20 at the strip's own x1.6 -- and it is asserted
+    // tightly rather than as a lower bound, because "at least 32% more" is a card that
+    // quietly became 90%. The parent's Hex is in BOTH numbers, so it cancels, which is
+    // the whole reason this control is the parent and not nothing.
+    REQUIRE(marked == Catch::Approx(base * 1.32F).margin(0.001F));
+  }
+  {
+    const Run g = struck({"m16_frostbind", "m32_frost_deep", "m64_frost_brittle"});
+    REQUIRE(g->testFirstEnemyBrittle() == Catch::Approx(0.4F).margin(0.001F));
+    const float base = dealt({"m16_frostbind", "m32_frost_deep"});
+    const float marked = dealt({"m16_frostbind", "m32_frost_deep", "m64_frost_brittle"});
+    CAPTURE(base);
+    CAPTURE(marked);
+    REQUIRE(base > 0.0F);
+    // 25 at Frostbind's x1.6 is 40. Here the parent line is pure control -- a chill
+    // changes no damage -- so this one would also have passed against an empty run,
+    // and it is asserted anyway so the two cards are measured on the same terms.
+    REQUIRE(marked == Catch::Approx(base * 1.4F).margin(0.001F));
+  }
+  // A run CANNOT hold both, and the reason is worth stating rather than leaving to
+  // the exclusivity test: the two roots are in one group, so the second one is shut.
+  // That is also why the two factors needed no accumulation rule -- the question
+  // "what if a body is both chilled and stripped" is a question no run can ask.
+  {
+    game::Game g{content, 101};
+    g.testClearWeapons();
+    const int hexRoot = indexOf("m16_hex");
+    const int frostRoot = indexOf("m16_frostbind");
+    const int strip = indexOf("m32_hex_split");
+    const int stripBrittle = indexOf("m64_split_brittle");
+    const int chillBrittle = indexOf("m64_frost_brittle");
+    REQUIRE(hexRoot >= 0);
+    REQUIRE(frostRoot >= 0);
+    REQUIRE(strip >= 0);
+    REQUIRE(stripBrittle >= 0);
+    REQUIRE(chillBrittle >= 0);
+    REQUIRE(g.testGrantUpgrade(hexRoot));
+    REQUIRE(g.testGrantUpgrade(strip));
+    REQUIRE(g.testGrantUpgrade(stripBrittle));
+    // A body to be brittle, because "the refused card left nothing behind" is a claim
+    // about a body and there is nothing to ask if there is no body on the screen.
+    g.testSpawnTraitedEnemyAt(0.0F, 0.0F);
+    g.testAdvance(1.0F / 60.0F);
+    g.testDamageFirstEnemy(0.0F);
+    REQUIRE(g.testFirstEnemyBrittle() == Catch::Approx(0.32F).margin(0.001F));
+    // The other root is shut, and by the GROUP: `element` is the group the three roots
+    // share, so taking Hex closes the other two for the rest of the run. This is the
+    // first door, and it is asked of the BLOCKED vector because that is the vector the
+    // offer layer filters on -- `testGrantUpgrade` is a sandbox cheat that consults
+    // nothing, and asserting through it would be asserting that a door the player
+    // cannot use closes the same way the doors they can use do.
+    REQUIRE(g.testUpgradeBlocked(frostRoot));
+    REQUIRE(g.testUpgradeBlocked(indexOf("m16_emberbrand")));
+    // ...and NOT the line below it, because the groups are per tier and match exactly:
+    // the Frostbind branch cards sit in `element.frost`, `element.frost.deep` and
+    // `element.frost.slow`, and none of those is the string `element`.
+    REQUIRE_FALSE(g.testUpgradeBlocked(indexOf("m32_frost_slow")));
+    // Which is not a hole, and the second door is why. A run that never took
+    // Frostbind cannot reach a Frostbind branch card, because the branch gate asks for
+    // the parent by name -- so a card can be reachable in neither sense and shut in
+    // both, and the two gates shut different things. This pair is the whole reason
+    // both are worth having: change the groups to a prefix hierarchy and the same
+    // assertion still passes, so it would catch the merge; delete the `after` gate and
+    // it fails, so it catches the other half.
+    REQUIRE_FALSE(g.testUpgradeUsable(indexOf("m32_frost_slow")));
+    REQUIRE_FALSE(g.testUpgradeUsable(chillBrittle));
+    REQUIRE_FALSE(g.testUpgradeUsable(indexOf("m64_frost_hoar")));
+    // Its OWN line is open on both counts, because the parent is held and the strip's
+    // group was not the one taken. An exclusivity rule that shut the chosen line too
+    // would make the whole screen dead on arrival.
+    REQUIRE_FALSE(g.testUpgradeBlocked(strip));
+    REQUIRE_FALSE(g.testUpgradeBlocked(stripBrittle));
+    REQUIRE(g.testUpgradeUsable(stripBrittle));
+    REQUIRE(g.stats().markChillBrittle == 0.0F);
+    REQUIRE(g.stats().markChillTime == 0.0F);
+    REQUIRE(g.stats().markChillArmour == 0.0F);
+    g.testDamageFirstEnemy(0.0F);
+    // The strip's 32% is all that is on the body, and it is still the strip's 32% and
+    // not a product with a 40% that was never granted. Asserted as an EQUALITY, so
+    // that a later change turning these fields into maxima cannot make a body holding
+    // one of the two factors report as if it held both.
+    REQUIRE(g.testFirstEnemyBrittle() == Catch::Approx(0.32F).margin(0.001F));
   }
 }
 

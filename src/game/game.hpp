@@ -24,6 +24,35 @@ namespace game {
 inline constexpr const char* kGameName = "TEST GAME";
 inline constexpr const char* kGameSubtitle = "";
 
+// The on-hit marks' fixed numbers, and they live in the HEADER rather than in the
+// .cpp for the same reason the axis accessors do: every one of them is a number a
+// card prints, so a test asserting what a card promises has to be able to read the
+// constant the promise was built from. A card's printed total and the number the
+// applier multiplies by are the same number twice, and the two copies must be one.
+//
+// A card supplies the SCALE (seconds of chill, burn damage per second, how much
+// hex a hit adds) and these supply the shape, so the three roots can never drift
+// into three unrelated behaviours by each picking its own constants.
+
+// Frostbind's chill depth, as a speed factor: 0.60 means a chilled body moves at
+// 60% of its own speed. This is the one constant the Element tree can RAISE, and it
+// is clamped at zero in the applier so that a card can make a chill stop mattering
+// and never make it push backwards.
+inline constexpr float kMarkChillMul = 0.60F;
+// How long one hit keeps a body lit. The burn branch can raise it, and a burn that
+// outlives the weapon that set it is the reason to pick a slow heavy hitter.
+inline constexpr float kMarkBurnWindow = 4.0F;
+// How many hits' worth of hex one card is worth: the per-hit step times this is the
+// ceiling, which is what makes Hex a ratchet with a visible end rather than an open
+// ramp. The card prints both numbers and they are the same number read twice.
+inline constexpr float kMarkVulnHits = 8.0F;
+// How far the burn jumps when it spreads. A number rather than a shape, because a
+// card that says "the two bodies beside it" is a promise about a CROWD, and the
+// crowd is the one thing on this screen the player does not control. A radius the
+// designer tuned would make the same card reach four bodies in a pack and none at
+// all in a loose wave.
+inline constexpr float kMarkBurnSpreadRadius = 2.6F;
+
 // Word-wraps `str` into lines of at most `maxChars` characters (word-based,
 // single words longer than the limit overflow their own line). Shared between
 // the level-up card renderer and unit tests.
@@ -272,6 +301,22 @@ struct PlayerStats {
   float markVuln = 0.0F;       // Hex: +damage taken added per hit
   float markVulnMax = 0.0F;    // and the ceiling on it
   float markDefStrip = 0.0F;   // Armour Split: defence removed per hit
+  // The second halves of the Element branches. They live here rather than on the
+  // marks above because none of them is another NUMBER of the same mark: each one
+  // changes what the mark DOES to the body rather than how much of it there is,
+  // which is the difference between "the third tier of the burn line" and "a card
+  // that happens to mention fire".
+  //
+  // Every one of them defaults to off, and every one of them is read in the same
+  // place its mark is read, because a mark's second half that is applied somewhere
+  // else is a mark that quietly does half of what its card says.
+  float markChillMul = 0.0F;     // added to the chill's slow strength
+  float markBurnWindow = 1.0F;   // x(.) on how long a burn outlives its last hit
+  int markBurnSpread = 0;        // bodies the burn jumps to beside the target
+  float markBurnChill = 0.0F;    // seconds of chill a burning body is given
+  float markDefStripVuln = 0.0F; // extra damage a stripped body takes
+  float markChillBrittle = 0.0F; // extra damage a chilled body takes
+  float markChillArmour = 0.0F;  // armour a chilled body loses per hit
   // One more weapon improved per chest. The base is one for an elite, three for a
   // champion and five for an overlord, so this is the only way to make an elite's
   // box worth as much as a champion's -- and it stacks, because the whole point
@@ -419,7 +464,18 @@ struct PlayerStats {
     float shield = 0.0F;     // x(1+.) on shieldMax
     float maxHp = 0.0F;      // x(1+.) on total health
     float defense = 0.0F;    // x(1+.) on the flat defence term
-    float mark = 0.0F;       // x(1+.) on all four on-hit marks at once
+    // FOUR multipliers, one per mark, and they were one field until the Element
+    // tree made that untenable. A single `mark` read as a clean idea -- one axis,
+    // "the mark layer", scaled once -- and was dead on arrival, because the Element
+    // group is EXCLUSIVE: a run can hold exactly one mark root, so a multiplier on
+    // all four was always a multiplier on one and the breadth it appeared to promise
+    // was unreachable. Only the Hex branch takes a second mark (Armour Split), and
+    // for that one run the two fields are the whole reason the fork is a choice
+    // between going deep in one mark and carrying two.
+    float markChill = 0.0F;     // x(1+.) on the chill only
+    float markBurn = 0.0F;      // x(1+.) on the burn only
+    float markVuln = 0.0F;      // x(1+.) on Hex only
+    float markDefStrip = 0.0F;  // x(1+.) on the armour strip only
     float reach = 0.0F;      // x(1+.) on projectile speed and lifetime
     float knockback = 0.0F;  // x(1+.) on every shove the player deals
     // A MULTIPLIER, like the ten above it, and it is the one that needed saying
@@ -1103,6 +1159,15 @@ public:
   // frozen target is followed by a frozen bolt whether or not the bolt follows
   // anything.
   void testSpawnEnemyAt(float x, float y, float speed = 0.0F);
+  // ...and one WITH an EnemyTraits, which is the difference between a bare stub and
+  // a body the game actually spawns. The Element cards mostly write to traits --
+  // hex, brittle, stripped armour -- so a test of them against a body with no traits
+  // measures a card writing to nothing and calls it a pass, which is precisely how
+  // the first version of the Hex ramp test managed to assert on a value of -1.
+  // The defence argument is there because the strip cards need a body that has
+  // something to strip.
+  void testSpawnTraitedEnemyAt(float x, float y, float defense = 0.0F,
+                               float speed = 0.0F);
   // Test helper: the same body, but carrying an elite tier, so a test can check
   // that a box drops from the right kind of corpse. Tier 0 leaves the component
   // absent, exactly as a normal spawn does.
@@ -1283,6 +1348,30 @@ public:
   // the body how big it is has to guess, and a guess about where a threshold sits is
   // exactly the kind of guess that makes a card look tested when it is not.
   [[nodiscard]] float testFirstEnemyMaxHp() const;
+  // --- reading the marks OFF A BODY ---------------------------------------------
+  //
+  // The Element cards are the first cards whose whole effect is a change to an
+  // enemy rather than a change to a number the player owns, and "the number the
+  // player owns" is not evidence that any of it happened. These four ask the body
+  // what state the last hit actually put it in, which is the only way to tell a
+  // mark that is applied from one that is merely stored -- the exact difference
+  // between the Execution bug where a multiplier was set and the ones where a
+  // multiplier was set and never read.
+  [[nodiscard]] float testFirstEnemyBurnDps() const;
+  // The hex RAMP and the chill TIMER, because both are behaviour over several hits
+  // rather than a value on a card: a ratchet that stops early and a debuff that is
+  // applied with no duration are the two ways these marks can look right on the
+  // first hit and be wrong for the rest of a fight.
+  [[nodiscard]] float testFirstEnemyVuln() const;
+  [[nodiscard]] float testFirstEnemySlowT() const;
+  [[nodiscard]] float testFirstEnemySlowMul() const;
+  // A count of bodies, because the spread card's promise is about how MANY and a
+  // test that checked the field would be checking the card's own bookkeeping.
+  [[nodiscard]] int testBurningEnemies() const;
+  // Defence and the brittle factor, for the two cards that take a body's armour
+  // off and the two that make it softer afterwards.
+  [[nodiscard]] float testFirstEnemyDefense() const;
+  [[nodiscard]] float testFirstEnemyBrittle() const;
   // Test helper: force the first enemy's knockback resistance (and give it the
   // EnemyTraits component it does not have by default). Lets a test compare how
   // hard a shove or a suction field moves a soft enemy versus a boss.
@@ -1361,6 +1450,72 @@ public:
   [[nodiscard]] float playerArmourScale() const { return stats_.armourScale; }
   [[nodiscard]] float playerStillDmgMul() const { return stats_.stillDmgMul; }
   [[nodiscard]] float playerLowHpDmgMul() const { return stats_.lowHpDmgMul; }
+  // --- THE MARK AXES, one accessor per card number -------------------------------
+  //
+  // Each returns the number the card PRINTS, which means the mark multiplier is
+  // already folded in. That is the point of putting them here rather than letting a
+  // test read `stats().markBurnDps`: a test that reads the raw field is a test of
+  // the field, and it would have passed through every version of the bug this
+  // accessor list exists to prevent -- a multiplier that stopped applying, a seed
+  // that stopped seeding, a card that multiplied a mark the run never had.
+  //
+  // The four multipliers are per-mark and each is folded only into its own mark, so
+  // these four also answer "did a root quietly scale the other three".
+  [[nodiscard]] float playerMarkBurnDps() const {
+    return stats_.markBurnDps * (1.0F + stats_.milestone.markBurn);
+  }
+  [[nodiscard]] float playerMarkChillTime() const {
+    return stats_.markChillTime * (1.0F + stats_.milestone.markChill);
+  }
+  // The DEPTH of the chill, as the speed factor a chilled body actually gets. The
+  // root's multiplier reaches this as well as the duration, and a test that only
+  // checked the duration would not know that -- which is how a card can scale half
+  // of what it says and read as fine.
+  [[nodiscard]] float playerMarkChillDepth() const {
+    return std::max(0.0F, kMarkChillMul + stats_.markChillMul);
+  }
+  [[nodiscard]] float playerMarkVulnStep() const {
+    return stats_.markVuln * (1.0F + stats_.milestone.markVuln);
+  }
+  [[nodiscard]] float playerMarkVulnCeiling() const { return stats_.markVulnMax; }
+  [[nodiscard]] float playerMarkDefStrip() const {
+    return stats_.markDefStrip * (1.0F + stats_.milestone.markDefStrip);
+  }
+  // A count of BODIES, and not a factor: "the burn jumps to two bodies either side"
+  // is a statement about how many, and a multiplier here would let a card print a
+  // reach the game could not honour.
+  [[nodiscard]] int playerMarkBurnSpread() const { return stats_.markBurnSpread; }
+  // The chill a BURNING body is given, for the same reason: the number is a
+  // duration, it is conditional on the burn, and it goes through the burn's own
+  // multiplier rather than the chill's -- a card that read the wrong one would look
+  // right at zero and wrong everywhere else.
+  // The armour Frostbind HOARFROST takes, kept apart from playerMarkDefStrip() even
+  // though both subtract from the same field on the body. They can never both be
+  // non-zero -- one needs the Hex root and one needs the Frostbind root, and those
+  // share a group -- so this is not accumulation with a missing cap. It is two
+  // different CARDS: one strips on every hit, the other strips while it is chilling,
+  // and a run that could hold both would be asked the same question twice.
+  [[nodiscard]] float playerMarkChillArmourStrip() const {
+    return stats_.markChillArmour * (1.0F + stats_.milestone.markChill);
+  }
+  // The two BRITTLE factors, each folded by the multiplier of the mark that owns it:
+  // the chill's for Frostbind Brittle, the strip's for Armour Split Brittle. That is
+  // the rule the whole mark layer follows and it is worth stating once here, because
+  // the first version followed it for two of these four numbers and not the other two,
+  // and a player cannot plan a build on a multiplier that applies to some of the
+  // things a card does.
+  [[nodiscard]] float playerMarkChillBrittle() const {
+    return stats_.markChillBrittle * (1.0F + stats_.milestone.markChill);
+  }
+  [[nodiscard]] float playerMarkDefStripVuln() const {
+    return stats_.markDefStripVuln * (1.0F + stats_.milestone.markDefStrip);
+  }
+  [[nodiscard]] float playerMarkBurnChill() const {
+    return stats_.markBurnChill * (1.0F + stats_.milestone.markBurn);
+  }
+  [[nodiscard]] float playerMarkBurnWindow() const {
+    return kMarkBurnWindow * stats_.markBurnWindow;
+  }
   // The global fire-rate figure for the pause sheet, as a percentage of the
   // 1.0x base. Reported through the same fold as playerCooldown so the sheet
   // cannot print a number the weapons do not use.

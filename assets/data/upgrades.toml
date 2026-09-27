@@ -2058,28 +2058,49 @@ level = 32
 group = "execution.proj.pierce"
 after = "m16_tempest_pierce"
 
-# L16 --- ELEMENT: what your hits leave on them. Four mutually exclusive answers
+# L16 --- ELEMENT: what your hits leave on them. Three mutually exclusive answers
 # to "how do you want a body to feel", applied from the one place every point of
 # player damage goes through, so they work from every weapon without any weapon
-# knowing. This is the group that needs a four-slot screen.
-[[upgrade]]
-id = "m16_frostbind"
-name = "Frostbind"
-desc = "Every hit chills what it strikes for 2.5s"
-effect = "mark_slow"
-value = 2.5
-max_stacks = 3
-kind = "milestone"
-level = 16
-group = "element"
-
+# knowing marks exist.
+#
+# Three roots and not four, and the fourth mark moved into the Hex branch. That is
+# what makes the per-mark multiplier mean anything: the group is exclusive, so a
+# run holds exactly ONE root, and a multiplier on "all four marks" was always a
+# multiplier on the one it had. The Hex line is the exception -- it can take Armour
+# Split as well, so it is the one run in the game carrying two marks. The other two
+# lines are the pure "go deep in one mark" answer, and the fork between them and Hex
+# is the fork this tree exists to ask.
+#
+# FOUR multipliers, and each reaches ONLY the mark it belongs to. That is the rule
+# the whole tree is built on and the reason a run can hold two marks at all: a
+# shared "your marks count 60% stronger" would make the Hex line's strip stronger
+# for having a Hex it never asked about, and the split's own card -- which prints a
+# number and a "60% stronger" of its own -- would be a lie in the direction that
+# makes the card look good. The applier reads four separate folds for the same
+# reason: `markBurn * (1 + markBurnMul)`, and so on, with the second halves of a
+# mark folded by THAT mark's multiplier and not by the branch's. It was the other
+# way round for two of the four numbers when this tree first went in, and a mark
+# whose multiplier covered some of its own effects was not a rule anyone could plan
+# a build around.
+#
+# The consequence worth stating: no run can ever hold two of the four multipliers,
+# because each one is seeded by a card in a line only one run may enter. Two
+# multipliers would need a run that went wide, and this tree is built to make going
+# wide impossible.
+#
+# Every card here is ONE STACK. The tree replaces the repeats, the same bargain
+# Survivor and Execution made: taking this at L16 is not the first of three, it is
+# the only time this group will ever open.
 [[upgrade]]
 id = "m16_emberbrand"
 name = "Emberbrand"
-desc = "Every hit sets it alight: 22 burning damage a second"
-effect = "mark_burn"
-value = 22
-max_stacks = 3
+desc = "Every hit sets it alight: 35 burning damage a second, and your burn counts 60% stronger."
+effect = "ms_mark_burn_seed"
+# The seed is inside the multiplier, so the card prints 35 and not 22 -- the same
+# convention as the Survivor and Execution roots, and the reason the printed number
+# is the one the damage tick actually shows.
+value = 0.6
+max_stacks = 1
 kind = "milestone"
 level = 16
 group = "element"
@@ -2087,24 +2108,326 @@ group = "element"
 [[upgrade]]
 id = "m16_hex"
 name = "Hex"
-desc = "Every hit makes that body take 14% more damage, up to +84%"
-effect = "mark_vuln"
-value = 0.14
-max_stacks = 3
+desc = "Every hit makes that body take 22% more damage, up to +179%."
+effect = "ms_mark_vuln_seed"
+# Both numbers are multiplied, not just the step. The old card printed "+14% per
+# hit, up to +84%" and delivered +112% at the ceiling, because the ceiling was
+# built from the raw seed while the step went through the multiplier -- a card
+# whose two halves disagreed with each other, which is the only kind of rounding
+# error a player can actually notice.
+value = 0.6
+max_stacks = 1
 kind = "milestone"
 level = 16
 group = "element"
 
 [[upgrade]]
-id = "m16_splitarmor"
-name = "Armour Split"
-desc = "Every hit strips 22 of the target's own armour, for good"
-effect = "mark_defstrip"
-value = 22
-max_stacks = 3
+id = "m16_frostbind"
+name = "Frostbind"
+desc = "Every hit chills what it strikes for 4s, and the chill counts 60% stronger."
+effect = "ms_mark_chill_seed"
+# The multiplier reaches the DEPTH of the slow as well as how long it lasts. A card
+# that scaled only the duration would have spent its whole number on the smaller
+# of the two things it was scaling, and a player would have seen the same 60% slow
+# on a 4-second debuff and wondered what they had bought.
+value = 0.6
+max_stacks = 1
 kind = "milestone"
 level = 16
 group = "element"
+
+# L32 --- ELEMENT, SECOND TIER. Six groups of two, one pair per root. Each root
+# splits into "more of the same mark" and "the same mark doing something else",
+# because a tree whose second tier is two versions of the first is a list.
+[[upgrade]]
+id = "m32_ember_deep"
+name = "Emberbrand Deep"
+desc = "35 becomes 70 burning damage a second."
+effect = "ms_mark_burn_deeper"
+# Accumulates, because the root's 60% is still sitting underneath. 35.2 at x2 is
+# 70.4, and the card prints 70 because 70 is a damage number a weapon can be
+# compared against.
+value = 1.0
+max_stacks = 1
+kind = "milestone"
+level = 32
+group = "element.burn"
+after = "m16_emberbrand"
+
+[[upgrade]]
+id = "m32_ember_spread"
+name = "Emberbrand Spread"
+desc = "The burn jumps to two bodies either side."
+effect = "ms_mark_burn_spread"
+# A count of BODIES and not a radius, because a radius makes the card's reach a
+# function of how the enemies happen to be standing and a swarm build would get a
+# different card out of the same sentence. The radius is a constant in the applier
+# and the number on the card is the number that matters.
+value = 2.0
+max_stacks = 1
+kind = "milestone"
+level = 32
+group = "element.burn"
+after = "m16_emberbrand"
+
+[[upgrade]]
+id = "m32_hex_deep"
+name = "Hex Deep"
+desc = "The ramp is steeper and the ceiling higher: 45% per hit, up to +358%."
+effect = "ms_mark_vuln_deeper"
+# Both halves move together, and they have to: a steeper step under an unchanged
+# ceiling is a card that reaches its own limit in fewer hits and then does nothing,
+# which is strictly worse than a card that never ramped at all.
+value = 1.0
+max_stacks = 1
+kind = "milestone"
+level = 32
+group = "element.hex"
+after = "m16_hex"
+
+[[upgrade]]
+id = "m32_hex_split"
+name = "Armour Split"
+desc = "Every hit also strips 35 of the target's own armour, and the stripping counts 60% stronger."
+effect = "ms_mark_split_seed"
+# The fourth mark, moved off the root row and down a branch. It is the only way a
+# run ever holds two marks, and it sits under Hex rather than beside it because
+# softening a body and then taking its armour off is one idea in two steps, while
+# setting a body alight and taking its armour off is two ideas.
+value = 0.6
+max_stacks = 1
+kind = "milestone"
+level = 32
+group = "element.hex"
+after = "m16_hex"
+
+[[upgrade]]
+id = "m32_frost_deep"
+name = "Frostbind Deep"
+desc = "4s becomes 8s of chill."
+effect = "ms_mark_chill_deeper"
+value = 1.0
+max_stacks = 1
+kind = "milestone"
+level = 32
+group = "element.frost"
+after = "m16_frostbind"
+
+[[upgrade]]
+id = "m32_frost_slow"
+name = "Frostbind Slow"
+desc = "Chilled bodies are slowed 50% harder."
+effect = "ms_mark_chill_mul"
+# The DEPTH, not the duration: a second axis on the same card, and the reason a
+# run can hold a body nearly still without any of it coming from the ice weapons'
+# own freeze. Depth is clamped at zero in the applier, so a card can make a chill
+# stop mattering but never make it push.
+value = 0.5
+max_stacks = 1
+kind = "milestone"
+level = 32
+group = "element.frost"
+after = "m16_frostbind"
+
+# L64 --- ELEMENT, THIRD TIER. Twelve cards, six groups of two, one pair per
+# second-tier card. Six pairs means six places where the answer to "how do you want
+# a body to feel" can stop being "harder" and start being something else, which is
+# the only reason to go this deep.
+[[upgrade]]
+id = "m64_ember_ruin"
+name = "Emberbrand Ruin"
+desc = "70 becomes 140 burning damage a second."
+effect = "ms_mark_burn_deeper"
+value = 1.0
+max_stacks = 1
+kind = "milestone"
+level = 64
+group = "element.burn.deep"
+after = "m32_ember_deep"
+
+[[upgrade]]
+id = "m64_ember_cinder"
+name = "Emberbrand Cinder"
+desc = "Bodies that burn are also slowed, for 1.6s."
+effect = "ms_mark_burn_chill"
+# The thing a fire mark obviously ought to do and never did. A body that is alight
+# and walking away is a body the player cannot catch, and the answer to that is
+# control rather than more damage -- which is why this is a sibling of "more burn"
+# and not a fourth step along it.
+value = 1.0
+max_stacks = 1
+kind = "milestone"
+level = 64
+group = "element.burn.deep"
+after = "m32_ember_deep"
+
+[[upgrade]]
+id = "m64_ember_flare"
+name = "Emberbrand Flare"
+desc = "The burn jumps to four bodies either side."
+effect = "ms_mark_burn_spread"
+# The same effect as the second tier at a bigger count, deliberately. Two ids for
+# one behaviour is a card waiting to be miswritten: the next author picks the
+# "deeper" one, nothing says the two differ, and the number on the card stops
+# matching. This card prints four because 2 plus 2 is 4.
+value = 2.0
+max_stacks = 1
+kind = "milestone"
+level = 64
+group = "element.burn.spread"
+after = "m32_ember_spread"
+
+[[upgrade]]
+id = "m64_ember_wildfire"
+name = "Emberbrand Wildfire"
+desc = "A burn outlives its last hit for 8s."
+effect = "ms_mark_burn_window"
+# The window, and not the damage: how long a body stays lit decides how much of a
+# slow weapon's damage the burn is actually worth, which makes it the answer to a
+# question the burn branch has not otherwise asked.
+value = 1.0
+max_stacks = 1
+kind = "milestone"
+level = 64
+group = "element.burn.spread"
+after = "m32_ember_spread"
+
+[[upgrade]]
+id = "m64_hex_grievous"
+name = "Hex Grievous"
+desc = "The ramp is steeper and the ceiling higher: 67% per hit, up to +537%."
+effect = "ms_mark_vuln_deeper"
+# Half the second tier's step rather than all of it, and the reason is the ceiling:
+# a run holding this takes a body to nearly six times the damage it was taking,
+# and doubling THAT is a number the card could print and no player could use.
+value = 0.5
+max_stacks = 1
+kind = "milestone"
+level = 64
+group = "element.hex.deep"
+after = "m32_hex_deep"
+
+[[upgrade]]
+id = "m64_hex_armour"
+name = "Hex Rupture"
+desc = "Every hit also strips 22 of the target's own armour."
+effect = "ms_mark_vuln_armour"
+# A card rather than the second mark, because the run is already standing in this
+# line: the body it applies to is the body they have been softening since L16, and
+# sending them back to a different root for the other half would mean abandoning
+# the tree they are in.
+#
+# NO 60% on the strip, and that is load-bearing. The four mark multipliers are
+# per-mark, this run never took the card that seeds one for the strip, and a card
+# quietly borrowing Hex's would be the one place the rule leaked -- invisibly, as a
+# strip that is simply stronger than the player had any way to predict.
+value = 22.0
+max_stacks = 1
+kind = "milestone"
+level = 64
+group = "element.hex.deep"
+after = "m32_hex_deep"
+
+[[upgrade]]
+id = "m64_split_ruin"
+name = "Armour Split Ruin"
+desc = "35 becomes 70 armour stripped per hit."
+effect = "ms_mark_defstrip_deeper"
+value = 1.0
+max_stacks = 1
+kind = "milestone"
+level = 64
+group = "element.hex.split"
+after = "m32_hex_split"
+
+[[upgrade]]
+id = "m64_split_brittle"
+name = "Armour Split Brittle"
+desc = "A stripped body takes 32% more damage from everything."
+effect = "ms_mark_defstrip_vuln"
+# A flat factor and not a ramp, stored apart from Hex's `vuln` for the reason the
+# two fields are apart: vuln grows with every hit and stops at a ceiling, and a
+# card that says "32% more from everything" is describing neither of those things.
+#
+# The 32 is 20 at the strip's own x1.6, and the card prints the RESULT. The
+# multiplier belongs to the STRIP rather than to the branch, so this is the one
+# second half in the tree that a run reaches through a mark other than the root it
+# was seeded by -- and it is the reason the strip is the only mark with a multiplier
+# of its own to spend.
+value = 0.2
+max_stacks = 1
+kind = "milestone"
+level = 64
+group = "element.hex.split"
+after = "m32_hex_split"
+
+[[upgrade]]
+id = "m64_frost_permafrost"
+name = "Frostbind Permafrost"
+desc = "8s becomes 16s of chill."
+effect = "ms_mark_chill_deeper"
+value = 1.0
+max_stacks = 1
+kind = "milestone"
+level = 64
+group = "element.frost.deep"
+after = "m32_frost_deep"
+
+[[upgrade]]
+id = "m64_frost_brittle"
+name = "Frostbind Brittle"
+desc = "A chilled body takes 40% more damage from everything."
+effect = "ms_mark_chill_brittle"
+# The Frostbind answer to the Hex branch's Rupture, and the reason both branches
+# get one: a mark that only makes a body easier to hit differently from the other
+# two marks would leave one third of the tree as "more of the same".
+#
+# 25 at Frostbind's x1.6 is 40, and the card prints the 40. The multiplier goes
+# through EVERY second half of the chill for the same reason it goes through the
+# duration: the root says the chill counts 60% stronger, and a root whose claim
+# covered only the number printed on its own card would be a claim about half of
+# what it does.
+value = 0.25
+max_stacks = 1
+kind = "milestone"
+level = 64
+group = "element.frost.deep"
+after = "m32_frost_deep"
+
+[[upgrade]]
+id = "m64_frost_glacier"
+name = "Frostbind Glacier"
+desc = "Chilled bodies are slowed 50% harder again."
+effect = "ms_mark_chill_mul"
+value = 0.5
+max_stacks = 1
+kind = "milestone"
+level = 64
+group = "element.frost.slow"
+after = "m32_frost_slow"
+
+[[upgrade]]
+id = "m64_frost_hoar"
+name = "Frostbind Hoarfrost"
+desc = "Every hit also strips 35 of the target's own armour."
+effect = "ms_mark_chill_armour"
+# The same words as Hex Rupture and a different route to them, which is the point:
+# one comes from the mark that softens a body and one from the mark that holds it
+# still, and a run that has done neither is being offered the same sentence twice
+# for two different builds.
+#
+# 22 at Frostbind's x1.6 is 35, and 35 is also what a player holding Armour Split
+# gets from its own 22 -- which is a coincidence, not a shared field, and the two
+# runs cannot be the same run. Two cards printing the same number for two different
+# reasons is a fair thing to notice on a card screen; one card printing a number
+# because it read a field it was not named after is not.
+value = 22.0
+max_stacks = 1
+kind = "milestone"
+level = 64
+group = "element.frost.slow"
+after = "m32_frost_slow"
+
 
 # L32 --- MOMENTUM: what the kill chain is FOR. The meter is the one part of the
 # run that is not a bought number, so the milestone asks what it is worth rather
