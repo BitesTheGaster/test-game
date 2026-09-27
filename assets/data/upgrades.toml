@@ -1434,7 +1434,7 @@ max_stacks = 3
 [[upgrade]]
 id = "m4_crimson"
 name = "Crimson Pact"
-desc = "Lifesteal 7% per kill. Everything else you add to lifesteal counts 60% stronger."
+desc = "Lifesteal 11% per kill. Everything else you add to lifesteal counts 60% stronger."
 effect = "ms_lifesteal_seed"
 value = 0.6
 max_stacks = 1
@@ -1445,7 +1445,7 @@ group = "survivor"
 [[upgrade]]
 id = "m4_renewal"
 name = "Verdant Renewal"
-desc = "Regeneration 1 HP/s. Everything else you add to regeneration counts 75% stronger."
+desc = "Regeneration 1.75 HP/s. Everything else you add to regeneration counts 75% stronger."
 effect = "ms_regen_seed"
 value = 0.75
 max_stacks = 1
@@ -1691,18 +1691,30 @@ after = "m8_riposte"
 # L8 --- EXECUTION: how you kill. Weight, rate, or reach. These are the three
 # axes every damage card in the game is secretly a fraction of, so the milestone
 # asks the question outright.
+# THE EXECUTION TREE. The first level is three cards and one question: how does
+# this run hurt things. Each of them now MULTIPLIES its axis instead of adding a
+# flat number, and each also SEEDS the axis, so a milestone is worth something on
+# a run that has never touched the axis and worth far more on one that has.
+#
+# Every card in the tree is one stack, and the two deeper tiers are BRANCHES: a
+# tier-2 card is only ever offered to a run holding its parent, and a tier-3 card
+# only to a run holding the tier-2 one. A player on the Overload line is never
+# shown the fire-rate question. See the MILESTONES page in the manual.
+#
+# `group` closes siblings for the run and `after` names the parent, and between
+# them they are the whole mechanism -- no new state, just two relations the run
+# already had.
 [[upgrade]]
-# The three EXECUTION members share one stack count on purpose. The group is a
-# single question, and a question whose three answers have three different
-# numbers of "how many more times can I take this" stops being one question.
-# They also each beat the best REPEATABLE card on their own axis, per take
-# and over the whole run -- see the test that enforces it.
 id = "m8_overload"
 name = "Overload"
-desc = "All damage +125%"
-effect = "damage_mul"
-value = 1.25
-max_stacks = 2
+desc = "All damage +60%."
+effect = "ms_damage"
+# +60%, so x1.6. The old value was +125% as a flat damage_mul, which is a much
+# bigger cold number and a much worse card: it was the same +125% to a run with
+# one damage card and to one with eight. x1.6 is smaller on a bare run and larger
+# on a built one, and the built one is the run that reaches L32.
+value = 0.6
+max_stacks = 1
 kind = "milestone"
 level = 8
 group = "execution"
@@ -1710,10 +1722,12 @@ group = "execution"
 [[upgrade]]
 id = "m8_frenzy"
 name = "Frenzy"
-desc = "Fire rate +75%"
-effect = "fire_rate"
-value = 0.75
-max_stacks = 2
+desc = "Fire rate +60%."
+effect = "ms_fire_rate"
+# Fire rate is additive in the DENOMINATOR (base / (1 + bonus)), so 0.6 here is
+# x1.6 on a run with no fire-rate cards and much more on a run that has them.
+value = 0.6
+max_stacks = 1
 kind = "milestone"
 level = 8
 group = "execution"
@@ -1721,23 +1735,328 @@ group = "execution"
 [[upgrade]]
 id = "m8_tempest"
 name = "Tempest"
-desc = "Every weapon fires 4 more projectiles"
-effect = "proj_add"
-# +3, and a whole number on purpose. This used to be +1 -- the exact number a
-# plain Twin Shot hands out for a repeatable card, and half of a plain Barrage --
-# and on the strongest axis in the game, where Vampire Survivors' own rule is
-# that a weapon's top levels are pure extra shots, a milestone that adds one is
-# not a reward.
+desc = "Every weapon fires 4 more projectiles, and 4 becomes 6."
+effect = "ms_proj_seed"
+# The SEED is the whole reason this card has two effects and not one. A pure
+# multiplier on the bonus count is worth literally nothing on a run that has no
+# bonus shots -- 0 x 1.5 is 0 -- and this is the only milestone on this line that
+# could have been one. The seed is +4 on purpose: Vampire Survivors' own rule is
+# that a weapon's top levels are pure extra shots, and on the strongest axis in
+# the game a milestone that adds one is not a reward.
 #
-# It has to be a whole number because the applier casts the value to int: a
-# tempting +2.5 here truncates to +2 and the card silently does less than it
-# says, and anything under 1.0 truncates to nothing at all. There is a test for
-# that, and it is why the number is 3 and not 2.5.
-value = 4
-max_stacks = 2
+# One effect that does both, like the other three seed cards: the seed is part of
+# the axis and the multiplier is on the axis, so the card states the RESULT --
+# "4 becomes 6" -- rather than the two halves, because that is the number the
+# player can check against their own weapon.
+value = 0.5
+max_stacks = 1
 kind = "milestone"
 level = 8
 group = "execution"
+
+# L16 --- EXECUTION, SECOND TIER
+# Three groups of two, one per root. A run on the Overload line is asked about
+# damage and is NEVER asked about fire rate or projectiles, which is the whole
+# reason the tree exists: before it, the L8 answer was a sample of every line.
+#
+# Each pair is a genuine fork and not "the same card, larger". One is depth -- a
+# second multiplier on the axis you already chose -- and the other is a QUESTION
+# the depth version does not ask. Depth is the safe pick, and the player should be
+# able to take it without thinking; the other one is the interesting pick.
+[[upgrade]]
+id = "m16_overload_deep"
+name = "Overdrive"
+desc = "All damage +60% again. Totals 2.2x."
+effect = "ms_damage"
+value = 0.6
+max_stacks = 1
+kind = "milestone"
+level = 16
+group = "execution.dmg"
+after = "m8_overload"
+
+[[upgrade]]
+id = "m16_overload_bloodied"
+name = "Bloodied"
+desc = "All damage x3 while you are below half health."
+effect = "dmg_low"
+# The mirror of Warmblood on the regen side, and on the same 0.5 cut, so the two
+# halves of a survive-and-punish answer agree about where "hurt" begins.
+value = 2.0
+max_stacks = 1
+kind = "milestone"
+level = 16
+group = "execution.dmg"
+after = "m8_overload"
+
+[[upgrade]]
+id = "m16_frenzy_deep"
+name = "Fever"
+desc = "Fire rate +60% again. Totals 2.2x."
+effect = "ms_fire_rate"
+# The total is printed because it is EXACT. The milestone layer is additive within
+# itself, so 1 + 0.6 + 0.6 is 2.2 and not 1.6 x 1.6 -- the card can say the number
+# because the number is the number, and a player reading four cards at once can
+# check it. (An earlier draft of this card deliberately printed no total, on the
+# reasoning that fire rate is multiplicative in the denominator. It is, but the
+# layer is additive, so the reasoning was about the wrong multiplication and the
+# caution cost the card a number it was entitled to.)
+value = 0.6
+max_stacks = 1
+kind = "milestone"
+level = 16
+group = "execution.rate"
+after = "m8_frenzy"
+
+[[upgrade]]
+id = "m16_frenzy_settled"
+name = "Rooted"
+desc = "All damage x2.5 while you give no movement input."
+effect = "dmg_still"
+value = 1.5
+max_stacks = 1
+kind = "milestone"
+level = 16
+group = "execution.rate"
+after = "m8_frenzy"
+
+[[upgrade]]
+id = "m16_tempest_deep"
+name = "Tempest Deep"
+desc = "Your extra projectiles are doubled. 4 becomes 8."
+effect = "ms_proj"
+value = 0.5
+max_stacks = 1
+kind = "milestone"
+level = 16
+group = "execution.proj"
+after = "m8_tempest"
+
+[[upgrade]]
+id = "m16_tempest_pierce"
+name = "Skewer"
+desc = "Pierce +2, and your pierce bonus is doubled. 2 becomes 4."
+effect = "ms_pierce"
+# SEED AND MULTIPLIER, exactly like the projectile root and for the same reason:
+# a pure multiplier on a pierce count the run has not built is a multiplier on
+# zero. It scales the run's OWN pierce and never a weapon's baked-in value, and it
+# also widens blast radius and zone damage, because those read the same bonus --
+# so the card is felt in every weapon rather than only the ones that pierce.
+value = 1.0
+max_stacks = 1
+kind = "milestone"
+level = 16
+group = "execution.proj"
+after = "m8_tempest"
+
+# L32 --- EXECUTION, THIRD TIER
+# Six groups of two, one per SECOND-TIER card rather than one per line. That is
+# not tidiness: two second-tier branches on one line are different answers, so
+# sharing a group would mean taking one of them silently closes a question the
+# run never earned and may not be able to reach.
+[[upgrade]]
+id = "m32_overload_ruin"
+name = "Ruin"
+desc = "All damage +80% again. Totals 3.0x."
+effect = "ms_damage"
+value = 0.8
+max_stacks = 1
+kind = "milestone"
+level = 32
+group = "execution.dmg.deep"
+after = "m16_overload_deep"
+
+[[upgrade]]
+id = "m32_overload_guillotine"
+name = "Guillotine"
+desc = "All damage x4 against anything below half health."
+effect = "ms_execute"
+# The only milestone in the game that is about the TARGET rather than the player,
+# and the reason it exists: the first Execution tree made this slot a bigger
+# damage number, which is the one thing the design said a branch must not be. A
+# branch that asks "what are you hitting" is a different question from "how hard".
+value = 3.0
+max_stacks = 1
+kind = "milestone"
+level = 32
+group = "execution.dmg.deep"
+after = "m16_overload_deep"
+
+[[upgrade]]
+id = "m32_bloodied_wrath"
+name = "Wrath"
+desc = "All damage x2 while you are below half health, on top of the x3. Totals x6."
+effect = "dmg_low_deeper"
+# ACCUMULATES rather than assigning, which is why it is its own effect id instead
+# of a second dmg_low: the tier-2 card already owns that factor, and a second
+# dmg_low would overwrite it with the same number -- so the card would have
+# silently done nothing. The card prints the product because here both factors are
+# known and whole, so the total is something the player can check.
+value = 1.0
+max_stacks = 1
+kind = "milestone"
+level = 32
+group = "execution.dmg.low"
+after = "m16_overload_bloodied"
+
+[[upgrade]]
+id = "m32_bloodied_secondwind"
+name = "Second Wind"
+desc = "All damage x2.5 below a quarter health instead of a half. Totals x7.5."
+effect = "dmg_low_tighter"
+# The other answer to the same question: not a bigger multiplier on a wider band
+# but a tighter band. With Wrath, the fork is the difference between "hurt" and
+# "nearly dead" being two different places to be standing, which makes it a choice
+# about RISK rather than about arithmetic.
+# The threshold is part of the EFFECT and not a field on the card, for the same
+# reason the seed is: one id that means one complete promise. A card that could
+# set its own cut would be a card where the number the player reads is not the
+# number the code uses, and this one carried a `threshold = 0.25` line for two
+# rounds that the loader never read -- the card multiplied correctly and the
+# quarter-health band silently stayed a half-health band.
+value = 1.5
+max_stacks = 1
+kind = "milestone"
+level = 32
+group = "execution.dmg.low"
+after = "m16_overload_bloodied"
+
+[[upgrade]]
+id = "m32_frenzy_blizzard"
+name = "Blizzard"
+desc = "Fire rate +80% again. Totals 3.0x."
+effect = "ms_fire_rate"
+value = 0.8
+max_stacks = 1
+kind = "milestone"
+level = 32
+group = "execution.rate.deep"
+after = "m16_frenzy_deep"
+
+[[upgrade]]
+id = "m32_frenzy_cadence"
+name = "Cadence"
+desc = "Fire rate x2 while you give no movement input."
+effect = "ms_still_rate"
+# Conditional RATE rather than conditional damage, and the reason is a build
+# shortage rather than a clever trick: a run that answered "I stand still and
+# shoot" runs out of triggers long before it runs out of damage. Making the
+# condition a SHARED one also forces the two halves of a stationary build to
+# agree, which is the point -- two cards that happen to say the same words can
+# disagree about what counts as still.
+value = 1.0
+max_stacks = 1
+kind = "milestone"
+level = 32
+group = "execution.rate.deep"
+after = "m16_frenzy_deep"
+
+[[upgrade]]
+id = "m32_rooted_anchor"
+name = "Anchor"
+desc = "All damage x1.6 while you give no movement input, on top of the x2.5."
+effect = "dmg_still_deeper"
+value = 0.6
+max_stacks = 1
+kind = "milestone"
+level = 32
+group = "execution.rate.still"
+after = "m16_frenzy_settled"
+
+[[upgrade]]
+id = "m32_rooted_pillar"
+name = "Pillar"
+desc = "All damage x2.5 while you give no movement input, and you regenerate 3 HP/s while you do, tripled."
+effect = "ms_still_survival"
+# The only third-tier card in the tree whose second half is not damage, and it is
+# here because of what Rooted asks: stand still, in a game about being surrounded.
+# A stationary build spends its time not shooting, and the honest answer to that is
+# not more damage -- it is that standing still now feeds you as well.
+#
+# It REPLACES the damage factor rather than adding to it, so a run cannot stack
+# Pillar on Anchor. The two are the same question asked at two sizes, and a tree
+# that let the same question be answered twice would be a tree with repeats in it,
+# which is the thing the tree replaced.
+#
+# The regeneration half seeds 3 HP/s of its own rather than only multiplying what
+# the run has: nothing on the Execution branch has ever added regeneration, so a
+# pure multiplier here was three times zero. The text says "3 HP/s ... tripled" and
+# the 3 is inside the multiplier, the same convention the Survivor seeds use.
+value = 2.0
+max_stacks = 1
+kind = "milestone"
+level = 32
+group = "execution.rate.still"
+after = "m16_frenzy_settled"
+
+[[upgrade]]
+id = "m32_tempest_deep"
+name = "Tempest Ruin"
+desc = "Your extra projectiles are quadrupled. 4 becomes 16."
+effect = "ms_proj"
+# 2.0 on top of the 1.5 the line already has, because the layer is additive: the
+# root seeded +4 at x1.5, this card's parent took it to x2, and a third 0.8 would
+# have been x3.8 -- a 15 -- for a card that says 16. The value is the one that
+# makes the printed total true, which is the only way to choose between them.
+value = 2.0
+max_stacks = 1
+kind = "milestone"
+level = 32
+group = "execution.proj.deep"
+after = "m16_tempest_deep"
+
+[[upgrade]]
+id = "m32_tempest_hail"
+name = "Hail"
+desc = "Pierce +2, and your pierce bonus is tripled. 2 becomes 6."
+effect = "ms_pierce"
+# The depth half of this pair, and the third card to use this one effect: the seed
+# lives in the effect rather than in the card, which is why this one has no effect
+# id of its own. 2 at x2 from the second tier is not inherited here -- nothing on
+# THIS branch has ever added a pierce -- so the card seeds its own 2 and the
+# printed 6 is 2 at x3.
+value = 2.0
+max_stacks = 1
+kind = "milestone"
+level = 32
+group = "execution.proj.deep"
+after = "m16_tempest_deep"
+
+[[upgrade]]
+id = "m32_skewer_spine"
+name = "Spine"
+desc = "Pierce +2, and your pierce bonus is tripled. Half a body's armour stops mattering."
+effect = "ms_pierce_armour"
+# The other half of this pair, and the better third tier: Skewer said "your shots
+# go through more bodies", and a body you are already hitting four times is a body
+# whose defence you are paying four times. Half is a FRACTION of the defence rather
+# than a flat 50, so it still means something against a late enemy -- a flat number
+# is everything against trash and nothing against a boss.
+value = 1.0
+max_stacks = 1
+kind = "milestone"
+level = 32
+group = "execution.proj.pierce"
+after = "m16_tempest_pierce"
+
+[[upgrade]]
+id = "m32_skewer_lattice"
+name = "Lattice"
+desc = "Pierce +6, and your pierce bonus is multiplied fivefold. Every blast is 40% wider."
+effect = "ms_pierce_area"
+# The other third tier on this pair, and a different question from Spine: MORE
+# bodies rather than HARDER ones, with the area scale along for the ride. A run
+# that chose to hit everything should get a bigger everything; a run that chose to
+# cut through armour should get better at that instead.
+# The 40% is inside ms_pierce_area for the same reason the quarter is inside
+# dmg_low_tighter: a card's data should be the thing a designer edits, and a
+# half-read card is a card with two sources of truth and only one of them loaded.
+value = 3.0
+max_stacks = 1
+kind = "milestone"
+level = 32
+group = "execution.proj.pierce"
+after = "m16_tempest_pierce"
 
 # L16 --- ELEMENT: what your hits leave on them. Four mutually exclusive answers
 # to "how do you want a body to feel", applied from the one place every point of

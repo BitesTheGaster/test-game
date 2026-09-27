@@ -367,8 +367,8 @@ most worth having.
 
 | Name | ID | Effect | Value | Max stacks | Weapon | Level | Group | After | Slot | Description |
 |---|---|---|---|---|---|---|---|---|---|---|
-| Crimson Pact | `m4_crimson` | ms_lifesteal_seed | 0.6 | 1 |  | 4 | survivor |  | yes | Lifesteal 7% per kill. Everything else you add to lifesteal counts 60% stronger. |
-| Verdant Renewal | `m4_renewal` | ms_regen_seed | 0.75 | 1 |  | 4 | survivor |  | yes | Regeneration 1 HP/s. Everything else you add to regeneration counts 75% stronger. |
+| Crimson Pact | `m4_crimson` | ms_lifesteal_seed | 0.6 | 1 |  | 4 | survivor |  | yes | Lifesteal 11% per kill. Everything else you add to lifesteal counts 60% stronger. |
+| Verdant Renewal | `m4_renewal` | ms_regen_seed | 0.75 | 1 |  | 4 | survivor |  | yes | Regeneration 1.75 HP/s. Everything else you add to regeneration counts 75% stronger. |
 | Aegis | `m4_aegis` | ms_shield_seed | 0.6 | 1 |  | 4 | survivor |  | yes | Shield 50, filled at once. Your whole pool is 60% larger. |
 | Blood Debt | `m8_blooddebt` | ms_lifesteal | 0.6 | 1 |  | 8 | survivor.crimson | m4_crimson | yes | Lifesteal 60% stronger again. Totals 2.2x. |
 | Wound Echo | `m8_woundecho` | mercy_heal | 3 | 1 |  | 8 | survivor.crimson | m4_crimson | yes | Survive 3 seconds untouched and heal to full, once per injury. |
@@ -388,9 +388,27 @@ most worth having.
 | Iron Vow | `m16_ironvow` | shield_delay | 4 | 1 |  | 16 | survivor.aegis.bulwark | m8_bulwark | yes | Shield pool 60% larger, and the 4 second wait before it refills is gone. |
 | Stone Vow | `m16_stonevow` | ms_defense | 2 | 1 |  | 16 | survivor.aegis.riposte | m8_riposte | yes | Defence tripled. |
 | Riposte Call | `m16_ripostecall` | ms_knockback | 1 | 1 |  | 16 | survivor.aegis.riposte | m8_riposte | yes | Defence tripled, and knockback you deal is doubled with it. |
-| Overload | `m8_overload` | damage_mul | 1.25 | 2 |  | 8 | execution |  | yes | All damage +125% |
-| Frenzy | `m8_frenzy` | fire_rate | 0.75 | 2 |  | 8 | execution |  | yes | Fire rate +75% |
-| Tempest | `m8_tempest` | proj_add | 4 | 2 |  | 8 | execution |  | yes | Every weapon fires 4 more projectiles |
+| Overload | `m8_overload` | ms_damage | 0.6 | 1 |  | 8 | execution |  | yes | All damage +60%. |
+| Frenzy | `m8_frenzy` | ms_fire_rate | 0.6 | 1 |  | 8 | execution |  | yes | Fire rate +60%. |
+| Tempest | `m8_tempest` | ms_proj_seed | 0.5 | 1 |  | 8 | execution |  | yes | Every weapon fires 4 more projectiles, and 4 becomes 6. |
+| Overdrive | `m16_overload_deep` | ms_damage | 0.6 | 1 |  | 16 | execution.dmg | m8_overload | yes | All damage +60% again. Totals 2.2x. |
+| Bloodied | `m16_overload_bloodied` | dmg_low | 2 | 1 |  | 16 | execution.dmg | m8_overload | yes | All damage x3 while you are below half health. |
+| Fever | `m16_frenzy_deep` | ms_fire_rate | 0.6 | 1 |  | 16 | execution.rate | m8_frenzy | yes | Fire rate +60% again. Totals 2.2x. |
+| Rooted | `m16_frenzy_settled` | dmg_still | 1.5 | 1 |  | 16 | execution.rate | m8_frenzy | yes | All damage x2.5 while you give no movement input. |
+| Tempest Deep | `m16_tempest_deep` | ms_proj | 0.5 | 1 |  | 16 | execution.proj | m8_tempest | yes | Your extra projectiles are doubled. 4 becomes 8. |
+| Skewer | `m16_tempest_pierce` | ms_pierce | 1 | 1 |  | 16 | execution.proj | m8_tempest | yes | Pierce +2, and your pierce bonus is doubled. 2 becomes 4. |
+| Ruin | `m32_overload_ruin` | ms_damage | 0.8 | 1 |  | 32 | execution.dmg.deep | m16_overload_deep | yes | All damage +80% again. Totals 3.0x. |
+| Guillotine | `m32_overload_guillotine` | ms_execute | 3 | 1 |  | 32 | execution.dmg.deep | m16_overload_deep | yes | All damage x4 against anything below half health. |
+| Wrath | `m32_bloodied_wrath` | dmg_low_deeper | 1 | 1 |  | 32 | execution.dmg.low | m16_overload_bloodied | yes | All damage x2 while you are below half health, on top of the x3. Totals x6. |
+| Second Wind | `m32_bloodied_secondwind` | dmg_low_tighter | 1.5 | 1 |  | 32 | execution.dmg.low | m16_overload_bloodied | yes | All damage x2.5 below a quarter health instead of a half. Totals x7.5. |
+| Blizzard | `m32_frenzy_blizzard` | ms_fire_rate | 0.8 | 1 |  | 32 | execution.rate.deep | m16_frenzy_deep | yes | Fire rate +80% again. Totals 3.0x. |
+| Cadence | `m32_frenzy_cadence` | ms_still_rate | 1 | 1 |  | 32 | execution.rate.deep | m16_frenzy_deep | yes | Fire rate x2 while you give no movement input. |
+| Anchor | `m32_rooted_anchor` | dmg_still_deeper | 0.6 | 1 |  | 32 | execution.rate.still | m16_frenzy_settled | yes | All damage x1.6 while you give no movement input, on top of the x2.5. |
+| Pillar | `m32_rooted_pillar` | ms_still_survival | 2 | 1 |  | 32 | execution.rate.still | m16_frenzy_settled | yes | All damage x2.5 while you give no movement input, and you regenerate 3 HP/s while you do, tripled. |
+| Tempest Ruin | `m32_tempest_deep` | ms_proj | 2 | 1 |  | 32 | execution.proj.deep | m16_tempest_deep | yes | Your extra projectiles are quadrupled. 4 becomes 16. |
+| Hail | `m32_tempest_hail` | ms_pierce | 2 | 1 |  | 32 | execution.proj.deep | m16_tempest_deep | yes | Pierce +2, and your pierce bonus is tripled. 2 becomes 6. |
+| Spine | `m32_skewer_spine` | ms_pierce_armour | 1 | 1 |  | 32 | execution.proj.pierce | m16_tempest_pierce | yes | Pierce +2, and your pierce bonus is tripled. Half a body's armour stops mattering. |
+| Lattice | `m32_skewer_lattice` | ms_pierce_area | 3 | 1 |  | 32 | execution.proj.pierce | m16_tempest_pierce | yes | Pierce +6, and your pierce bonus is multiplied fivefold. Every blast is 40% wider. |
 | Frostbind | `m16_frostbind` | mark_slow | 2.5 | 3 |  | 16 | element |  | yes | Every hit chills what it strikes for 2.5s |
 | Emberbrand | `m16_emberbrand` | mark_burn | 22 | 3 |  | 16 | element |  | yes | Every hit sets it alight: 22 burning damage a second |
 | Hex | `m16_hex` | mark_vuln | 0.14 | 3 |  | 16 | element |  | yes | Every hit makes that body take 14% more damage, up to +84% |
@@ -414,6 +432,15 @@ most worth having.
 | bulwark | Barbed Skin, Repulsion, Stone Mantle | 3 |
 | element | Armour Split, Emberbrand, Frostbind, Hex | 4 |
 | execution | Frenzy, Overload, Tempest | 3 |
+| execution.dmg | Bloodied, Overdrive | 2 |
+| execution.dmg.deep | Guillotine, Ruin | 2 |
+| execution.dmg.low | Second Wind, Wrath | 2 |
+| execution.proj | Skewer, Tempest Deep | 2 |
+| execution.proj.deep | Hail, Tempest Ruin | 2 |
+| execution.proj.pierce | Lattice, Spine | 2 |
+| execution.rate | Fever, Rooted | 2 |
+| execution.rate.deep | Blizzard, Cadence | 2 |
+| execution.rate.still | Anchor, Pillar | 2 |
 | momentum | Bloodthirst, Momentum, Slaughter | 3 |
 | survivor | Aegis, Crimson Pact, Verdant Renewal | 3 |
 | survivor.aegis | Bulwark, Riposte | 2 |
@@ -430,17 +457,26 @@ most worth having.
 
 | Parent | Branches | N |
 |---|---|---|
+| `m16_frenzy_deep` | Blizzard (`m32_frenzy_blizzard`, group `execution.rate.deep`); Cadence (`m32_frenzy_cadence`, group `execution.rate.deep`) | 2 |
+| `m16_frenzy_settled` | Anchor (`m32_rooted_anchor`, group `execution.rate.still`); Pillar (`m32_rooted_pillar`, group `execution.rate.still`) | 2 |
+| `m16_overload_bloodied` | Second Wind (`m32_bloodied_secondwind`, group `execution.dmg.low`); Wrath (`m32_bloodied_wrath`, group `execution.dmg.low`) | 2 |
+| `m16_overload_deep` | Guillotine (`m32_overload_guillotine`, group `execution.dmg.deep`); Ruin (`m32_overload_ruin`, group `execution.dmg.deep`) | 2 |
+| `m16_tempest_deep` | Hail (`m32_tempest_hail`, group `execution.proj.deep`); Tempest Ruin (`m32_tempest_deep`, group `execution.proj.deep`) | 2 |
+| `m16_tempest_pierce` | Lattice (`m32_skewer_lattice`, group `execution.proj.pierce`); Spine (`m32_skewer_spine`, group `execution.proj.pierce`) | 2 |
 | `m4_aegis` | Bulwark (`m8_bulwark`, group `survivor.aegis`); Riposte (`m8_riposte`, group `survivor.aegis`) | 2 |
 | `m4_crimson` | Blood Debt (`m8_blooddebt`, group `survivor.crimson`); Wound Echo (`m8_woundecho`, group `survivor.crimson`) | 2 |
 | `m4_renewal` | Deep Roots (`m8_deeproots`, group `survivor.renewal`); Stillness Bloom (`m8_stillbloom`, group `survivor.renewal`) | 2 |
 | `m8_blooddebt` | Ironblood (`m16_ironblood`, group `survivor.crimson.debt`); Thirst Unbound (`m16_thirstunbound`, group `survivor.crimson.debt`) | 2 |
 | `m8_bulwark` | Aegis Prism (`m16_aegisprism`, group `survivor.aegis.bulwark`); Iron Vow (`m16_ironvow`, group `survivor.aegis.bulwark`) | 2 |
 | `m8_deeproots` | Green Reservoir (`m16_greenreservoir`, group `survivor.renewal.deep`); Verdant Earth (`m16_verdantearth`, group `survivor.renewal.deep`) | 2 |
+| `m8_frenzy` | Fever (`m16_frenzy_deep`, group `execution.rate`); Rooted (`m16_frenzy_settled`, group `execution.rate`) | 2 |
+| `m8_overload` | Bloodied (`m16_overload_bloodied`, group `execution.dmg`); Overdrive (`m16_overload_deep`, group `execution.dmg`) | 2 |
 | `m8_riposte` | Riposte Call (`m16_ripostecall`, group `survivor.aegis.riposte`); Stone Vow (`m16_stonevow`, group `survivor.aegis.riposte`) | 2 |
 | `m8_stillbloom` | Deep Stillness (`m16_deepstill`, group `survivor.renewal.still`); Verdant Heart (`m16_verdantheart`, group `survivor.renewal.still`) | 2 |
+| `m8_tempest` | Skewer (`m16_tempest_pierce`, group `execution.proj`); Tempest Deep (`m16_tempest_deep`, group `execution.proj`) | 2 |
 | `m8_woundecho` | Red Mend (`m16_redmend`, group `survivor.crimson.echo`); Warmblood (`m16_warmblood`, group `survivor.crimson.echo`) | 2 |
 
-**Totals:** 178 upgrades (88 normal, 52 unique, 38 milestones), 125 of which take an item slot.
+**Totals:** 196 upgrades (88 normal, 52 unique, 56 milestones), 143 of which take an item slot.
 
 
 ---

@@ -18,6 +18,8 @@
 #include <fstream>
 #include <map>
 #include <memory>
+#include <functional>
+#include <set>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -7121,6 +7123,21 @@ TEST_CASE("A milestone lays out a whole exclusive group, and taking one closes t
   // thing this whole section stopped being.
   std::vector<std::string> groups;
   int milestoneCards = 0;
+  // Derived, so that converting another group in a later round is a data change
+  // and not an edit to a list in a test. See the long note at the stacks rule
+  // below for why this is not just "the groups that have an `after` member".
+  std::set<std::string> treeGroups;
+  for (const auto& u : content.upgrades) {
+    if (u.kind == "milestone" && !u.after.empty()) {
+      treeGroups.insert(u.group);
+    }
+  }
+  for (const auto& u : content.upgrades) {
+    if (u.kind != "milestone" || u.after.empty()) continue;
+    for (const auto& p2 : content.upgrades) {
+      if (p2.id == u.after) treeGroups.insert(p2.group);
+    }
+  }
   for (const auto& u : content.upgrades) {
     if (u.kind != "milestone") continue;
     ++milestoneCards;
@@ -7142,12 +7159,24 @@ TEST_CASE("A milestone lays out a whole exclusive group, and taking one closes t
     // effect and the player can compute it; a branch asks something new. So the
     // stacks rule and the branch rule are stated together here rather than one
     // being allowed to imply the other.
-    const bool inTree = u.group.rfind("survivor", 0) == 0;
-    if (inTree) {
+    //
+    // WHICH groups are trees is DERIVED, not listed. The first version of this
+    // predicate was `group starts with "survivor"`, which is exactly how the
+    // execution conversion would have shipped with its three roots still asserting
+    // they stack: a hardcoded group name is a list that stops being true the moment
+    // the next group is converted, and it fails by being too permissive rather than
+    // by being obviously wrong.
+    //
+    // The closure is: a group is a tree if it has a member with a parent, OR if one
+    // of its cards is the PARENT of a card in a tree group. The second clause is
+    // what catches the roots, which carry no `after` of their own and would
+    // otherwise read as a flat group of repeatable cards.
+    if (treeGroups.count(u.group) > 0) {
       REQUIRE(u.maxStacks == 1);
     } else {
-      // The three groups not yet converted still lean on repeats, and the carry
-      // path in buildChoices is what feeds them.
+      // The groups not yet converted still lean on repeats, and the carry path in
+      // buildChoices is what feeds them. Converting one deletes this branch rather
+      // than relaxing it.
       REQUIRE(u.maxStacks >= 2);
     }
     if (!u.after.empty()) {
@@ -8519,26 +8548,32 @@ TEST_CASE("The Void Gyre's damage is a function of what it is holding") {
   REQUIRE(packed > solo * 2.0F);
 }
 
-// --- Round 17: a milestone must beat the repeatable card on its own axis -------
+// --- Round 17/19: a milestone must beat a plain card on the same axis ---------
 
-TEST_CASE("No milestone is the weaker buy against a plain card on the same axis") {
+TEST_CASE("A milestone beats a plain card on the same axis, and is worth more the deeper the run went") {
   // A milestone closes its siblings for the rest of the run. A plain card does
-  // not. So for the same effect id, a milestone has to win twice: on the number
-  // it hands you for ONE take, and on the number it hands you over the whole run.
+  // not. So for the same AXIS, a milestone has to win on the number it hands you
+  // for ONE take -- you are giving up three options, and one of those options is
+  // worth more than what you get.
   //
-  // The rule exists because of a real defect the player named: the regeneration
+  // It exists because of a real defect the player named: the regeneration
   // milestone was +1.2 while a plain card handed out +2, so the "reward" for
-  // locking away two other options was a strictly worse buy. The audit behind it
-  // found two more -- Overload totalled less damage than a stacked Might, and
-  // Tempest added exactly one projectile, the same as a plain Twin Shot.
+  // locking away two other options was a strictly worse buy.
   //
-  // It is a test rather than a note in the data file because the ask was the
-  // general one: when anything new is added, look at everything else so balance
-  // does not get spoiled. A comment is a promise someone has to remember to keep;
-  // this is the same question asked of the shipped numbers on every run.
+  // WHAT CHANGED, AND WHY THE OLD RULE HAD TO GO. The original test also demanded
+  // that a milestone beat a plain card over the WHOLE run, which it got by
+  // comparing `value * maxStacks` against `plainValue * plainStacks`. With
+  // multipliers that comparison is a category error rather than a close call: it
+  // weighed one take of a one-stack card against eight takes of an eight-stack
+  // card, and it only ever passed because the old milestones stacked two or three
+  // times. A multiplier is exactly the card that CANNOT be measured that way --
+  // its whole-run value is "the axis you built", which is unbounded and is the
+  // point. So the whole-run half of the rule is replaced by the claim that
+  // replaces it: the same card is worth MORE on a run that engaged the axis, and
+  // strictly more than a flat card is worth there.
   const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
 
-  // The strongest repeatable card on an effect, judged on both axes.
+  // The strongest repeatable card on an effect, judged per take.
   struct Best {
     float perTake = 0.0F;
     float perRun = 0.0F;
@@ -8548,39 +8583,481 @@ TEST_CASE("No milestone is the weaker buy against a plain card on the same axis"
   for (const auto& u : content.upgrades) {
     if (u.kind == "milestone") continue;
     const float v = static_cast<float>(u.value);
-    const float total = v * static_cast<float>(u.maxStacks);
     auto& b = plain[u.effect];
     if (b.id.empty() || v > b.perTake) {
       b.perTake = std::max(b.perTake, v);
       b.id = u.id;
     }
-    b.perRun = std::max(b.perRun, total);
+    b.perRun = std::max(b.perRun, v * static_cast<float>(u.maxStacks));
   }
 
+  // ONE TABLE, THREE CLAIMS, all measured rather than tabulated.
+  //
+  // The expected number is what the CARD PRINTS, and that is the claim worth
+  // making: a player who reads "4 becomes 6" off Tempest and counts seven shots
+  // leaving their weapon has been told a lie, and nothing else in the design is
+  // worth as much as that not happening. The first version of this test listed the
+  // seeds as hand-written constants BESIDE the card that sets them, which is a
+  // number that rots silently -- it stayed green when the seed in the applier was
+  // halved and when the card text was left printing the pre-multiplier seed.
+  //
+  // So: `want` is the number on the card, `read` is the axis the player can see,
+  // and the two are required to agree. Then the same measurement has to beat one
+  // take of the best repeatable card on that axis, because the player is locking
+  // away three options to get this one and one of those options has to be the
+  // worse buy.
+  struct Axis {
+    const char* effect;      // the milestone effect, for "is anything on here"
+    const char* plainEffect; // the repeatable card it competes with
+    const char* card;        // the card whose printed number `want` is
+    std::function<float(const game::Game&)> read;
+    float want;   // what the card says
+    float plain;  // one take of the best repeatable card on the same axis
+  };
+  const std::vector<Axis> axes = {
+    // 1.6 total damage, printed as "+60%". damageMul is 1.0-based, so the scale IS
+    // the multiplier and needs no adjustment -- which is the opposite of the other
+    // eight axes and is why it gets a comment rather than a silent asymmetry.
+    {"ms_damage", "damage_mul", "m8_overload",
+     [](const game::Game& g) { return g.playerDamageScale(); }, 1.6F, 0.30F},
+    // effectiveFireRate() is a RATE BONUS, not the rate: 0.6 means the rate is
+    // x1.6. A test that compared it to a raw 1.6 would fail while the game is
+    // right, which is why the comment is here and not in the assertion.
+    {"ms_fire_rate", "fire_rate", "m8_frenzy",
+     [](const game::Game& g) { return g.effectiveFireRate(); }, 0.6F, 0.18F},
+    // The two seed-and-multiply cards, printed as the arithmetic they perform.
+    // 4 at x1.5 is 6; 2 at x2 is 4. Both round to whole shots, so the number on
+    // the card is the number the weapon can actually spend.
+    {"ms_proj_seed", "proj_add", "m8_tempest",
+     [](const game::Game& g) { return static_cast<float>(g.extraProjectiles()); }, 6.0F, 1.0F},
+    {"ms_pierce", "pierce_add", "m16_tempest_pierce",
+     [](const game::Game& g) { return static_cast<float>(g.playerPierceBonus()); }, 4.0F, 1.0F},
+    // These three print the SEED AFTER the multiplier, because the seed is inside
+    // it: 7 at x1.6 is 11.2, not 7. A card that printed the raw seed would be
+    // under-delivering by 40% while reading as though it were not.
+    {"ms_lifesteal_seed", "lifesteal_add", "m4_crimson",
+     [](const game::Game& g) { return g.lifestealChance(); }, 11.2F, 3.0F},
+    {"ms_regen_seed", "regen_add", "m4_renewal",
+     [](const game::Game& g) { return g.regenRate(); }, 1.75F, 1.0F},
+    {"ms_shield_seed", "shield_add", "m4_aegis",
+     [](const game::Game& g) { return g.shieldCap(); }, 80.0F, 13.0F},
+  };
+
   int checked = 0;
-  for (const auto& u : content.upgrades) {
-    if (u.kind != "milestone") continue;
-    const auto it = plain.find(u.effect);
-    // A milestone with no repeatable counterpart (the on-hit marks) owns its
-    // axis outright, and there is nothing to beat.
-    if (it == plain.end()) continue;
-    const Best& b = it->second;
-    const float v = static_cast<float>(u.value);
-    const float total = v * static_cast<float>(u.maxStacks);
-    CAPTURE(u.id);
-    CAPTURE(u.effect);
-    CAPTURE(b.id);
-    CAPTURE(v);
-    CAPTURE(total);
-    CAPTURE(b.perTake);
-    CAPTURE(b.perRun);
-    REQUIRE(v > b.perTake);
-    REQUIRE(total > b.perRun);
+  for (const Axis& a : axes) {
+    CAPTURE(a.effect);
+    // Every axis has at least one card on it, so a renamed effect id cannot quietly
+    // turn this block into nothing.
+    int onAxis = 0;
+    for (const auto& u : content.upgrades) {
+      if (u.kind == "milestone" && u.effect == a.effect) ++onAxis;
+    }
+    CAPTURE(onAxis);
+    REQUIRE(onAxis >= 1);
+    // And the repeatable card it competes against exists, at the strength assumed
+    // here -- asserted rather than read, because `plain` is the claim under test.
+    const auto it = plain.find(a.plainEffect);
+    REQUIRE(it != plain.end());
+    CAPTURE(it->second.id);
+    REQUIRE(it->second.perTake == Catch::Approx(a.plain).margin(0.001F));
+
+    int mIdx = -1;
+    for (std::size_t i = 0; i < content.upgrades.size(); ++i) {
+      if (content.upgrades[i].id == a.card) mIdx = static_cast<int>(i);
+    }
+    REQUIRE(mIdx >= 0);
+    game::Game g{content, 101};
+    g.testClearWeapons();
+    const float base = a.read(g);
+    CAPTURE(base);
+    REQUIRE(g.testGrantUpgrade(mIdx));
+    const float got = a.read(g);
+    CAPTURE(got);
+    // The card's promise, measured.
+    REQUIRE(got == Catch::Approx(a.want).margin(0.01F));
+    // ...and it has to be worth more than one take of the plain card.
+    REQUIRE(got - base > a.plain);
     ++checked;
   }
-  // Every axis that HAS a repeatable card was actually compared, so emptying the
-  // milestone pool or renaming the effects cannot quietly turn this test green.
-  REQUIRE(checked >= 12);
+  // Every axis with a repeatable card was compared, so emptying the milestone pool
+  // cannot quietly turn this test green.
+  REQUIRE(checked >= 7);
+}
+
+TEST_CASE("Every Execution branch card does what it prints, all the way down the tree") {
+  // The Execution tree is nineteen numbers, and the first version of it shipped
+  // with one of them silently doing nothing: the projectile axis was still an `int`
+  // in the milestone layer, so its multiplier truncated to zero and the ROOT card
+  // already printed "4 becomes 6" while firing four. The per-take test caught it --
+  // but by accident, because that test compares a card against another card and the
+  // accident is that it happened to be reading the axis the number was wrong on.
+  //
+  // So: walk the tree, and at every node assert the axis value the card PRINTS.
+  // The expected numbers are written out longhand rather than recomputed from the
+  // data, because a table that recomputes itself can only ever confirm that the
+  // data and the applier agree with each other -- not that either one matches the
+  // sentence on the card. Every number below was read off a card and then checked
+  // against the code, and that is the only direction this check is worth anything
+  // in.
+  const auto content = game::loadContent(GAME_ASSETS_DIR "/data");
+  const auto indexOf = [&content](const std::string& id) {
+    for (std::size_t i = 0; i < content.upgrades.size(); ++i) {
+      if (content.upgrades[i].id == id) return static_cast<int>(i);
+    }
+    return -1;
+  };
+
+  // A run holding exactly these cards. It hands back a pointer because Game holds a
+  // registry and is not copyable, which is a detail that would otherwise be
+  // rediscovered by every future reader of this file.
+  using Run = std::unique_ptr<game::Game>;
+  const auto run = [&content, &indexOf](const std::vector<std::string>& path) {
+    auto g = std::make_unique<game::Game>(content, 101);
+    g->testDisableWaves();
+    g->testClearWeapons();
+    for (const auto& id : path) {
+      const int idx = indexOf(id);
+      REQUIRE(idx >= 0);
+      REQUIRE(g->testGrantUpgrade(idx));
+    }
+    return g;
+  };
+  // Standing still AND below half health, so every conditional is true at once and
+  // the product can be compared against what the cards say the product is. Measured
+  // under those two conditions because a conditional card asserted in the state
+  // where it is FALSE reads 1.0 and passes, which is the opposite of a test.
+  const auto condMul = [&run](const std::vector<std::string>& path, float healthFrac) {
+    const Run g = run(path);
+    g->testSetPlayerHp(g->maxHealth() * healthFrac);
+    g->testSetMove(0.0F, 0.0F);
+    g->testAdvance(1.0F / 60.0F); // one step, so the conditions are evaluated
+    return g->damageConditionMul();
+  };
+  const auto at = [&run](const std::function<float(const game::Game&)>& f,
+                         const std::vector<std::string>& path) {
+    return f(*run(path));
+  };
+  // A stated condition is only half a rule until the other half is measured too, so
+  // every conditional here is checked moving as well as still.
+  const auto condMulMoving = [&run](const std::vector<std::string>& path, float healthFrac) {
+    const Run g = run(path);
+    g->testSetPlayerHp(g->maxHealth() * healthFrac);
+    g->testSetMove(1.0F, 0.0F);
+    g->testAdvance(1.0F / 60.0F);
+    return g->damageConditionMul();
+  };
+
+  // --- the damage line ---------------------------------------------------------
+  // "All damage +60%." / "again. Totals 2.2x." / "again. Totals 3.0x."
+  const auto scale = [](const game::Game& g) { return g.playerDamageScale(); };
+  REQUIRE(at(scale, {"m8_overload"}) == Catch::Approx(1.6F).margin(0.01F));
+  REQUIRE(at(scale, {"m8_overload", "m16_overload_deep"}) == Catch::Approx(2.2F).margin(0.01F));
+  REQUIRE(at(scale, {"m8_overload", "m16_overload_deep", "m32_overload_ruin"}) ==
+          Catch::Approx(3.0F).margin(0.01F));
+  // "All damage x4 against anything below half health." The factor is checked here
+  // and the funnel is checked at the bottom of this test, because a factor that is
+  // stored correctly and never reached is the exact shape of bug this file exists
+  // to catch.
+  const auto execute = [](const game::Game& g) { return g.playerExecuteMul(); };
+  REQUIRE(at(execute, {"m8_overload", "m16_overload_deep", "m32_overload_guillotine"}) ==
+          Catch::Approx(4.0F).margin(0.01F));
+
+  // "All damage x3 while you are below half health." / "x2 on top. Totals x6."
+  const std::vector<std::string> bloodied{"m8_overload", "m16_overload_bloodied"};
+  const std::vector<std::string> wrath{"m8_overload", "m16_overload_bloodied",
+                                        "m32_bloodied_wrath"};
+  const std::vector<std::string> secondWind{"m8_overload", "m16_overload_bloodied",
+                                           "m32_bloodied_secondwind"};
+  REQUIRE(condMul(bloodied, 0.3F) == Catch::Approx(3.0F).margin(0.01F));
+  REQUIRE(condMul(wrath, 0.3F) == Catch::Approx(6.0F).margin(0.01F));
+  // HEALTH is what switches it off, not movement. An early draft of this test
+  // walked with a low-health card and expected 1.0, which is the shape of a card
+  // that secretly also reads the movement key -- so both halves of the condition
+  // are asserted: healthy is a no-op, and walking at 30% is still live.
+  REQUIRE(condMul(wrath, 0.9F) == Catch::Approx(1.0F).margin(0.01F));
+  REQUIRE(condMulMoving(wrath, 0.3F) == Catch::Approx(6.0F).margin(0.01F));
+
+  // "x2.5 below a quarter health instead of a half. Totals x7.5." -- the same
+  // product as Wrath at a DIFFERENT threshold, and that difference is the whole
+  // card: with Wrath the fork is two multipliers, with Second Wind it is two
+  // different places to be standing. So the pair is asserted at one fraction that
+  // falls between the two cuts, where they disagree, and each number is that
+  // card's own claim rather than one of them plus a no-op.
+  REQUIRE(condMul(wrath, 0.2F) == Catch::Approx(6.0F).margin(0.01F));
+  REQUIRE(condMul(secondWind, 0.2F) == Catch::Approx(7.5F).margin(0.01F));
+  REQUIRE(condMul(wrath, 0.4F) == Catch::Approx(6.0F).margin(0.01F));
+  REQUIRE(condMul(secondWind, 0.4F) == Catch::Approx(1.0F).margin(0.01F));
+  // The cut itself, because "below a quarter" is a word and the word has an edge:
+  // a player sitting on exactly a quarter is not below it. Asserted right at the
+  // line, because a threshold that is a quarter up to a rounding error and half a
+  // quarter for real is a card that lies for exactly one pixel of health.
+  REQUIRE(condMul(wrath, 0.499F) == Catch::Approx(6.0F).margin(0.01F));
+  REQUIRE(condMul(wrath, 0.501F) == Catch::Approx(1.0F).margin(0.01F));
+  REQUIRE(condMul(secondWind, 0.249F) == Catch::Approx(7.5F).margin(0.01F));
+  REQUIRE(condMul(secondWind, 0.251F) == Catch::Approx(1.0F).margin(0.01F));
+
+  // --- the fire-rate line ------------------------------------------------------
+  // "Fire rate +60%." / "again. Totals 2.2x." / "+80% again. Totals 3.0x."
+  // effectiveFireRate() is a RATE BONUS, so 0.6 is a rate of x1.6 and the totals are
+  // 0.6, 1.2 and 2.0 -- additive, because the milestone layer is.
+  const auto rateBonus = [](const game::Game& g) { return g.effectiveFireRate(); };
+  REQUIRE(at(rateBonus, {"m8_frenzy"}) == Catch::Approx(0.6F).margin(0.01F));
+  REQUIRE(at(rateBonus, {"m8_frenzy", "m16_frenzy_deep"}) == Catch::Approx(1.2F).margin(0.01F));
+  REQUIRE(at(rateBonus, {"m8_frenzy", "m16_frenzy_deep", "m32_frenzy_blizzard"}) ==
+          Catch::Approx(2.0F).margin(0.01F));
+  // "Fire rate x2 while you give no movement input." Measured while standing still
+  // AND while moving, because the second half is the one that makes it a condition.
+  {
+    const Run still = run({"m8_frenzy", "m16_frenzy_deep", "m32_frenzy_cadence"});
+    still->testSetMove(0.0F, 0.0F);
+    still->testAdvance(1.0F / 60.0F);
+    REQUIRE(still->rateConditionMul() == Catch::Approx(2.0F).margin(0.01F));
+    const Run moving = run({"m8_frenzy", "m16_frenzy_deep", "m32_frenzy_cadence"});
+    moving->testSetMove(1.0F, 0.0F);
+    moving->testAdvance(1.0F / 60.0F);
+    REQUIRE(moving->rateConditionMul() == Catch::Approx(1.0F).margin(0.01F));
+  }
+
+  // --- the projectile line -----------------------------------------------------
+  // "4 more projectiles, and 4 becomes 6." / "doubled. 4 becomes 8." /
+  // "quadrupled. 4 becomes 16." The three the `int` bug broke.
+  const auto bonus = [](const game::Game& g) { return static_cast<float>(g.extraProjectiles()); };
+  REQUIRE(at(bonus, {"m8_tempest"}) == Catch::Approx(6.0F));
+  REQUIRE(at(bonus, {"m8_tempest", "m16_tempest_deep"}) == Catch::Approx(8.0F));
+  REQUIRE(at(bonus, {"m8_tempest", "m16_tempest_deep", "m32_tempest_deep"}) ==
+          Catch::Approx(16.0F));
+
+  // "Pierce +2, and your pierce bonus is doubled. 2 becomes 4." The two third tiers
+  // land on 4 -> 12 and 8 -> 40, and the cards deliberately print the MULTIPLIER
+  // rather than those counts, because the counts also depend on whichever pierce
+  // cards the run took on the way. The multiplier is the honest thing to assert and
+  // it is the one that catches a scale that stopped applying.
+  const auto pierce = [](const game::Game& g) { return static_cast<float>(g.playerPierceBonus()); };
+  REQUIRE(at(pierce, {"m8_tempest", "m16_tempest_pierce"}) == Catch::Approx(4.0F));
+  REQUIRE(at(pierce, {"m8_tempest", "m16_tempest_pierce", "m32_skewer_spine"}) ==
+          Catch::Approx(12.0F));
+  REQUIRE(at(pierce, {"m8_tempest", "m16_tempest_pierce", "m32_skewer_lattice"}) ==
+          Catch::Approx(40.0F));
+  // ...and the halves the third tiers add on top of the count, each asserted to be
+  // ABSENT from the other: two cards that both said "pierce" and quietly did the
+  // same second thing is the failure mode of sharing vocabulary.
+  const auto armour = [](const game::Game& g) { return g.playerArmourScale(); };
+  const auto area = [](const game::Game& g) { return g.playerAreaScale(); };
+  const std::vector<std::string> spine{"m8_tempest", "m16_tempest_pierce", "m32_skewer_spine"};
+  const std::vector<std::string> lattice{"m8_tempest", "m16_tempest_pierce", "m32_skewer_lattice"};
+  REQUIRE(at(armour, spine) == Catch::Approx(0.5F).margin(0.01F));
+  REQUIRE(at(area, spine) == Catch::Approx(1.0F).margin(0.01F));
+  REQUIRE(at(area, lattice) == Catch::Approx(1.4F).margin(0.01F));
+  REQUIRE(at(armour, lattice) == Catch::Approx(0.0F).margin(0.01F));
+  // Hail sits on the OTHER branch, so it inherits the root's projectile seed and no
+  // pierce one: "Pierce +2, and your pierce bonus is tripled. 2 becomes 6."
+  const std::vector<std::string> hail{"m8_tempest", "m16_tempest_deep", "m32_tempest_hail"};
+  REQUIRE(at(pierce, hail) == Catch::Approx(6.0F));
+  // ...and it must not have touched the projectile axis it is a sibling of.
+  REQUIRE(at(bonus, hail) == Catch::Approx(8.0F));
+
+  // --- the still line ----------------------------------------------------------
+  // "All damage x2.5 while you give no movement input." / "x1.6 on top. Totals x4."
+  const std::vector<std::string> rooted{"m8_frenzy", "m16_frenzy_settled"};
+  const std::vector<std::string> anchor{"m8_frenzy", "m16_frenzy_settled", "m32_rooted_anchor"};
+  const std::vector<std::string> pillar{"m8_frenzy", "m16_frenzy_settled", "m32_rooted_pillar"};
+  REQUIRE(condMul(rooted, 0.25F) == Catch::Approx(2.5F).margin(0.01F));
+  REQUIRE(condMul(anchor, 0.25F) == Catch::Approx(4.0F).margin(0.01F));
+  REQUIRE(condMulMoving(anchor, 0.25F) == Catch::Approx(1.0F).margin(0.01F));
+  // The Pillar sibling says "x2.5 ... and regeneration x3 there too": the SAME damage
+  // factor as its parent, not a bigger one, and a regen factor on top. The pair only
+  // makes sense if the damage halves are identical, so that is asserted rather than
+  // assumed -- a tree where one branch quietly also deepened the damage would make
+  // the fork arithmetic and the regen half decoration.
+  REQUIRE(condMul(pillar, 0.25F) == Catch::Approx(2.5F).margin(0.01F));
+  {
+    // The regen half, measured as HEALTH GAINED rather than as the field, because a
+    // test that reads the private field is a test of the field. A quarter of a
+    // second, because a full one would climb out of the low-health band partway
+    // through and measure the transition instead of the multiplier.
+    const Run g = run(pillar);
+    g->testSetMove(0.0F, 0.0F);
+    g->testSetPlayerHp(g->maxHealth() * 0.25F);
+    g->testAdvance(1.0F / 60.0F); // let the conditions latch
+    const float before = g->testPlayerHp();
+    g->testAdvance(0.25F);
+    const float gained = g->testPlayerHp() - before;
+    // The Pillar seeds 3 HP/s and triples it while still, so a run that has never
+    // taken a regen card of its own still heals -- which is the whole reason the
+    // card seeds, and the assertion is written as the product so that a change to
+    // either half has to be made here on purpose.
+    REQUIRE(gained == Catch::Approx(3.0F * 3.0F * 0.25F).margin(0.01F));
+  }
+  // ...and the same card, MOVING, heals nothing at all. "While you do" is doing
+  // real work in that sentence, and a regen card that quietly pays out while the
+  // player runs is a card whose condition is decoration.
+  {
+    const Run g = run(pillar);
+    g->testSetPlayerHp(g->maxHealth() * 0.25F);
+    g->testSetMove(1.0F, 0.0F);
+    g->testAdvance(1.0F / 60.0F);
+    const float before = g->testPlayerHp();
+    g->testAdvance(0.25F);
+    REQUIRE(g->testPlayerHp() - before == Catch::Approx(0.0F).margin(0.01F));
+  }
+
+  // --- the target half, through the real damage funnel -------------------------
+  // "All damage x4 against anything below half health." Everything above reads a
+  // stored number. This one puts damage on a body and watches it, because the factor
+  // is applied in applyEnemyDamage and nowhere else -- the single place in the game
+  // that knows which body is being hit, and therefore the single place a
+  // target-conditional card can be true or false.
+  //
+  // The body is placed at an exact fraction of its OWN pool rather than at a
+  // hardcoded HP number, which is what makes this a test of the card and not a test
+  // of one particular enemy's statistics.
+  {
+    const auto dealt = [&content, &indexOf](float enemyFrac) {
+      game::Game g{content, 101};
+      g.testDisableWaves();
+      g.testClearWeapons();
+      const int idx = indexOf("m32_overload_guillotine");
+      REQUIRE(idx >= 0);
+      REQUIRE(g.testGrantUpgrade(idx));
+      g.testSpawnEnemyAt(0.0F, 0.0F, 0.0F);
+      const float pool = g.testFirstEnemyMaxHp();
+      REQUIRE(pool > 0.0F);
+      g.testSetFirstEnemyHp(pool * enemyFrac);
+      g.testDamageFirstEnemy(1.0F);
+      return pool * enemyFrac - g.testFirstEnemyHp();
+    };
+    const float weak = dealt(0.3F);
+    const float tough = dealt(0.7F);
+    CAPTURE(weak);
+    CAPTURE(tough);
+    REQUIRE(weak > 0.0F);
+    REQUIRE(tough > 0.0F);
+    // The same point of damage, on the same body, at two fractions of the same pool.
+    // The ratio IS the card's printed x4, and it is asserted tightly -- this funnel
+    // is a plain multiplication on the incoming number, so a card promising x4 that
+    // delivered x2.5 would show up here and nowhere else.
+    REQUIRE(weak == Catch::Approx(4.0F * tough).margin(0.001F));
+    // ...and the cut, at the line, because a threshold that is "half" for a player
+    // on exactly half is a card arguing with its own wording.
+    REQUIRE(dealt(0.499F) > dealt(0.501F) * 2.0F);
+    // A card of this shape must not fire at all on a body it does not describe, so
+    // the same run without the card is the control: both fractions take the same
+    // damage, which is what makes the two numbers above a measurement rather than a
+    // coincidence of a strong run.
+    {
+      const auto plain = [&content](float enemyFrac) {
+        game::Game g{content, 101};
+        g.testDisableWaves();
+        g.testClearWeapons();
+        g.testSpawnEnemyAt(0.0F, 0.0F, 0.0F);
+        const float pool = g.testFirstEnemyMaxHp();
+        REQUIRE(pool > 0.0F);
+        g.testSetFirstEnemyHp(pool * enemyFrac);
+        g.testDamageFirstEnemy(1.0F);
+        return pool * enemyFrac - g.testFirstEnemyHp();
+      };
+      REQUIRE(plain(0.3F) == Catch::Approx(plain(0.7F)).margin(0.001F));
+    }
+  }
+}
+
+TEST_CASE("A data file that says something the loader does not read is a failed load") {
+  // The check this exercises was written after two cards in the milestone tree had
+  // carried a key nobody read for two rounds: `threshold` on the card that tightens
+  // the low-health band, so the band never tightened, and `area` on the card that
+  // widens every blast, so the blasts never widened. Both cards behaved plausibly,
+  // because the numbers in the HANDLER were right, and both were therefore invisible
+  // to every behavioural test in this file -- the behaviour was correct and the file
+  // was lying.
+  //
+  // A guard that has never been seen to fire is not a guard, it is a comment. So
+  // this writes a data file with a stray key and requires the load to FAIL, naming
+  // the key. Without the loader check, a designer has no way at all to learn that
+  // the line they just typed does nothing, and "the number is right and editing it
+  // changes nothing" is the most expensive kind of quiet.
+  const auto dataDir = std::filesystem::path(GAME_ASSETS_DIR) / "data";
+  const auto scratch = std::filesystem::temp_directory_path() / "tg_stray_key_test";
+  std::error_code ec;
+  std::filesystem::remove_all(scratch, ec);
+
+  // Every table the loader insists on, copied verbatim, so the only thing under test
+  // is the one edited file. The directory first, because copy_file will not make one.
+  std::filesystem::create_directories(scratch);
+  REQUIRE(std::filesystem::is_directory(scratch));
+  for (const char* name : {"weapons.toml", "enemies.toml"}) {
+    std::filesystem::copy_file(dataDir / name, scratch / name,
+                               std::filesystem::copy_options::overwrite_existing, ec);
+  }
+  REQUIRE(!ec);
+  REQUIRE(std::filesystem::exists(scratch / "weapons.toml"));
+
+  // Injects one line into the FIRST upgrade, and hands back that card's id -- read
+  // out of the file rather than hardcoded, because an earlier draft injected into the
+  // last one and then asserted a card name that had nothing to do with it. A test
+  // that pins the wrong card is a test that would pass if the guard reported the
+  // wrong entry, which is the failure mode worth ruling out here.
+  std::string firstCardId;
+  const auto copyUpgrades = [&dataDir, &scratch, &firstCardId](const std::string& injected) {
+    std::ifstream in{dataDir / "upgrades.toml"};
+    REQUIRE(in.good());
+    std::string body{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+    // Anchored on the first [[upgrade]] table, because the file opens with comment
+    // prose that mentions "value =" before any card does.
+    const auto card = body.find("[[upgrade]]");
+    REQUIRE(card != std::string::npos);
+    const auto at = body.find("value = ", card);
+    REQUIRE(at != std::string::npos);
+    const auto idAt = body.find("id = \"", card);
+    REQUIRE(idAt != std::string::npos);
+    REQUIRE(idAt < at);
+    const auto idEnd = body.find('"', idAt + 6);
+    REQUIRE(idEnd != std::string::npos);
+    firstCardId = body.substr(idAt + 6, idEnd - (idAt + 6));
+    REQUIRE(!firstCardId.empty());
+    body.insert(at, injected);
+    std::ofstream out{scratch / "upgrades.toml", std::ios::trunc};
+    REQUIRE(out.good());
+    out << body;
+    out.close();
+  };
+
+  // 1. A key nobody reads: rejected, and the message names the key, because a load
+  //    error that says only "bad file" sends the designer looking in the wrong place.
+  copyUpgrades("threshhold = 0.25\n"); // the classic typo, and the classic trap
+  {
+    std::string what;
+    try {
+      (void)game::loadContent(scratch);
+    } catch (const std::exception& e) {
+      what = e.what();
+    }
+    CAPTURE(what);
+    REQUIRE(what.find("threshhold") != std::string::npos);
+    // ...naming WHICH entry, so the message points at the card to go and look at.
+    REQUIRE(what.find(firstCardId) != std::string::npos);
+  }
+
+  // 2. A key nobody reads even though it is spelled correctly -- the exact shape of
+  //    the two bugs this exists for, where the author used a real word and the
+  //    loader never had a field for it.
+  copyUpgrades("shield_pct = 0.5\n");
+  {
+    std::string what;
+    try {
+      (void)game::loadContent(scratch);
+    } catch (const std::exception& e) {
+      what = e.what();
+    }
+    CAPTURE(what);
+    REQUIRE(what.find("shield_pct") != std::string::npos);
+  }
+
+  // 3. The real data still loads, and it loads through the SAME check that just
+  //    rejected two files -- otherwise a guard that rejects everything is
+  //    indistinguishable from a guard that works, from inside a test suite.
+  std::error_code ec2;
+  std::filesystem::remove_all(scratch, ec2);
+  REQUIRE_NOTHROW((void)game::loadContent(dataDir));
 }
 
 TEST_CASE("No card carries a fraction on an effect the game counts in whole numbers") {

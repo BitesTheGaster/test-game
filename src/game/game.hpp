@@ -193,6 +193,12 @@ struct PlayerStats {
   float regen = 0.0F;
   int projAdd = 0;
   int pierceAdd = 0;
+  // The milestone multiplier on PIERCE, in the same 0-based additive form as every
+  // other milestone axis: pierce is a count, but the milestone scales the count
+  // the RUN built rather than adding to it, for the same reason ms_proj does --
+  // a milestone that made a weapon a different weapon would not be a milestone.
+  // It only scales the run's own pierce, never the weapon's baked-in value.
+  float pierceScale = 0.0F;
 
   // Defense: one curve yields both a flat and a percent reduction.
   float defense = 0.0F;
@@ -295,12 +301,68 @@ struct PlayerStats {
   // multiplier and the other is a one-shot event, and pretending otherwise by
   // folding them into Scale would make the card lie about what it does.
   //
-  // STILLNESS: regen is multiplied by this while the player is not giving a
+  // THE CONDITIONAL MULTIPLIERS, all read as FACTORS with 1.0 meaning the card is
+  // not held. Four of them -- two on regen, two on damage -- and deliberately not
+  // one field each with a condition enum: a single field would have made
+  // "regeneration is conditional on how you play" into "regeneration is
+  // conditional on one particular thing", and the two regen cards are meant to be
+  // stackable with each other and answerable together.
+  //
+  // DAMAGE: three conditions, because a branch is supposed to be a different
+  // QUESTION and "your damage is bigger" is the same question every time. These
+  // ask it three ways -- stand and shoot, run it down, or hit hardest when the
+  // run is going badly -- so a player is choosing the shape of their damage
+  // rather than its size. They multiply, so a build that answers two answers both.
+  float stillDmgMul = 1.0F;
+  float movingDmgMul = 1.0F;
+  float lowHpDmgMul = 1.0F;
+  // Where the DAMAGE low-health band starts. Its own field rather than a shared
+  // constant, so a card can move the damage cut without moving the regeneration
+  // one -- the card says "all damage", and a band that moved regen too would be a
+  // card quietly doing something it did not say.
+  float lowHpDmgThreshold = 0.5F;
+  // The other kind of conditional, and the only one that is about the TARGET
+  // rather than the player. This multiplies damage dealt to a body that is below
+  // `executeThreshold` of its own health. It lives here, in the flat stat block,
+  // even though it is applied in applyEnemyDamage, because it is a build property
+  // -- unlike damageConditionMul_, which is a statement about a moment.
+  //
+  // It is in the game because "Execution" is what a player thinks a damage
+  // milestone should do, and the first version of that card just made everything
+  // bigger, which is the one thing the design said not to do.
+  float executeMul = 1.0F;
+  float executeThreshold = 0.5F;
+  // A fire rate that is conditional on standing still, and an area that is
+  // conditional on nothing at all. Both are here because the two third-tier
+  // leaves that needed them are the difference between "more shots" and "shots
+  // that land" -- a run that has answered "I stand still and shoot" wants its
+  // trigger to keep up and its blast to cover the ground, and neither of those is
+  // the same question as "how much damage".
+  float stillRateMul = 1.0F;
+  // x(1 + it) on every area effect the weapons already size themselves by. NOT a
+  // radius in pixels: a flat bonus would be worth nothing to a weapon with a big
+  // blast and everything to one with a small blast, which is the wrong way round.
+  float areaScale = 0.0F;
+  // The fraction of a body's own defence that stops mattering, 0..1. A FRACTION
+  // rather than a flat subtraction for the same reason pierce itself is a count
+  // and armour is not: a flat 50 is everything against a trash mob and nothing
+  // against a late enemy, and a card that stops working exactly when the run needs
+  // it is the worst kind of card.
+  float armourScale = 0.0F;
+  // STILLNESS REGEN: regen is multiplied by this while the player is not giving a
   // movement input. 1.0 means off. It is a conditional multiplier on purpose --
   // the same reason Frenzy is a fire-rate card and not a damage card: it makes
   // the player's POSITION part of the build, and a build you have to stand still
   // to use is a different build from one you have to keep moving for.
   float stillnessRegenMul = 1.0F;
+  // ...and regen the card ADDS, also only while still. A separate field rather than
+  // a bonus on the unconditional regen, and the reason is a card that claimed "you
+  // regenerate 3 HP/s while you stand still" while paying out 3 HP/s on the move as
+  // well -- the seed was unconditional and only the multiplier was conditional, so
+  // the sentence's whole subject was true only half the time. The two halves of a
+  // conditional card have to be conditional together or the word "while" is doing no
+  // work.
+  float stillRegenAdd = 0.0F;
   // ...and its mirror at the other end of the health bar: regen is multiplied by
   // this while the player is below half health. 1.0 means off. The two are
   // deliberately the same mechanic pointed at opposite conditions, because a
@@ -360,8 +422,17 @@ struct PlayerStats {
     float mark = 0.0F;       // x(1+.) on all four on-hit marks at once
     float reach = 0.0F;      // x(1+.) on projectile speed and lifetime
     float knockback = 0.0F;  // x(1+.) on every shove the player deals
-    int proj = 0;            // whole extra projectiles -- an integer axis, so
-                             // it is a count and not a percentage
+    // A MULTIPLIER, like the ten above it, and it is the one that needed saying
+    // twice. It was an int when this layer went in, on the reasoning that extra
+    // projectiles are a count -- which is true of what the card DOES and false of
+    // what the layer HOLDS. An int cannot hold 0.5, so the first Execution tree
+    // silently truncated its own multiplier to zero and Tempest handed out its
+    // bare seed of four, printing "4 becomes 6" and firing four. Nothing caught
+    // it except a test that compares the card's printed number against the axis.
+    //
+    // The count is still a count where it is spent -- extraProjectiles() rounds
+    // back to whole shots -- so no weapon ever has to think about halves.
+    float proj = 0.0F;
   };
   Scale milestone{};
 };
@@ -1206,6 +1277,12 @@ public:
   [[nodiscard]] bool testFirstCanShoot() const;
   // Test helper: overwrite the first enemy's current HP (death-boundary tests).
   void testSetFirstEnemyHp(float hp);
+  // ...and its POOL, so a test can put a body at an exact fraction of its own health
+  // rather than a hardcoded HP number. Every conditional-damage card is phrased as a
+  // fraction -- "below half health", "below a quarter" -- so a test that cannot ask
+  // the body how big it is has to guess, and a guess about where a threshold sits is
+  // exactly the kind of guess that makes a card look tested when it is not.
+  [[nodiscard]] float testFirstEnemyMaxHp() const;
   // Test helper: force the first enemy's knockback resistance (and give it the
   // EnemyTraits component it does not have by default). Lets a test compare how
   // hard a shove or a suction field moves a soft enemy versus a boss.
@@ -1214,6 +1291,11 @@ public:
   [[nodiscard]] int killStreak() const { return streak_; }
   [[nodiscard]] float killStreakTimer() const { return streakTimer_; }
   [[nodiscard]] float momentumDamageMul() const { return momentumDamageMul_; }
+  // The conditional-damage product for RIGHT NOW. Public because the pause sheet
+  // should be able to say why the damage figure in front of the player is not the
+  // one on the character sheet, and because a test cannot otherwise tell "the card
+  // did nothing" from "the card applied and the player was moving".
+  [[nodiscard]] float damageConditionMul() const { return damageConditionMul_; }
   // THE ONE NUMBER EVERY DAMAGE SITE MULTIPLIES BY.
   //
   // Three things scale player damage and they used to be written out longhand at
@@ -1228,6 +1310,8 @@ public:
   //                               0-based additive and are read as x(1 + .).
   //   x (1 + milestone.damage)    milestones, multiplying the sum
   //   x momentumDamageMul_        the kill chain, a live runtime meter
+  //   x damageConditionMul_       the conditional damage cards, recomputed each
+  //                               step from input and health
   //
   // Milestone sits BETWEEN the cards and the meter, not outside both, and that
   // is the ordering that has to be right: a milestone should scale what the
@@ -1235,8 +1319,16 @@ public:
   // the milestone last would make a run with a live chain pay the same
   // milestone tax as a run sitting still, and the chain is the part of the
   // damage model that is already paying for itself.
+  //
+  // The conditions come LAST of the four, after the chain rather than before it,
+  // and the reason is that a condition is a statement about HOW THE PLAYER IS
+  // PLAYING right now. "All damage x3 while you are below half health" should
+  // scale the kill chain too, because the chain is part of the damage happening
+  // at that moment. A player in a bad fight is owed every multiplier they earned,
+  // not the ones that happened to be listed first.
   [[nodiscard]] float playerDamageScale() const {
-    return stats_.damageMul * (1.0F + stats_.milestone.damage) * momentumDamageMul_;
+    return stats_.damageMul * (1.0F + stats_.milestone.damage) * momentumDamageMul_ *
+           damageConditionMul_;
   }
   // The same three-layer treatment for fire rate, in the ADDITIVE form
   // attackCooldown wants. A milestone is a multiplier, so it is folded into the
@@ -1249,10 +1341,26 @@ public:
   // milestone does not scale the chain, which is the one thing a milestone
   // should never do -- it would tax a run for playing well.
   [[nodiscard]] float playerCooldown(float baseCooldown, float extraBonus) const {
-    const float denom = (1.0F + stats_.fireRateBonus) * (1.0F + stats_.milestone.fireRate) +
+    // Same three layers, same order, and the conditional one folded in
+    // multiplicatively for the same reason the milestone is: a card that said "your
+    // fire rate doubles while you stand still" has to double the CHAIN's rate too,
+    // or a run with a live kill streak would quietly pay a tax on playing well.
+    const float denom = (1.0F + stats_.fireRateBonus) *
+                            (1.0F + stats_.milestone.fireRate) * rateConditionMul_ +
                         extraBonus;
     return baseCooldown / std::max(0.05F, denom);
   }
+  // The area scale, as a factor, for the weapon-sizing sites.
+  [[nodiscard]] float playerAreaScale() const { return 1.0F + stats_.areaScale; }
+  // The remaining branch-card factors, exposed for the same reason the axes above
+  // are: a card's printed number and the number the code produces have to be
+  // checkable against each other, and a factor the player can see in a tooltip but
+  // no test can read is a factor that can rot without anyone noticing.
+  [[nodiscard]] float rateConditionMul() const { return rateConditionMul_; }
+  [[nodiscard]] float playerExecuteMul() const { return stats_.executeMul; }
+  [[nodiscard]] float playerArmourScale() const { return stats_.armourScale; }
+  [[nodiscard]] float playerStillDmgMul() const { return stats_.stillDmgMul; }
+  [[nodiscard]] float playerLowHpDmgMul() const { return stats_.lowHpDmgMul; }
   // The global fire-rate figure for the pause sheet, as a percentage of the
   // 1.0x base. Reported through the same fold as playerCooldown so the sheet
   // cannot print a number the weapons do not use.
@@ -1291,8 +1399,31 @@ public:
   [[nodiscard]] float lifestealHealAmount() const {
     return static_cast<float>(stats_.lifestealHeal) * (1.0F + stats_.milestone.lifesteal);
   }
+  // The BONUS shots per volley, with the milestone multiplier applied. Rounded
+  // rather than truncated, because truncating 3.5 down to 3 means the last 0.5 of
+  // a card silently does nothing, and a card that quietly under-delivers is worse
+  // than one that is a little too strong.
   [[nodiscard]] int extraProjectiles() const {
-    return stats_.projAdd + stats_.milestone.proj;
+    return static_cast<int>(std::lround(static_cast<float>(stats_.projAdd) *
+                                         (1.0F + stats_.milestone.proj)));
+  }
+  // THE PIERCE BONUS, with the milestone multiplier applied. Rounded, for the
+  // same reason extraProjectiles() is: a count, so it has to be one a weapon can
+  // actually spend, and truncating would make the last half of a card do nothing.
+  //
+  // This is a function rather than a scaled field because the run's pierce is
+  // added to a weapon's OWN count at a dozen call sites, and scaling the field
+  // itself would have scaled the weapon's baked-in value too -- which is the one
+  // thing a milestone must not do. The sites that use pierce as a proxy for "how
+  // wide is this effect" (blast radius, zone dps, aoe falloff) use the bonus on
+  // its own, so a pierce milestone widens those as well and the card is felt in
+  // every weapon rather than only the ones that happen to pierce.
+  [[nodiscard]] int playerPierceBonus() const {
+    return static_cast<int>(std::lround(static_cast<float>(stats_.pierceAdd) *
+                                         (1.0F + stats_.pierceScale)));
+  }
+  [[nodiscard]] int playerPierce(int weaponPierce) const {
+    return weaponPierce + playerPierceBonus();
   }
   [[nodiscard]] float momentumFireRate() const { return momentumRate_; }
   [[nodiscard]] float momentumSpeedMul() const { return momentumSpeedMul_; }
@@ -2420,6 +2551,19 @@ private:
   float momentumRate_ = 0.0F;
   float momentumSpeedMul_ = 1.0F;
 
+  // The product of whichever conditional damage cards the run holds that are
+  // currently true. Derived once per step, exactly like the momentum multipliers
+  // and for the same reason: it is a statement about a moment, not a property of
+  // the build, and folding it into PlayerStats would mean the character sheet
+  // claimed a damage number that is only true while the player holds still.
+  float damageConditionMul_ = 1.0F;
+  // The same idea for the conditional FIRE RATE. Kept apart from the damage one
+  // because the two are read in different accessors -- playerCooldown() computes a
+  // duration and playerDamageScale() computes a multiplier -- and folding them
+  // together would have meant one of the two accessors reading a number it has no
+  // business reading.
+  float rateConditionMul_ = 1.0F;
+
   // The last chest the player opened: every card that came out of it, how many it
   // actually gave, and how long the panel takes to fade after the player lets go
   // of it.
@@ -2452,6 +2596,7 @@ private:
   float stasis_ = 0.0F;
   float worldTimeScale_ = 1.0F;
   void updateMomentum();
+  void updateDamageConditions();
   // Called when something actually lands a hit: the chain takes the hit with
   // you. Halved, minus two, and floored at zero.
   void breakMomentum();

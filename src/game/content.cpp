@@ -95,6 +95,40 @@ AttackType parseAttackType(const toml::table& t, const std::string& where) {
   throw std::runtime_error(where + ": unknown attack_type \"" + s + "\"");
 }
 
+// Every key in a data table must be one the loader READS. A key it does not read is
+// an instruction that looks authoritative and does nothing -- the worst failure mode
+// a data file has, and the only one a designer cannot see. `threshold = 0.25` on a
+// card whose effect hardcodes the threshold produces a card that behaves correctly
+// and a file that lies: the number is right and editing it changes nothing.
+//
+// This asks the one question no test of the OUTPUT can answer, which is "did you
+// read everything you were handed", and it asks it at load, where a broken data file
+// is a failed load rather than a card that quietly under-delivers. Two cards in the
+// milestone tree carried exactly such a key for two rounds -- a threshold that never
+// tightened a band and an area that never widened a blast -- and neither was caught
+// by a behavioural test, because the behaviour was right and only the file was wrong.
+//
+// Keys are named explicitly rather than derived, because the derived version of this
+// check is the one that passes: ask the table what it contains and you have learned
+// nothing.
+void rejectUnknownKeys(const toml::table& t, std::initializer_list<std::string_view> known,
+                       const std::string& where, const std::string& entryId) {
+  for (const auto& [key, node] : t) {
+    (void)node;
+    bool ok = false;
+    for (const auto& k : known) {
+      if (key == k) {
+        ok = true;
+        break;
+      }
+    }
+    if (!ok) {
+      throw std::runtime_error(where + ": entry '" + entryId + "' has key '" +
+                               std::string(key) + "', which the loader does not read");
+    }
+  }
+}
+
 toml::table parseTable(const std::filesystem::path& file) {
   try {
     return toml::parse_file(file.string());
@@ -160,6 +194,37 @@ Content loadContent(const std::filesystem::path& dir) {
       const std::string where = file.string();
       WeaponDef def;
       def.id = requireString(*t, "id", where);
+      rejectUnknownKeys(*t,
+                        {"id", "name", "desc", "attack_type", "damage", "cooldown",
+                        "projectiles", "proj_speed", "proj_life", "pierce", "spread",
+                        "proj_color", "starter", "orbit_radius", "orbit_speed",
+                        "orbit_count", "homing", "cone_angle", "cone_range",
+                        "cone_tick_rate", "bomb_arc_height", "bomb_explode_radius",
+                        "bomb_knockback", "bomb_fuse", "bomb_on_target",
+                        "boomerang_range", "boomerang_return_speed", "bounce_count",
+                        "bounce_range", "bounce_damage_mul", "bounce_infinite",
+                        "sweep_angle", "sweep_radius", "sweep_knockback", "beam_range",
+                        "beam_width", "beam_duration", "chill_mul", "chill_time",
+                        "bomb_ahead", "lure_radius", "lure_reach", "lure_pull",
+                        "lure_dps", "lure_duration", "lure_tick_rate",
+                        "lure_max_beacons", "cone_bite", "cone_bite_max",
+                        "nova_max_radius", "nova_expand_speed", "nova_damage_per_tick",
+                        "nova_tick_rate", "sweep_lead", "chain_jump_range",
+                        "chain_max_jumps", "chain_damage_mul", "requires",
+                        "reaim_range", "reaim_turn", "nova_contract", "nova_pull",
+                        "nova_burst_damage", "zone_radius", "zone_dps",
+                        "zone_duration", "halo_knockback", "halo_inner",
+                        "chain_shatter", "inferno_binds_to_lure", "zone_from_above",
+                        "bounce_splits", "wave_speed", "wave_range", "wave_width",
+                        "wave_knockback", "wave_damage_mul", "wave_count",
+                        "wave_arc_step", "wave_spread", "wave_hook_pull",
+                        "vortex_radius", "vortex_reach", "vortex_pull", "vortex_orbit",
+                        "vortex_orbit_speed", "vortex_tick_rate", "vortex_crowd",
+                        "prism_range", "prism_width", "prism_max_targets",
+                        "prism_ricochet", "vortex_collapse_at", "vortex_burst_damage",
+                        "vortex_burst_radius", "aura_radius", "aura_dps", "aura_tick",
+                        "aura_chill_mul", "aura_chill_time"},
+                        where, def.id);
       def.name = requireDrawableString(*t, "name", where);
       def.desc = (*t)["desc"].value<std::string>().value_or("Auto-fires at the nearest enemy.");
       if (!core::render::fontSupports(def.desc)) {
@@ -337,6 +402,10 @@ Content loadContent(const std::filesystem::path& dir) {
       const std::string where = file.string();
       EnemyDef def;
       def.id = requireString(*t, "id", where);
+      rejectUnknownKeys(*t,
+                        {"id", "name", "hp", "speed", "speed_ramp", "touch", "radius",
+                        "xp", "unlock_at", "weight", "color", "shape", "fast"},
+                        where, def.id);
       def.name = requireDrawableString(*t, "name", where);
       def.hp = requireFloat(*t, "hp", where);
       def.speed = requireFloat(*t, "speed", where);
@@ -414,6 +483,11 @@ Content loadContent(const std::filesystem::path& dir) {
       // field's comment in content.hpp for what the limit is actually for.
       def.slot = (*t)["slot"].value_or(def.kind == "normal" && def.weapon.empty());
       def.after = (*t)["after"].value_or("");
+
+      rejectUnknownKeys(*t,
+                        {"id", "name", "desc", "effect", "value", "max_stacks",
+                         "kind", "weapon", "level", "group", "slot", "after"},
+                        where, def.id);
       content.upgrades.push_back(std::move(def));
     }
   }
@@ -439,6 +513,7 @@ Content loadContent(const std::filesystem::path& dir) {
         }
         ManualPage page;
         page.id = requireString(*t, "id", file.string());
+        rejectUnknownKeys(*t, {"id", "title", "lines"}, file.string(), page.id);
         page.title = requireString(*t, "title", file.string());
         const auto* lines = t->get("lines");
         const auto* lineArr = lines != nullptr ? lines->as_array() : nullptr;

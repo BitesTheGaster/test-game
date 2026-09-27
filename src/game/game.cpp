@@ -487,6 +487,25 @@ UpgradeEffectResult applyUpgrade(PlayerStats& stats, std::string_view effect, fl
     stats.milestone.knockback += value;
     return {true, 0.0F, 0.0F};
   }
+  if (effect == "dmg_still") {
+    // "All damage x3 while you give no movement input." The value is the factor
+    // minus one, so the card can print the factor itself and the player can check
+    // it against their own damage numbers -- the same rule as the regen cards,
+    // and for the same reason: "3x faster" is ambiguous between 3x and 4x.
+    stats.stillDmgMul = 1.0F + value;
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "dmg_moving") {
+    // The mirror of dmg_still, and the reason a card is a QUESTION: the two are
+    // the same mechanic pointed at opposite play styles, so the run that takes one
+    // has answered "how do I want to fight" rather than "how much do I hit for".
+    stats.movingDmgMul = 1.0F + value;
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "dmg_low") {
+    stats.lowHpDmgMul = 1.0F + value;
+    return {true, 0.0F, 0.0F};
+  }
   if (effect == "regen_low") {
     // The mirror of regen_stillness: the same conditional multiplier, gated on
     // the other end of the health bar, and assigned for the same reason.
@@ -514,10 +533,135 @@ UpgradeEffectResult applyUpgrade(PlayerStats& stats, std::string_view effect, fl
     stats.mercyHealDelay = value;
     return {true, 0.0F, 0.0F};
   }
+  if (effect == "ms_proj_seed") {
+    // The seed is +4, the same reason it is a whole number on every other seed
+    // card: a count the player can read off a weapon and count on screen. The
+    // multiplier is 0.5, so 4 becomes 6 and the card says exactly that.
+    //
+    // Seeded BEFORE the multiplier scales it, so the two agree, and the count is
+    // rounded rather than truncated where it is read -- see extraProjectiles().
+    stats.projAdd += 4;
+    stats.milestone.proj += value;
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "ms_execute") {
+    // "All damage xN against anything below half health." The threshold is NOT on
+    // the card and NOT a value: half is a promise the player can check on a health
+    // bar, and a card that said "below 40%" would be a card whose number the
+    // player has to trust. The value is the factor minus one, as everywhere else.
+    //
+    // Applied in applyEnemyDamage rather than in playerDamageScale, because it is
+    // the only milestone that needs to know WHICH body is being hit, and
+    // playerDamageScale has no idea.
+    stats.executeMul = 1.0F + value;
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "ms_pierce") {
+    // SEED AND MULTIPLIER, for the same reason the projectile and regen roots are:
+    // a pure multiplier on a count the run has not built is a multiplier on zero.
+    // The seed is +2, the whole number the player can watch go by, and 1.0 here is
+    // x2 -- so the card can say "2 becomes 4" and the player can count it.
+    //
+    // Three cards use this one effect at three different strengths, and there used
+    // to be a fourth effect id for the third of them -- `ms_pierce_deeper` -- which
+    // multiplied WITHOUT seeding. It sat on a branch whose parent had deepened
+    // projectiles, so nothing on that branch had ever added a pierce, and the card
+    // printed "Pierce +2" over a run that got none. The seed is not a per-card
+    // decision; it is the reason this effect exists, so it belongs to the effect.
+    stats.pierceAdd += 2;
+    stats.pierceScale += value;
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "ms_pierce_armour") {
+    // The other answer to "your shots go through more bodies": and through their
+    // armour. A FRACTION of the defence rather than a flat subtraction, so it still
+    // means something against a late enemy -- see PlayerStats::armourScale.
+    stats.pierceAdd += 2;
+    stats.pierceScale += value;
+    stats.armourScale += 0.5F;
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "ms_pierce_area") {
+    // More bodies rather than harder ones, and a bigger everything along for the
+    // ride. Both halves are the same question -- "hit more of the screen" -- which
+    // is what makes it the sibling of the armour card rather than a copy of it.
+    stats.pierceAdd += 6;
+    stats.pierceScale += value;
+    stats.areaScale += 0.4F;
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "ms_still_rate") {
+    // "Fire rate x2 while you give no movement input." Conditional RATE rather
+    // than conditional damage, because a run that has answered "I stand still and
+    // shoot" is short of triggers long before it is short of damage -- and because
+    // the two halves then have to agree, which is the point.
+    stats.stillRateMul = 1.0F + value;
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "ms_still_survival") {
+    // The third tier of the Rooted line, and deliberately the only half that is
+    // not damage. Rooted asked the player to stand still in a game about being
+    // surrounded; the interesting answer to that is not more damage, it is that
+    // standing still now feeds you too.
+    //
+    // A SEED as well as the multiplier, and this card shipped for one round with
+    // only the multiplier -- on a branch that had never added a single point of
+    // regeneration, so "regeneration x3 there too" was three times zero. The seed
+    // is what makes the second half a promise to a player who never took the
+    // Survivor tree's regen root, and it is 3 because 3 HP/s for standing still in
+    // a crowd is roughly the cost of one mistake, which is the trade Rooted is
+    // asking the player to make in the first place.
+    //
+    // It goes into stillRegenAdd rather than into regen, so the word "while you do"
+    // covers the 3 and not only the tripling -- see PlayerStats::stillRegenAdd for
+    // what a card that pays out on the move while promising otherwise looks like.
+    stats.stillRegenAdd += 3.0F;
+    stats.stillnessRegenMul = 1.0F + value;
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "ms_area") {
+    // x(1 + it) on every area the weapons already size themselves by.
+    stats.areaScale += value;
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "dmg_low_deeper") {
+    // ACCUMULATES, unlike dmg_low, because the tier-2 card already owns that
+    // factor. A second dmg_low would ASSIGN the same number over it and the card
+    // would have silently done nothing -- which is the quietest possible content
+    // bug and the reason these are separate effect ids.
+    stats.lowHpDmgMul *= 1.0F + value;
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "dmg_low_tighter") {
+    // The other answer to the same question: not a bigger multiplier on a wider
+    // band but a NARROWER band. Risk instead of arithmetic.
+    //
+    // A DAMAGE-only threshold, separate from the regen one, and the split is
+    // deliberate rather than an oversight: the card says "all damage", so widening
+    // the regeneration band to match would be a card quietly doing something it did
+    // not say. It is also the safer of the two, because the two cuts can then never
+    // disagree about where "hurt" begins for a player reading two different
+    // numbers off two different cards.
+    stats.lowHpDmgMul *= 1.0F + value;
+    stats.lowHpDmgThreshold = 0.25F;
+    return {true, 0.0F, 0.0F};
+  }
+  if (effect == "dmg_still_deeper") {
+    // Accumulates for the same reason dmg_low_deeper does.
+    stats.stillDmgMul *= 1.0F + value;
+    return {true, 0.0F, 0.0F};
+  }
   if (effect == "ms_proj") {
-    // An integer axis, so it is a count and not a percentage: x2.0 damage
-    // projectiles would be a different weapon, not a bigger one.
-    stats.milestone.proj += static_cast<int>(value);
+    // A multiplier, like every other axis in the milestone layer, and it scales
+    // the BONUS the run has added rather than the weapon's own shots. That is a
+    // deliberate limit: multiplying a weapon's base count would turn every
+    // projectile weapon into a different weapon, and a milestone that changes what
+    // your build IS is a different card from one that makes it bigger.
+    //
+    // It also keeps the card text arithmetic the player can do -- the seed says
+    // "+4" and the multiplier says what 4 becomes, so "4 becomes 6" and then
+    // "6 becomes 9" are two numbers they can check against their own weapon.
+    stats.milestone.proj += value;
     return {true, 0.0F, 0.0F};
   }
   if (effect == "shield_add") {
@@ -1462,6 +1606,10 @@ void Game::fixedStep() {
   }
 
   movePlayer();
+  // After movePlayer, because movePlayer is what latches the input and sets
+  // playerMoving_. Before fireWeapons, because every weapon that goes off this
+  // step should be scaled by the conditions as they are at the moment it fires.
+  updateDamageConditions();
   buildSpatialHash();
   updateEnemies();
   fireWeapons();
@@ -1492,7 +1640,13 @@ void Game::fixedStep() {
   // less the closer they were to dying -- which is backwards from every other
   // conditional in the game.
   float regenPerSecond = regenRate();
-  if (!playerMoving_) regenPerSecond *= stats_.stillnessRegenMul;
+  // The seed joins the multiplication rather than preceding it, so a stillness regen
+  // card pays its own rate at the factor the card prints -- 3 HP/s tripled is 9, not
+  // 12 -- and so that the whole of the promise, the added rate and the multiplier
+  // over it, disappears the moment the player moves.
+  if (!playerMoving_) {
+    regenPerSecond = (regenPerSecond + stats_.stillRegenAdd) * stats_.stillnessRegenMul;
+  }
   if (player_ != entt::null && registry_.valid(player_)) {
     const auto& hp = registry_.get<Health>(player_);
     if (hp.max > 0.0F && hp.hp < hp.max * 0.5F) regenPerSecond *= stats_.lowHpRegenMul;
@@ -1903,7 +2057,7 @@ void Game::fireWeapons() {
       }
       w.waveBurstTimer = kWaveBurstGap;
       const float burstDmg = w.damage * playerDamageScale();
-      spawnWaveCrescent(w, w.waveBurstAngle, burstDmg, w.pierce + stats_.pierceAdd);
+      spawnWaveCrescent(w, w.waveBurstAngle, burstDmg, playerPierce(w.pierce));
       --w.waveBurstLeft;
       w.waveBurstAngle += w.waveArcStep;
       // Deliberately does NOT touch `w.timer`: the rest of the burst is part of
@@ -1921,7 +2075,7 @@ void Game::fireWeapons() {
         w.novaEchoesLeft = 0;
       } else {
         const auto& ept = registry_.get<Transform>(player_);
-        spawnNovaRing(ept.x, ept.y, w, w.pierce + stats_.pierceAdd);
+        spawnNovaRing(ept.x, ept.y, w, playerPierce(w.pierce));
       }
       --w.novaEchoesLeft;
       w.novaEchoTimer = w.novaEcho;
@@ -1934,7 +2088,7 @@ void Game::fireWeapons() {
     const float cooldown = playerCooldown(w.cooldown, w.cdBonus + momentumRate_);
     const float damage = w.damage * playerDamageScale();
     const int count = std::max(1, w.projectiles + extraProjectiles());
-    const int pierce = w.pierce + stats_.pierceAdd;
+    const int pierce = playerPierce(w.pierce);
 
     switch (w.attackType) {
       case AttackType::Projectile: {
@@ -1992,7 +2146,8 @@ void Game::fireWeapons() {
         if (found) {
           const float coneAngle = w.coneAngle;
           // More projectiles = a wider cone sweep.
-          const float coneRange = w.coneRange * (1.0F + extraProjectiles() * 0.25F);
+          const float coneRange = w.coneRange * (1.0F + extraProjectiles() * 0.25F) *
+                                   playerAreaScale();
           const float halfAngle = coneAngle * 0.5F;
           auto view = registry_.view<Transform, Health, Radius, Enemy>();
           std::vector<entt::entity> hits;
@@ -2195,7 +2350,8 @@ void Game::fireWeapons() {
         // Arcing projectile that explodes on impact
         const float gravity = 30.0F; // matches updateBombProjectiles
         // More projectiles = a taller arc; more pierce = a bigger blast.
-        const float arcHeight = w.bombArcHeight * (1.0F + extraProjectiles() * 0.25F);
+        const float arcHeight = w.bombArcHeight * (1.0F + extraProjectiles() * 0.25F) *
+                                        playerAreaScale();
         // A shell thrown over an arc comes back down to its launch height after a
         // fixed flight time, whatever it was aimed at: t = sqrt(8H/g). Solving for
         // that ONCE per shot is what makes the landing point a decision instead of
@@ -2261,7 +2417,8 @@ void Game::fireWeapons() {
           bp.pierce = pierce;
           // Pierce no longer extends bomb life: it scales the explosion
           // radius (+15% per point) so the weapon stays "one boom, gone".
-          bp.explodeRadius = w.bombExplodeRadius * (1.0F + stats_.pierceAdd * 0.15F);
+          bp.explodeRadius = w.bombExplodeRadius * (1.0F + playerPierceBonus() * 0.15F) *
+                                  playerAreaScale();
           bp.knockback = w.bombKnockback;
           bp.life = w.life;
           bp.initialLife = w.life;
@@ -2335,7 +2492,7 @@ void Game::fireWeapons() {
         bp.damage = damage;
         bp.pierce = pierce;
         bp.life = w.life;
-        bp.maxBounces = w.bounceCount + stats_.pierceAdd;
+        bp.maxBounces = playerPierce(w.bounceCount);
         bp.bounceRange = w.bounceRange;
         bp.damageMul = w.bounceDamageMul;
         bp.bounceCount = 0;
@@ -2359,7 +2516,8 @@ void Game::fireWeapons() {
           // projectiles widen the same symmetric fan instead of stacking.
           const bool triad = w.beamSplit >= 3;
           const int beamCount = triad ? 3 : std::clamp(count, 1, 4);
-          const float beamWidth = w.beamWidth * (1.0F + extraProjectiles() * 0.05F);
+          const float beamWidth = w.beamWidth * (1.0F + extraProjectiles() * 0.05F) *
+                                   playerAreaScale();
           constexpr float kTriadGap = 0.30F;  // ~17 degrees between the three
           constexpr float kFanGap = 0.18F;    // ~10 degrees per extra beam
           const float gap = triad ? kTriadGap : kFanGap;
@@ -2405,7 +2563,8 @@ void Game::fireWeapons() {
         // what lets the whip (and its evolution) cover the player's own front
         // while the scythe covers the far side of a crowd.
         const bool lead = w.sweepLead > 0.0F;
-        const float sweepRadius = w.sweepRadius * (1.0F + extraProjectiles() * 0.15F);
+        const float sweepRadius = w.sweepRadius * (1.0F + extraProjectiles() * 0.15F) *
+                                       playerAreaScale();
         const float sx = lead ? pt.x + std::cos(baseAngle) * w.sweepLead : targetX;
         const float sy = lead ? pt.y + std::sin(baseAngle) * w.sweepLead : targetY;
         const float halfArc = lead ? std::min(kPi, w.sweepAngle * 0.5F) : kPi;
@@ -2536,7 +2695,7 @@ void Game::fireWeapons() {
         // Zone - create damage zone at target location
         if (found) {
           // More projectiles = a wider zone; more pierce = denser damage.
-          const float zr = w.zoneRadius * (1.0F + extraProjectiles() * 0.2F);
+          const float zr = w.zoneRadius * (1.0F + extraProjectiles() * 0.2F) * playerAreaScale();
           for (int p = 0; p < count; ++p) {
             const float offset = (static_cast<float>(p) - static_cast<float>(count - 1) * 0.5F) * w.spread;
             const float angle = baseAngle + offset;
@@ -2551,7 +2710,7 @@ void Game::fireWeapons() {
             s.color.a = 0.3F;
             registry_.emplace<Sprite>(zone, s);
             ZoneEffect ze{};
-            ze.dps = w.zoneDps + stats_.pierceAdd * 2.0F;
+            ze.dps = w.zoneDps + playerPierceBonus() * 2.0F;
             ze.pierce = pierce;
             ze.radius = zr;
             ze.duration = w.zoneDuration;
@@ -2619,7 +2778,8 @@ void Game::fireWeapons() {
       case AttackType::Inferno: {
         // Inferno evolution (flame + scythe): reaps a full circle around the
         // nearest enemy AND leaves burning ground that keeps dealing damage.
-        const float sweepRadius = w.sweepRadius * (1.0F + extraProjectiles() * 0.15F);
+        const float sweepRadius = w.sweepRadius * (1.0F + extraProjectiles() * 0.15F) *
+                                       playerAreaScale();
         float ix = targetX;
         float iy = targetY;
         // Siege Mortar (mortar + lure): the shells land on the BELL. Its whole
@@ -2685,7 +2845,7 @@ void Game::fireWeapons() {
         sw.color = {1.0F, 0.45F, 0.1F, 1.0F};
         registry_.emplace<SweepEffect>(se, sw);
         // Burning ground: persistent DPS zone at the reap center.
-        const float zr = w.zoneRadius * (1.0F + extraProjectiles() * 0.2F);
+        const float zr = w.zoneRadius * (1.0F + extraProjectiles() * 0.2F) * playerAreaScale();
         const auto zone = registry_.create();
         registry_.emplace<Transform>(zone, ix, iy, ix, iy);
         registry_.emplace<Radius>(zone, zr);
@@ -2695,7 +2855,7 @@ void Game::fireWeapons() {
         zs.circle = true;
         registry_.emplace<Sprite>(zone, zs);
         ZoneEffect ze{};
-        ze.dps = w.zoneDps + stats_.pierceAdd * 2.0F;
+        ze.dps = w.zoneDps + playerPierceBonus() * 2.0F;
         ze.pierce = pierce;
         ze.radius = zr;
         ze.duration = w.zoneDuration;
@@ -2918,6 +3078,15 @@ void Game::applyEnemyDamage(entt::entity e, float dmg, bool mark) {
   // applied again -- so the ramp is a ratchet that the current hit does not
   // enjoy, only the ones after it.
   if (tr != nullptr && tr->vuln > 0.0F) dmg *= 1.0F + tr->vuln;
+  // ...and the Execution card, on the same target, read BEFORE defense for the
+  // same reason: it should multiply what the hit is, not what survives it. The
+  // order between the two is not load-bearing (they are both target-conditional
+  // and both multiply), but both are before mitigation so that "x4" means the
+  // number of points of damage the card is worth.
+  if (stats_.executeMul != 1.0F && eh->max > 0.0F &&
+      eh->hp < eh->max * stats_.executeThreshold) {
+    dmg *= stats_.executeMul;
+  }
   const float raw = dmg; // pre-mitigation damage, used for the lethal check
   const bool hadShield = tr != nullptr && tr->shield > 0.0F;
   // Enemy defense runs through the SAME flat+percent curve as the player's
@@ -2925,7 +3094,15 @@ void Game::applyEnemyDamage(entt::entity e, float dmg, bool mark) {
   // Armor pierce subtracts from that defense first (clamped at 0), so a pierce
   // build cuts through the flat+percent curve instead of being flattened by it.
   if (tr != nullptr && tr->defense > 0.0F) {
-    const float effectiveDefense = std::max(0.0F, tr->defense - stats_.armorPierce);
+    // Armour pierce subtracts a flat amount; the Spine card ignores a FRACTION of
+    // whatever is left. Both, and the fraction is applied second, so a build that
+    // took both spends the flat subtraction first -- which is the order that makes
+    // the flat card better against armoured enemies and the fraction card better
+    // against everything, rather than the fraction quietly eating the subtraction
+    // a different card paid for.
+    const float pierced = std::max(0.0F, tr->defense - stats_.armorPierce);
+    const float effectiveDefense =
+        pierced * std::max(0.0F, 1.0F - stats_.armourScale);
     if (effectiveDefense > 0.0F) {
       dmg = mitigateDamage(dmg, effectiveDefense);
     }
@@ -3490,8 +3667,8 @@ void Game::updateOrbitBlades() {
     const float damage = owned ? weapons_[ob.weaponIndex].damage * playerDamageScale()
                                : ob.damage * playerDamageScale();
     const int pierce =
-        owned ? weapons_[ob.weaponIndex].pierce + stats_.pierceAdd
-              : ob.pierce + stats_.pierceAdd;
+        owned ? weapons_[ob.weaponIndex].pierce + playerPierceBonus()
+              : ob.pierce + playerPierceBonus();
     (void)pierce;
     const float speed = owned ? weapons_[ob.weaponIndex].orbitSpeed : ob.speed;
     const float radius = owned ? weapons_[ob.weaponIndex].orbitRadius : ob.radius;
@@ -3586,7 +3763,7 @@ void Game::updateOrbitBlades() {
     if (inside.empty()) return;
     // Same crowd falloff as every other area attack: standing in a horde is
     // still the best way to use the ring, it just is not a free damage bonus.
-    const float mul = aoeFalloff(static_cast<int>(inside.size()), w.pierce + stats_.pierceAdd);
+    const float mul = aoeFalloff(static_cast<int>(inside.size()), playerPierce(w.pierce));
     for (const auto en : inside) {
       if (!registry_.valid(en)) continue;
       applyEnemyDamage(en, damage * mul);
@@ -3615,8 +3792,8 @@ void Game::updateHaloBeams() {
     const bool owned = hb.weaponIndex >= 0 && hb.weaponIndex < weaponCount_;
     const float damage = owned ? weapons_[hb.weaponIndex].damage * playerDamageScale()
                                : hb.damage * playerDamageScale();
-    const int pierce = owned ? weapons_[hb.weaponIndex].pierce + stats_.pierceAdd
-                             : hb.pierce + stats_.pierceAdd;
+    const int pierce = owned ? playerPierce(weapons_[hb.weaponIndex].pierce)
+                             : hb.pierce + playerPierceBonus();
     const float spin = owned ? weapons_[hb.weaponIndex].orbitSpeed : hb.spin;
     const float length = owned ? weapons_[hb.weaponIndex].beamRange : hb.length;
     const float width = owned ? weapons_[hb.weaponIndex].beamWidth : hb.width;
@@ -3698,7 +3875,7 @@ void Game::updateVortices() {
     const bool owned = vx.weaponIndex >= 0 && vx.weaponIndex < weaponCount_;
     auto& w = weapons_[owned ? vx.weaponIndex : 0];
     const float damage = (owned ? w.damage : vx.damage) * playerDamageScale();
-    const int pierce = (owned ? w.pierce : vx.pierce) + stats_.pierceAdd;
+    const int pierce = playerPierce(owned ? w.pierce : vx.pierce);
     const float pull = owned ? w.vortexPull : vx.pull;
     // Collapse settings are read live like everything else, so a card that adds
     // them lands on wells that are already spinning rather than on the next
@@ -4272,7 +4449,7 @@ void Game::updateBounceProjectiles() {
 
       const float scaledDamage =
           bp.damage * std::powf(bp.damageMul, static_cast<float>(bp.bounceCount));
-      const int pierce = bp.pierce + stats_.pierceAdd; (void)pierce;
+      const int pierce = playerPierce(bp.pierce); (void)pierce;
       applyEnemyDamage(enemy, scaledDamage);
 
       // "Echo Detonation" unique: every bounce splashes area damage (falloff).
@@ -5484,7 +5661,7 @@ void Game::spawnChainBolt(float x, float y, const WeaponSlot& w,
   registry_.emplace<Sprite>(chain, s);
   ChainLightning cl{};
   cl.damage = w.damage; // base; updateChainLightning scales by damageMul
-  cl.maxJumps = w.chainMaxJumps + stats_.pierceAdd;
+  cl.maxJumps = playerPierce(w.chainMaxJumps);
   cl.jumpRange = w.chainJumpRange;
   cl.damageMul = w.chainDamageMul;
   cl.jumpsDone = 0;
@@ -5875,6 +6052,46 @@ void Game::updateMomentum() {
   momentumSpeedMul_ = 1.0F + n * stats_.momentumSpeed * 0.01F;
 }
 
+void Game::updateDamageConditions() {
+  // Which conditional damage cards are TRUE this step. Each factor is read as a
+  // factor with 1.0 meaning "not held", so the untouched case multiplies by 1.0
+  // and a run with none of these cards is unaffected by this function existing.
+  //
+  // The conditions multiply rather than add for the same reason the two regen ones
+  // do, and it is the reason that decides what the card text can promise: a
+  // player who is both still and nearly dead is playing two of these ways at once,
+  // and a build that rewards "below half health" must not become a worse version
+  // of itself the moment the player also decides to stand still.
+  //
+  // The half-health cut is the same one adrenaline uses, deliberately. Two cards
+  // that disagree about where "hurt" begins would mean a build silently changing
+  // strength as the player crosses a line the game never drew.
+  float mul = 1.0F;
+  if (!playerMoving_) {
+    mul *= stats_.stillDmgMul;
+  } else {
+    mul *= stats_.movingDmgMul;
+  }
+  if (player_ != entt::null && registry_.valid(player_)) {
+    const auto& hp = registry_.get<Health>(player_);
+    if (hp.max > 0.0F && hp.hp < hp.max * stats_.lowHpDmgThreshold) {
+      mul *= stats_.lowHpDmgMul;
+    }
+  }
+  damageConditionMul_ = mul;
+  // The conditional fire rate is a separate product rather than a term in the
+  // damage one, because the two are read by different accessors and neither
+  // should be able to see the other's card. The stillness test is the same
+  // `playerMoving_` and the low-health test is the same half cut, so a card that
+  // mentions "while you stand still" and a card that mentions "while you are below
+  // half health" cannot disagree about whether the player is doing both.
+  float rate = 1.0F;
+  if (!playerMoving_) {
+    rate *= stats_.stillRateMul;
+  }
+  rateConditionMul_ = rate;
+}
+
 void Game::notePlayerHurt() {
   timeSinceHurt_ = 0.0F;
   mercySpent_ = false;
@@ -6189,7 +6406,7 @@ void Game::castBurst(float damageScale) {
   }
   // Same falloff rule as every other blast in the game, so a crowd is still
   // worth using it on but not worth spamming into.
-  const float falloff = aoeFalloff(static_cast<int>(hits.size()), stats_.pierceAdd);
+  const float falloff = aoeFalloff(static_cast<int>(hits.size()), playerPierceBonus());
   for (const auto e : hits) {
     const auto& et = registry_.get<Transform>(e);
     const float dx = et.x - t.x;
@@ -8527,6 +8744,14 @@ float Game::testFirstEnemyHp() const {
   auto view = registry_.view<Health, Enemy>();
   for (const auto e : view) {
     return view.get<Health>(e).hp;
+  }
+  return -1.0F;
+}
+
+float Game::testFirstEnemyMaxHp() const {
+  auto view = registry_.view<Health, Enemy>();
+  for (const auto e : view) {
+    return view.get<Health>(e).max;
   }
   return -1.0F;
 }
